@@ -1,0 +1,6 @@
+{
+  "$schema": "https://pkg.backup.chief.app/config.schema.json",
+  "metadata": {"schema_version": 1},
+  "destinations": {},
+  "jobs": {}
+}

@@ -1,0 +1,11 @@
+/.idea
+
+/backupchief
+/backupchief-darwin-*
+/backupchief-linux-*
+/backupchief_*.deb
+/backupchief-*.rpm
+/.backupchief-dev/
+
+/restic/*.bz2
+/runtime/

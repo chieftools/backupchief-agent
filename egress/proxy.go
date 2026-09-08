@@ -1,0 +1,167 @@
+package egress
+
+import (
+	"context"
+	"io"
+	"net"
+	"net/http"
+	"sync"
+	"time"
+)
+
+type Proxy struct {
+	URL         string
+	server      *http.Server
+	listener    net.Listener
+	mu          sync.Mutex
+	connections map[net.Conn]struct{}
+	closed      bool
+	host        string
+	resolver    Resolver
+	dial        func(context.Context, string, string) (net.Conn, error)
+	slots       chan struct{}
+}
+
+func Start(ctx context.Context, endpoint string) (*Proxy, error) {
+	authorizedEndpoint, err := Endpoint(endpoint)
+	if err != nil {
+		return nil, err
+	}
+
+	proxy := &Proxy{
+		host:        authorizedEndpoint.Host,
+		resolver:    net.DefaultResolver,
+		dial:        (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
+		connections: make(map[net.Conn]struct{}),
+		slots:       make(chan struct{}, 16),
+	}
+
+	proxy.listener, err = net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+
+	proxy.URL = "http://" + proxy.listener.Addr().String()
+	proxy.server = &http.Server{
+		Handler:           http.HandlerFunc(proxy.serve),
+		ReadHeaderTimeout: 5 * time.Second,
+		MaxHeaderBytes:    4096,
+		BaseContext: func(net.Listener) context.Context {
+			return ctx
+		},
+	}
+
+	go func() {
+		_ = proxy.server.Serve(proxy.listener)
+	}()
+
+	return proxy, nil
+}
+
+func (p *Proxy) Close() {
+	p.mu.Lock()
+	p.closed = true
+	for conn := range p.connections {
+		_ = conn.Close()
+	}
+	p.mu.Unlock()
+
+	_ = p.server.Close()
+}
+
+func (p *Proxy) serve(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodConnect || r.Host != p.host || r.URL.Host != p.host {
+		http.Error(w, "destination denied", http.StatusForbidden)
+		return
+	}
+
+	select {
+	case p.slots <- struct{}{}:
+		defer func() {
+			<-p.slots
+		}()
+	default:
+		http.Error(w, "connection limit", http.StatusServiceUnavailable)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	host, _, _ := net.SplitHostPort(p.host)
+	ips, err := Addresses(ctx, p.resolver, host)
+	if err != nil {
+		http.Error(w, "destination denied", http.StatusForbidden)
+		return
+	}
+
+	var upstream net.Conn
+
+	for _, ip := range ips {
+		upstream, err = p.dial(ctx, "tcp", net.JoinHostPort(ip.Unmap().String(), "443"))
+		if err == nil {
+			break
+		}
+	}
+
+	if upstream == nil {
+		http.Error(w, "connection failed", http.StatusBadGateway)
+		return
+	}
+	defer upstream.Close()
+
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "tunnel unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	client, buffered, err := hijacker.Hijack()
+	if err != nil {
+		return
+	}
+	defer client.Close()
+
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return
+	}
+	p.connections[client] = struct{}{}
+	p.connections[upstream] = struct{}{}
+	p.mu.Unlock()
+
+	defer func() {
+		p.mu.Lock()
+		delete(p.connections, client)
+		delete(p.connections, upstream)
+		p.mu.Unlock()
+	}()
+
+	if _, err = buffered.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+		return
+	}
+	if err = buffered.Flush(); err != nil {
+		return
+	}
+
+	done := make(chan error, 2)
+
+	go func() {
+		_, err := io.Copy(upstream, buffered)
+		done <- err
+	}()
+
+	go func() {
+		_, err := io.Copy(client, upstream)
+		done <- err
+	}()
+
+	select {
+	case <-done:
+	case <-r.Context().Done():
+	}
+
+	_ = client.Close()
+	_ = upstream.Close()
+}
