@@ -1,0 +1,470 @@
+name: Build and Publish Packages
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g., 1.0.0)'
+        required: true
+      publish:
+        description: 'Publish validated packages to the configured package server'
+        type: boolean
+        default: false
+      rebuild_rpm_repo:
+        description: 'Download all RPM files and rebuild repo metadata from scratch'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Get version
+        id: version
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            VERSION="${REQUESTED_VERSION}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+
+          if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release version must use numeric X.Y.Z format."
+            exit 1
+          fi
+
+          printf 'RELEASE_VERSION=%s\n' "${VERSION}" >> "${GITHUB_ENV}"
+          printf 'VERSION=%s\n' "${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "Building version: ${VERSION}"
+
+      - name: Check formatting
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "${unformatted}" ]; then
+            echo "The following Go files are not formatted:"
+            echo "${unformatted}"
+            exit 1
+          fi
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Prepare embedded restic and executables
+        run: ./bin/build.sh 0.0.0
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run tests
+        run: go test -race -count=1 ./...
+
+      - name: Install package build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm
+
+      - name: Build executables
+        run: ./bin/build.sh "${RELEASE_VERSION}"
+
+      - name: Build packages
+        run: ./bin/build-all.sh "${RELEASE_VERSION}" 1
+
+      - name: Build control-plane runtime
+        run: ./bin/build-runtime.sh "${RELEASE_VERSION}"
+
+      - name: Inspect release contents
+        run: |
+          PACKAGE_TEST_DIR="$PWD" \
+          RUNTIME_TEST_DIR="$PWD/runtime/v${RELEASE_VERSION}" \
+          RELEASE_VERSION="${RELEASE_VERSION}" \
+          go test -count=1 ./packaging
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: packages
+          path: |
+            backupchief_*.deb
+            backupchief-*.rpm
+            config.schema.json
+            runtime/
+          retention-days: 30
+
+  publish:
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    runs-on: ubuntu-latest
+    concurrency: package-publication
+    env:
+      RELEASE_VERSION: ${{ needs.build.outputs.version }}
+      PACKAGE_BASE_URL: ${{ vars.PACKAGE_BASE_URL }}
+      SSH_HOST: ${{ secrets.SSH_HOST }}
+      SSH_PATH: ${{ secrets.SSH_PATH }}
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      GPG_KEY_ID: ${{ vars.GPG_KEY_ID }}
+      GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+      GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+      GNUPGHOME: ${{ runner.temp }}/backupchief-signing
+    steps:
+      - name: Check release configuration
+        run: |
+          for INPUT in PACKAGE_BASE_URL SSH_HOST SSH_PATH SSH_PRIVATE_KEY GPG_KEY_ID GPG_PRIVATE_KEY GPG_PASSPHRASE; do
+            if [ -z "${!INPUT}" ]; then
+              echo "::error::Release blocked: missing ${INPUT}."
+              exit 1
+            fi
+          done
+
+          if [[ ! "${PACKAGE_BASE_URL}" =~ ^https://[a-zA-Z0-9.-]+$ ]]; then
+            echo "::error::PACKAGE_BASE_URL must be an HTTPS hostname without a trailing slash."
+            exit 1
+          fi
+
+          if [[ ! "${GPG_KEY_ID}" =~ ^[a-fA-F0-9]{40}$ ]]; then
+            echo "::error::GPG_KEY_ID must be the full 40-character signing fingerprint."
+            exit 1
+          fi
+
+      - name: Download validated packages
+        uses: actions/download-artifact@v7
+        with:
+          name: packages
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y apt-utils createrepo-c rpm gpg rsync
+
+      - name: Import GPG key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          mkdir -m 0700 "${GNUPGHOME}"
+          printf '%s\n' "${GPG_PRIVATE_KEY}" | gpg --batch --import
+          umask 077
+          printf '%s' "${GPG_PASSPHRASE}" > "${RUNNER_TEMP}/gpg-passphrase"
+
+      - name: Verify signing identity and sign runtime
+        run: |
+          CONFIGURED_FINGERPRINT="$(printf '%s' "${GPG_KEY_ID}" | tr '[:lower:]' '[:upper:]')"
+          IMPORTED_FINGERPRINT="$(gpg --batch --with-colons --fingerprint "${GPG_KEY_ID}" | awk -F: '$1 == "fpr" { print $10; exit }')"
+          SECRET_FINGERPRINT="$(gpg --batch --with-colons --list-secret-keys "${GPG_KEY_ID}" | awk -F: '$1 == "fpr" { print $10; exit }')"
+
+          if [ "${IMPORTED_FINGERPRINT}" != "${CONFIGURED_FINGERPRINT}" ] || \
+             [ "${SECRET_FINGERPRINT}" != "${CONFIGURED_FINGERPRINT}" ]; then
+            echo "::error::Imported signing key does not match GPG_KEY_ID."
+            exit 1
+          fi
+
+          RUNTIME_DIR="runtime/v${RELEASE_VERSION}"
+          (cd "${RUNTIME_DIR}" && shasum -a 256 -c SHA256SUMS)
+          gpg --batch --yes --local-user "${GPG_KEY_ID}" --detach-sign --armor \
+            --pinentry-mode loopback \
+            --passphrase-file="${RUNNER_TEMP}/gpg-passphrase" \
+            -o "${RUNTIME_DIR}/SHA256SUMS.asc" "${RUNTIME_DIR}/SHA256SUMS"
+          gpg --batch --verify "${RUNTIME_DIR}/SHA256SUMS.asc" "${RUNTIME_DIR}/SHA256SUMS"
+
+      - name: Setup SSH
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${SSH_PRIVATE_KEY}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+      - name: Download existing repository metadata
+        env:
+          REBUILD_RPM_REPO: ${{ inputs.rebuild_rpm_repo }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PATH: ${{ secrets.SSH_PATH }}
+        run: |
+          SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no"
+
+          # Download only DEB metadata (not the pool with all .deb archives)
+          mkdir -p repo-sync/deb/dists
+          rsync -avz -e "${SSH_CMD}" \
+            "${SSH_HOST}:${SSH_PATH}/deb/dists/" repo-sync/deb/dists/ || true
+
+          # Download RPM repositories
+          for RPM_ARCH in x86_64 aarch64; do
+            mkdir -p repo-sync/rpm/stable/${RPM_ARCH}
+            if [ "${REBUILD_RPM_REPO}" = "true" ]; then
+              echo "Rebuilding RPM ${RPM_ARCH} repo: downloading all packages..."
+              rsync -avz -e "${SSH_CMD}" \
+                "${SSH_HOST}:${SSH_PATH}/rpm/stable/${RPM_ARCH}/" \
+                repo-sync/rpm/stable/${RPM_ARCH}/ || true
+            else
+              mkdir -p repo-sync/rpm/stable/${RPM_ARCH}/repodata
+              rsync -avz -e "${SSH_CMD}" \
+                "${SSH_HOST}:${SSH_PATH}/rpm/stable/${RPM_ARCH}/repodata/" \
+                repo-sync/rpm/stable/${RPM_ARCH}/repodata/ || true
+            fi
+          done
+
+      - name: Update DEB repository
+        run: |
+          VERSION="${RELEASE_VERSION}"
+          POOL_DIR="repo-sync/deb/pool/main/b/backupchief"
+          mkdir -p "${POOL_DIR}"
+
+          for DEB_ARCH in amd64 arm64; do
+            DEB_FILE="backupchief_${VERSION}_${DEB_ARCH}.deb"
+            PACKAGES_DIR="repo-sync/deb/dists/stable/main/binary-${DEB_ARCH}"
+
+            # Place new package in pool directory structure
+            cp "${DEB_FILE}" "${POOL_DIR}/"
+
+            # Generate Packages entries for all .deb files in pool
+            NEW_ENTRY=$(cd repo-sync/deb && apt-ftparchive packages pool/)
+
+            # Prepare Packages file
+            mkdir -p "${PACKAGES_DIR}"
+            touch "${PACKAGES_DIR}/Packages"
+
+            # Remove any existing entry for this version (in case of re-release)
+            if [ -s "${PACKAGES_DIR}/Packages" ]; then
+              awk -v RS='\n\n' -v ORS='\n\n' -v ver="backupchief_${VERSION}_${DEB_ARCH}.deb" \
+                '$0 !~ ver && NF' "${PACKAGES_DIR}/Packages" > "${PACKAGES_DIR}/Packages.tmp"
+              mv "${PACKAGES_DIR}/Packages.tmp" "${PACKAGES_DIR}/Packages"
+            fi
+
+            # Append new entry — filter to only entries matching this architecture
+            printf '%s' "${NEW_ENTRY}" | awk -v RS='\n\n' -v ORS='\n\n' -v arch="${DEB_ARCH}" \
+              '$0 ~ "Architecture: "arch' >> "${PACKAGES_DIR}/Packages"
+
+            # Generate compressed versions
+            gzip -9c "${PACKAGES_DIR}/Packages" > "${PACKAGES_DIR}/Packages.gz"
+            bzip2 -9c "${PACKAGES_DIR}/Packages" > "${PACKAGES_DIR}/Packages.bz2"
+          done
+
+          # Generate Release file
+          cd repo-sync/deb
+          apt-ftparchive \
+            -o APT::FTPArchive::Release::Origin="Backup Chief" \
+            -o APT::FTPArchive::Release::Label="Backup Chief" \
+            -o APT::FTPArchive::Release::Suite="stable" \
+            -o APT::FTPArchive::Release::Codename="stable" \
+            -o APT::FTPArchive::Release::Components="main" \
+            -o APT::FTPArchive::Release::Architectures="amd64 arm64" \
+            release dists/stable/ > dists/stable/Release
+
+          # Sign Release file
+          rm -f dists/stable/InRelease dists/stable/Release.gpg
+
+          gpg --batch --yes --local-user "${GPG_KEY_ID}" --clearsign \
+            --pinentry-mode loopback \
+            --passphrase-file="${RUNNER_TEMP}/gpg-passphrase" \
+            -o dists/stable/InRelease dists/stable/Release
+
+          gpg --batch --yes --local-user "${GPG_KEY_ID}" --detach-sign --armor \
+            --pinentry-mode loopback \
+            --passphrase-file="${RUNNER_TEMP}/gpg-passphrase" \
+            -o dists/stable/Release.gpg dists/stable/Release
+
+          cd ../..
+
+      - name: Setup RPM repository
+        env:
+          REBUILD_RPM_REPO: ${{ inputs.rebuild_rpm_repo }}
+        run: |
+          VERSION="${RELEASE_VERSION}"
+
+          for RPM_ARCH in x86_64 aarch64; do
+            RPM_FILE="backupchief-${VERSION}-1.${RPM_ARCH}.rpm"
+            REPO_DIR="repo-sync/rpm/stable/${RPM_ARCH}"
+
+            # Sign the RPM
+            rpmsign --addsign --define "_gpg_name ${GPG_KEY_ID}" \
+              --define "__gpg $(command -v gpg)" \
+              --define '_gpg_digest_algo sha256' \
+              --define "_gpg_sign_cmd_extra_args --batch --pinentry-mode loopback --passphrase-file ${RUNNER_TEMP}/gpg-passphrase" \
+              "${RPM_FILE}"
+
+            # Copy new RPM to repo directory
+            mkdir -p "${REPO_DIR}"
+            cp "${RPM_FILE}" "${REPO_DIR}/"
+
+            if [ "${REBUILD_RPM_REPO}" = "true" ]; then
+              # Full rebuild: all RPM files are present, generate fresh metadata
+              createrepo_c "${REPO_DIR}"
+            else
+              # Check if existing repo metadata exists for incremental update
+              OLD_PRIMARY=$(find "${REPO_DIR}/repodata" -name "*-primary.xml.gz" 2>/dev/null | head -1)
+              if [ -n "${OLD_PRIMARY}" ]; then
+                # Create placeholders for old RPMs so createrepo_c --update
+                # preserves their metadata without needing the actual files
+                gunzip -c "${OLD_PRIMARY}" | grep -oP 'href="\K[^"]+' | while read -r rpm; do
+                  [ -f "${REPO_DIR}/${rpm}" ] || touch "${REPO_DIR}/${rpm}"
+                done
+                createrepo_c --update --skip-stat "${REPO_DIR}"
+              else
+                # No existing metadata (new architecture), create fresh repo
+                createrepo_c "${REPO_DIR}"
+              fi
+            fi
+
+            # Sign the repository metadata
+            gpg --batch --yes --local-user "${GPG_KEY_ID}" --detach-sign --armor \
+              --pinentry-mode loopback \
+              --passphrase-file="${RUNNER_TEMP}/gpg-passphrase" \
+              "${REPO_DIR}/repodata/repomd.xml"
+
+            # Clean up empty placeholder files
+            find "${REPO_DIR}" -maxdepth 1 -name "*.rpm" -empty -delete
+          done
+
+      - name: Create repository configuration files
+        run: |
+          # Create install script for users in root
+          cat > repo-sync/install.sh << 'INSTALL_EOF'
+          #!/bin/bash
+          set -e
+
+          # Detect architecture
+          MACHINE_ARCH=$(uname -m)
+          case "${MACHINE_ARCH}" in
+              x86_64)  RPM_ARCH="x86_64"; DEB_ARCH="amd64" ;;
+              aarch64) RPM_ARCH="aarch64"; DEB_ARCH="arm64" ;;
+              arm64)   RPM_ARCH="aarch64"; DEB_ARCH="arm64" ;;
+              *) echo "Unsupported architecture: ${MACHINE_ARCH}"; exit 1 ;;
+          esac
+
+          # Detect OS
+          if [ -f /etc/os-release ]; then
+              . /etc/os-release
+              OS=$ID
+          else
+              echo "Cannot detect OS"
+              exit 1
+          fi
+
+          case $OS in
+              ubuntu|debian)
+                  echo "Setting up Backup Chief repository for Debian/Ubuntu..."
+
+                  # Create a dedicated keyring directory
+                  install -d -m 0755 /etc/apt/keyrings
+
+                  # Add GPG key
+                  curl -fsSL __PACKAGE_BASE_URL__/gpg.key | gpg --dearmor --yes -o /etc/apt/keyrings/backupchief.gpg
+                  chmod a+r /etc/apt/keyrings/backupchief.gpg
+
+                  # Add repository using deb822 format
+                  printf '%s\n' \
+                      'Types: deb' \
+                      'URIs: __PACKAGE_BASE_URL__/deb' \
+                      'Suites: stable' \
+                      'Components: main' \
+                      "Architectures: ${DEB_ARCH}" \
+                      'Signed-By: /etc/apt/keyrings/backupchief.gpg' \
+                      > /etc/apt/sources.list.d/backupchief.sources
+
+                  apt-get update
+                  apt-get install -y backupchief
+                  ;;
+
+              centos|rhel|rocky|almalinux|fedora)
+                  echo "Setting up Backup Chief repository for RHEL/CentOS/Rocky/Alma/Fedora..."
+
+                  # Add repository
+                  cat > /etc/yum.repos.d/backupchief.repo << EOF
+          [backupchief]
+          name=Backup Chief Repository
+          baseurl=__PACKAGE_BASE_URL__/rpm/stable/$RPM_ARCH
+          enabled=1
+          gpgcheck=1
+          repo_gpgcheck=1
+          gpgkey=__PACKAGE_BASE_URL__/gpg.key
+          EOF
+
+                  # Install
+                  yum install -y backupchief || dnf install -y backupchief
+                  ;;
+
+              *)
+                  echo "Unsupported OS: $OS"
+                  echo "Please install manually from https://github.com/chieftools/backupchief-agent/releases"
+                  exit 1
+                  ;;
+          esac
+
+          echo ""
+          echo "Backup Chief installed successfully."
+          echo "Run the setup command shown in https://backup.chief.app."
+          echo "Successful setup enables and starts backupchief.service."
+          INSTALL_EOF
+
+          chmod +x repo-sync/install.sh
+
+          # Export GPG public key
+          gpg --armor --export "${GPG_KEY_ID}" > repo-sync/gpg.key
+
+          sed -i "s|__PACKAGE_BASE_URL__|${PACKAGE_BASE_URL}|g" repo-sync/install.sh
+
+      - name: Upload to server
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PATH: ${{ secrets.SSH_PATH }}
+        run: |
+          SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no"
+
+          # Upload the signed control-plane runtime before package repository metadata
+          rsync -avz --delete -e "${SSH_CMD}" \
+            "runtime/v${RELEASE_VERSION}/" \
+            "${SSH_HOST}:${SSH_PATH}/runtime/v${RELEASE_VERSION}/"
+
+          # Upload new .deb to pool (additive only, old packages remain on server)
+          rsync -avz -e "${SSH_CMD}" \
+            repo-sync/deb/pool/ "${SSH_HOST}:${SSH_PATH}/deb/pool/"
+
+          # Upload updated DEB metadata
+          rsync -avz --delete -e "${SSH_CMD}" \
+            repo-sync/deb/dists/ "${SSH_HOST}:${SSH_PATH}/deb/dists/"
+
+          # Upload RPM packages and metadata for each architecture
+          for RPM_ARCH in x86_64 aarch64; do
+            # Upload new RPM package (additive only, old packages remain on server)
+            rsync -avz -e "${SSH_CMD}" \
+              "repo-sync/rpm/stable/${RPM_ARCH}/backupchief-${RELEASE_VERSION}-1.${RPM_ARCH}.rpm" \
+              "${SSH_HOST}:${SSH_PATH}/rpm/stable/${RPM_ARCH}/"
+
+            # Upload updated RPM metadata
+            rsync -avz --delete -e "${SSH_CMD}" \
+              repo-sync/rpm/stable/${RPM_ARCH}/repodata/ \
+              "${SSH_HOST}:${SSH_PATH}/rpm/stable/${RPM_ARCH}/repodata/"
+          done
+
+          # Upload root config files
+          rsync -avz -e "${SSH_CMD}" \
+            repo-sync/install.sh repo-sync/gpg.key config.schema.json \
+            "${SSH_HOST}:${SSH_PATH}/"
+
+      - name: Clean up
+        if: always()
+        run: |
+          rm -f "${RUNNER_TEMP}/gpg-passphrase"
+          rm -f ~/.ssh/deploy_key
+          gpgconf --kill gpg-agent || true
+          rm -rf "${GNUPGHOME}"

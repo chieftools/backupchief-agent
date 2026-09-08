@@ -1,0 +1,34 @@
+[Unit]
+Description=Backup Chief backup agent
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=backupchief
+Group=backupchief
+ExecStart=/usr/bin/backupchief run
+Restart=on-failure
+RestartPreventExitStatus=2
+RestartSec=5s
+KillMode=control-group
+TimeoutStopSec=60s
+UMask=0077
+StateDirectory=backupchief
+StateDirectoryMode=0700
+LogsDirectory=backupchief
+LogsDirectoryMode=0700
+AmbientCapabilities=CAP_DAC_READ_SEARCH
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=false
+ReadWritePaths=/var/lib/backupchief /var/log/backupchief
+ReadOnlyPaths=/dev/shm
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
