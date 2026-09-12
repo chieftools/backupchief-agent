@@ -9,6 +9,150 @@ import (
 	"testing"
 )
 
+func TestClientNegotiatesDownAfterRollbackAndBackUpAfterUpgrade(t *testing.T) {
+	var requests atomic.Int32
+	var upgraded atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		attempt := requests.Add(1)
+		revision := request.Header.Get(ProtocolHeader)
+		var payload map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+
+		if !upgraded.Load() && attempt == 1 {
+			if revision != ProtocolRevision {
+				t.Fatalf("initial protocol revision: %q", revision)
+			}
+			response.Header().Set(ProtocolHeader, "1.0.0")
+			response.Header().Set("Content-Type", "application/problem+json")
+			response.WriteHeader(http.StatusUpgradeRequired)
+			_, _ = response.Write([]byte(`{"type":"https://backup.example.test/problems/unsupported_protocol","title":"Unsupported protocol revision","status":426,"code":"unsupported_protocol"}`))
+			return
+		}
+
+		if !upgraded.Load() && revision != "1.0.0" {
+			t.Fatalf("fallback protocol revision: %q", revision)
+		}
+		if revision == "1.0.0" {
+			if _, exists := payload["capabilities"]; exists {
+				t.Fatalf("1.0.0 heartbeat contains capabilities: %#v", payload)
+			}
+			config, _ := payload["config"].(map[string]any)
+			if _, exists := config["protocol_revision"]; exists {
+				t.Fatalf("1.0.0 heartbeat contains config protocol revision: %#v", payload)
+			}
+		} else if _, exists := payload["capabilities"]; !exists {
+			t.Fatalf("1.1.0 heartbeat omitted capabilities: %#v", payload)
+		} else if config, _ := payload["config"].(map[string]any); config["protocol_revision"] != ProtocolRevision {
+			t.Fatalf("1.1.0 heartbeat config protocol revision: %#v", payload)
+		}
+		if upgraded.Load() {
+			if attempt == 3 && revision != "1.0.0" {
+				t.Fatalf("upgrade discovery revision: %q", revision)
+			}
+			if attempt == 4 && revision != ProtocolRevision {
+				t.Fatalf("upgraded protocol revision: %q", revision)
+			}
+			response.Header().Set(LatestProtocolHeader, ProtocolRevision)
+		}
+		response.Header().Set(ProtocolHeader, revision)
+		response.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	client := NewClient(server.URL, testBootstrap().Credential, "1.2.3-test", server.Client())
+	heartbeat := HeartbeatRequest{
+		Config:       HeartbeatConfig{ProtocolRevision: ProtocolRevision},
+		Capabilities: map[string]any{"backup_types": map[string]any{"file": map[string]any{"available": true}}},
+	}
+
+	if err := client.Heartbeat(context.Background(), heartbeat); err != nil {
+		t.Fatalf("heartbeat after rollback negotiation: %v", err)
+	}
+	upgraded.Store(true)
+	if err := client.Heartbeat(context.Background(), heartbeat); err != nil {
+		t.Fatalf("heartbeat during upgrade discovery: %v", err)
+	}
+	if err := client.Heartbeat(context.Background(), heartbeat); err != nil {
+		t.Fatalf("heartbeat after upgrade negotiation: %v", err)
+	}
+	if requests.Load() != 4 {
+		t.Fatalf("requests: %d, want 4", requests.Load())
+	}
+}
+
+func TestEnrollmentFallbackUsesTheServerRevisionInItsHeaderAndBody(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		attempt := requests.Add(1)
+		var payload EnrollmentRequest
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if attempt == 1 {
+			response.Header().Set(ProtocolHeader, "1.0.0")
+			response.WriteHeader(http.StatusUpgradeRequired)
+			return
+		}
+		if request.Header.Get(ProtocolHeader) != "1.0.0" || payload.ProtocolRevision != "1.0.0" {
+			t.Fatalf("fallback request used header %q and body %q", request.Header.Get(ProtocolHeader), payload.ProtocolRevision)
+		}
+		response.Header().Set(ProtocolHeader, "1.0.0")
+		response.WriteHeader(http.StatusCreated)
+		_, _ = response.Write([]byte(`{"protocol_revision":"1.0.0","server_id":"01k4p4f7m1r9d3t6v8w2x5y7za","generation":1,"enrolled_at":"2026-09-11T10:30:00.000000Z","config_revision":1}`))
+	}))
+	defer server.Close()
+	client := NewClient(server.URL, "", "1.2.3-test", server.Client())
+
+	result, err := client.Enroll(context.Background(), "bcenr_syntheticEnrollmentToken1234567890", EnrollmentRequest{
+		ProtocolRevision: ProtocolRevision,
+		AttemptID:        "01k4p4g7m1r9d3t6v8w2x5y7zb",
+		AgentVersion:     "1.2.3-test",
+		Hostname:         "agent.example.test",
+		Platform:         "linux",
+		Architecture:     "arm64",
+		Credential:       "synthetic-credential-value",
+	})
+
+	if err != nil || result.ProtocolRevision != "1.0.0" {
+		t.Fatalf("enroll after fallback: %+v %v", result, err)
+	}
+}
+
+func TestInspectionResultUsesItsDedicatedWireShape(t *testing.T) {
+	commandID := "01k4p4f7m1r9d3t6v8w2x5y7za"
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set(ProtocolHeader, ProtocolRevision)
+		var payload map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["status"] != "complete" || payload["summary"] != "Synthetic source verified." {
+			t.Fatalf("inspection payload: %#v", payload)
+		}
+		for _, unexpected := range []string{"job_id", "run_kind", "started_at", "finished_at", "snapshot_ids", "statistics", "artifacts"} {
+			if _, exists := payload[unexpected]; exists {
+				t.Fatalf("inspection payload contains %s: %#v", unexpected, payload)
+			}
+		}
+		response.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	client := NewClient(server.URL, testBootstrap().Credential, "1.2.3-test", server.Client())
+
+	err := client.SubmitInspectionResult(context.Background(), commandID, CommandResult{
+		Generation: 1,
+		RunID:      "01k4p4k2n8d3r6t9v1w5x7yabc",
+		Status:     "complete",
+		ResultCode: "success",
+		Summary:    "Synthetic source verified.",
+		Databases:  []string{"synthetic_app"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestManagedBackupClientQueuesAndWaitsForCompletion(t *testing.T) {
 	commandID := "01k4p4f7m1r9d3t6v8w2x5y7za"
 	jobID := "01k4p4g2m7d9r3t6v8w1x5y2zb"

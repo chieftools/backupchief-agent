@@ -302,7 +302,7 @@ func TestScheduledMaintenanceCompletesOfflineAndReplaysAfterRestart(t *testing.T
 	}))
 	defer server.Close()
 	restarted := newSchedulerDaemon(t, store, config, &now, executor)
-	restarted.client = NewClient(server.URL+"/agent/v1", testBootstrap().Credential, "1.0.0", server.Client())
+	restarted.client = NewClient(server.URL+"/agent/v1", testBootstrap().Credential, "1.1.0", server.Client())
 	if err := restarted.reportJournal(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -372,5 +372,20 @@ func maintenanceJournalCommand(kind, jobID string) *JournalCommand {
 	return &JournalCommand{
 		RunID: "01k4p4f7m1r9d3t6v8w2x5y7zc", RunKind: kind, ConfigRevision: 2, Trigger: "scheduled",
 		Command: AgentCommand{Payload: CommandPayload{JobID: jobID, RequiredConfigRevision: 2, Maintenance: kind}},
+	}
+}
+
+func TestExpandMySQLRunCandidatesKeepsRunSnapshotsTogether(t *testing.T) {
+	snapshots := []repositorySnapshot{
+		{ID: strings.Repeat("a", 64), Tags: []string{"backupchief-run:run-one", "backupchief-run-anchor"}},
+		{ID: strings.Repeat("b", 64), Tags: []string{"backupchief-run:run-one"}},
+		{ID: strings.Repeat("c", 64), Tags: []string{"backupchief-run:run-two", "backupchief-run-anchor"}},
+		{ID: strings.Repeat("d", 64), Tags: []string{"backupchief-run:run-two"}},
+	}
+
+	result := expandMySQLRunCandidates(snapshots, []string{strings.Repeat("c", 64)})
+
+	if len(result) != 2 || result[0] != strings.Repeat("c", 64) || result[1] != strings.Repeat("d", 64) {
+		t.Fatalf("expanded snapshots: %#v", result)
 	}
 }

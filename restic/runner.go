@@ -53,6 +53,7 @@ func (runner Runner) Run(ctx context.Context, request Request) Result {
 
 	passwordFile := filepath.Join(work, "password")
 	newPasswordFile := filepath.Join(work, "new-password")
+	commandConfigFile := filepath.Join(work, "command.cnf")
 	cache := filepath.Join(runner.State, "cache")
 
 	if err = privateDirectory(cache); err != nil {
@@ -89,6 +90,15 @@ func (runner Runner) Run(ctx context.Context, request Request) Result {
 		if err := os.WriteFile(newPasswordFile, []byte(request.NewPassword), 0600); err != nil {
 			result.Diagnostic = "cannot write private password input"
 			return result
+		}
+	}
+	if request.Operation == "backup_stdin" {
+		if err := os.WriteFile(commandConfigFile, []byte(request.CommandConfig), 0600); err != nil {
+			result.Diagnostic = "cannot write private command configuration"
+			return result
+		}
+		for index, argument := range args {
+			args[index] = strings.ReplaceAll(argument, "{backupchief-command-config}", commandConfigFile)
 		}
 	}
 
@@ -150,7 +160,7 @@ func runProcess(ctx context.Context, command *exec.Cmd, request Request) Result 
 
 	stdout := &boundedOutput{limit: 8 << 20, cancel: cancel}
 	stderr := &boundedOutput{limit: 256 << 10, cancel: cancel}
-	if request.Operation == "backup" {
+	if request.Operation == "backup" || request.Operation == "backup_stdin" {
 		stdout.cancel = nil
 		stdout.tailLimit = 1 << 20
 		stderr.cancel = nil
@@ -210,7 +220,7 @@ func runProcess(ctx context.Context, command *exec.Cmd, request Request) Result 
 	}
 	if err == nil {
 		result.Outcome = "complete"
-	} else if result.ExitCode == 3 && request.Operation == "backup" {
+	} else if result.ExitCode == 3 && (request.Operation == "backup" || request.Operation == "backup_stdin") {
 		result.Outcome = "partial"
 	} else if result.ExitCode == 11 {
 		result.Outcome = "locked"

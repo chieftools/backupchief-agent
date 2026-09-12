@@ -15,6 +15,36 @@ import (
 	"testing"
 )
 
+func TestMySQLDumpFlagsRejectManagedAndOutputChangingOptions(t *testing.T) {
+	for _, flag := range []string{"--result-file=/tmp/synthetic.sql", "--skip-single-transaction", "--password=synthetic-secret", "--where=synthetic"} {
+		if validMySQLFlag(flag) {
+			t.Fatalf("accepted unsafe flag %q", flag)
+		}
+	}
+	if !validMySQLFlag("--hex-blob") {
+		t.Fatal("rejected safe flag")
+	}
+}
+
+func TestMySQLDatabaseSelectionAllowsOneThousandDatabases(t *testing.T) {
+	databases := make([]string, maximumMySQLDatabases)
+	for index := range databases {
+		databases[index] = fmt.Sprintf("synthetic_schema_%04d", index)
+	}
+	source := JobSource{MySQL: &MySQLSource{
+		Host: "database.example.test", Port: 3306, Username: "synthetic_reader",
+		SelectionMode: "selected", Databases: databases,
+	}}
+
+	if err := validateMySQLSource(source); err != nil {
+		t.Fatalf("one thousand databases: %v", err)
+	}
+	source.MySQL.Databases = append(source.MySQL.Databases, "synthetic_schema_overflow")
+	if err := validateMySQLSource(source); err == nil {
+		t.Fatal("accepted more than one thousand databases")
+	}
+}
+
 func TestDefaultPathsSeparateManagedIdentityAndConfigurations(t *testing.T) {
 	paths := DefaultPaths()
 
@@ -25,7 +55,7 @@ func TestDefaultPathsSeparateManagedIdentityAndConfigurations(t *testing.T) {
 	}
 }
 
-func TestManagedIdentityRequiresTheCurrentProtocolRevision(t *testing.T) {
+func TestManagedIdentityAcceptsItsProtocolMajorAndRejectsAnotherMajor(t *testing.T) {
 	store := newAgentTestStore(t)
 	bootstrap := testBootstrap()
 	if err := store.SaveBootstrap(bootstrap); err != nil {
@@ -35,13 +65,31 @@ func TestManagedIdentityRequiresTheCurrentProtocolRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	identity = bytes.Replace(identity, []byte(ProtocolRevision), []byte("9.8.7"), 1)
+	identity = bytes.Replace(identity, []byte(ProtocolRevision), []byte("1.0.0"), 1)
+	if err := os.WriteFile(store.Paths.Identity, identity, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LoadBootstrap(); err != nil {
+		t.Fatalf("load same-major identity: %v", err)
+	}
+
+	identity = bytes.Replace(identity, []byte("1.0.0"), []byte("2.0.0"), 1)
 	if err := os.WriteFile(store.Paths.Identity, identity, 0o640); err != nil {
 		t.Fatal(err)
 	}
 
 	if _, err := store.LoadBootstrap(); err == nil || !strings.Contains(err.Error(), "protocol revision") {
 		t.Fatalf("incompatible managed identity error: %v", err)
+	}
+}
+
+func TestManagedConfigurationAcceptsAnEarlierProtocolMinor(t *testing.T) {
+	config, _, err := DecodeConfig(testConfigBody(1, 1, "1.0.0"), 1)
+	if err != nil {
+		t.Fatalf("decode same-major configuration: %v", err)
+	}
+	if config.ProtocolRevision != "1.0.0" {
+		t.Fatalf("protocol revision: %q", config.ProtocolRevision)
 	}
 }
 
@@ -117,6 +165,32 @@ func TestConfigCacheRejectsRollbackAndEqualRevisionConflictWithoutReplacement(t 
 	}
 	if _, _, err := DecodeConfig(plaintext, bootstrap.Generation); err != nil || loadedMetadata != metadata {
 		t.Fatal("a rejected configuration replaced the accepted cache")
+	}
+}
+
+func TestConfigCacheAcceptsAnEqualRevisionProtocolVariant(t *testing.T) {
+	store := newAgentTestStore(t)
+	bootstrap := testBootstrap()
+	legacyBody := testConfigBody(1, 2, "1.0.0")
+	legacyMetadata, err := store.SaveConfig(bootstrap, legacyBody, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	currentMetadata, err := store.SaveConfig(bootstrap, testConfigBody(1, 2, ProtocolRevision), &legacyMetadata)
+	if err != nil {
+		t.Fatalf("save compatible protocol variant: %v", err)
+	}
+	body, _, err := store.LoadConfig(bootstrap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, _, err := DecodeConfig(body, bootstrap.Generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.ProtocolRevision != ProtocolRevision || currentMetadata.Digest == legacyMetadata.Digest {
+		t.Fatalf("protocol transition was not installed: %q", config.ProtocolRevision)
 	}
 }
 
@@ -340,7 +414,7 @@ func writeLegacyConfigCache(t *testing.T, store *FileStore, bootstrap Bootstrap,
 }
 
 func validJobConfigBody() []byte {
-	return []byte(`{"$schema":"https://pkg.backup.chief.app/config.schema.json","metadata":{"protocol_revision":"1.0.0","generation":1,"revision":2,"schema_version":1,"issued_at":"2026-09-09T08:15:00.000000Z"},"host":{"name":"synthetic-host","id":"server_01k4p4f7m1r9d3t6v8w2x5y7za"},"destinations":{"storage_01k4p4f7m1r9d3t6v8w2x5y7zc":{"driver":"s3","endpoint":"https://objects.example.test","region":"auto","bucket":"bucket-synthetic","prefix":"backups","access_key":"synthetic-access-key","secret_key":"synthetic-secret-key"}},"jobs":{"job_01k4p4f7m1r9d3t6v8w2x5y7za":{"name":"Synthetic documents","type":"file","enabled":false,"source":{"root":"/srv/synthetic","one_file_system":true,"excludes":[]},"repository":{"id":"bfe1c8aaeb40359d011fdfd7028992b2cb01d1c147f5651a0fd41c30164f7c7b","destination":"storage_01k4p4f7m1r9d3t6v8w2x5y7zc","path":"documents/repository","password":"synthetic-service-password"},"schedule":"0 1 * * *","retention":{"last":12,"hourly":0,"daily":7,"weekly":4,"monthly":3,"yearly":0,"forget_schedule":"17 3 * * *","prune_schedule":"47 15 * * 0"},"integrity":{"metadata_schedule":"0 2 * * 0","data_schedule":"0 3 * * 0","data_parts":4},"safety":{"latest_complete":null,"has_unresolved_runs":false}}}}`)
+	return []byte(`{"$schema":"https://pkg.backup.chief.app/config.schema.json","metadata":{"protocol_revision":"1.1.0","generation":1,"revision":2,"schema_version":1,"issued_at":"2026-09-09T08:15:00.000000Z"},"host":{"name":"synthetic-host","id":"server_01k4p4f7m1r9d3t6v8w2x5y7za"},"destinations":{"storage_01k4p4f7m1r9d3t6v8w2x5y7zc":{"driver":"s3","endpoint":"https://objects.example.test","region":"auto","bucket":"bucket-synthetic","prefix":"backups","access_key":"synthetic-access-key","secret_key":"synthetic-secret-key"}},"jobs":{"job_01k4p4f7m1r9d3t6v8w2x5y7za":{"name":"Synthetic documents","type":"file","enabled":false,"source":{"root":"/srv/synthetic","one_file_system":true,"excludes":[]},"repository":{"id":"bfe1c8aaeb40359d011fdfd7028992b2cb01d1c147f5651a0fd41c30164f7c7b","destination":"storage_01k4p4f7m1r9d3t6v8w2x5y7zc","path":"documents/repository","password":"synthetic-service-password"},"schedule":"0 1 * * *","retention":{"last":12,"hourly":0,"daily":7,"weekly":4,"monthly":3,"yearly":0,"forget_schedule":"17 3 * * *","prune_schedule":"47 15 * * 0"},"integrity":{"metadata_schedule":"0 2 * * 0","data_schedule":"0 3 * * 0","data_parts":4},"safety":{"latest_complete":null,"has_unresolved_runs":false}}}}`)
 }
 
 func validRealtimeConfigBody(t *testing.T) []byte {

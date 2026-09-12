@@ -144,7 +144,7 @@ func TestDaemonCompletesTheDurableCommandReportingFlow(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- Run(ctx, RunOptions{
-			Store: store, HTTPClient: server.Client(), Version: "1.0.0", Executor: executor,
+			Store: store, HTTPClient: server.Client(), Version: "1.1.0", Executor: executor,
 			HeartbeatEvery: 10 * time.Millisecond, ConfigEvery: 10 * time.Millisecond, CommandEvery: 10 * time.Millisecond,
 			ReporterEvery: 10 * time.Millisecond, DispatchEvery: 10 * time.Millisecond,
 			Jitter: func(time.Duration) time.Duration { return time.Millisecond },

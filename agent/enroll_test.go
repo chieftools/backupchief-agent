@@ -333,7 +333,7 @@ func enrollmentTestServer(t *testing.T, received *EnrollmentRequest, status func
 
 func writeEnrollmentResponse(response http.ResponseWriter, status int) {
 	response.WriteHeader(status)
-	_, _ = io.WriteString(response, `{"protocol_revision":"1.0.0","server_id":"01k4p4f7m1r9d3t6v8w2x5y7za","generation":1,"enrolled_at":"2026-09-09T08:15:00.000000Z","config_revision":1}`)
+	_, _ = io.WriteString(response, `{"protocol_revision":"1.1.0","server_id":"01k4p4f7m1r9d3t6v8w2x5y7za","generation":1,"enrolled_at":"2026-09-09T08:15:00.000000Z","config_revision":1}`)
 }
 
 func testEnrollOptions(store *FileStore, server *httptest.Server, manager ServiceManager) EnrollOptions {

@@ -231,7 +231,7 @@ func TestOfflineRunsContinueDuringSlowReportingAndReplayAfterRestart(t *testing.
 		}
 	}))
 	defer server.Close()
-	runtime.client = NewClient(server.URL+"/agent/v1", testBootstrap().Credential, "1.0.0", server.Client())
+	runtime.client = NewClient(server.URL+"/agent/v1", testBootstrap().Credential, "1.1.0", server.Client())
 
 	reportDone := make(chan error, 1)
 	go func() { reportDone <- runtime.reportJournal(context.Background()) }()
@@ -252,7 +252,7 @@ func TestOfflineRunsContinueDuringSlowReportingAndReplayAfterRestart(t *testing.
 	}
 
 	restarted := newSchedulerDaemon(t, store, config, &now, executor)
-	restarted.client = NewClient(server.URL+"/agent/v1", testBootstrap().Credential, "1.0.0", server.Client())
+	restarted.client = NewClient(server.URL+"/agent/v1", testBootstrap().Credential, "1.1.0", server.Client())
 	if err := restarted.reportJournal(context.Background()); err != nil {
 		t.Fatal(err)
 	}

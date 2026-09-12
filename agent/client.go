@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -72,6 +73,9 @@ type Client struct {
 	Version           string
 	Now               func() time.Time
 	ObserveServerTime func(time.Time, time.Time)
+
+	protocolMu       sync.RWMutex
+	protocolRevision string
 }
 
 func NewClient(endpoint, credential, version string, httpClient *http.Client) *Client {
@@ -86,11 +90,12 @@ func NewClient(endpoint, credential, version string, httpClient *http.Client) *C
 		}
 	}
 	return &Client{
-		Endpoint:   strings.TrimRight(endpoint, "/"),
-		Credential: credential,
-		HTTP:       httpClient,
-		Version:    normalizeVersion(version),
-		Now:        time.Now,
+		Endpoint:         strings.TrimRight(endpoint, "/"),
+		Credential:       credential,
+		HTTP:             httpClient,
+		Version:          normalizeVersion(version),
+		Now:              time.Now,
+		protocolRevision: ProtocolRevision,
 	}
 }
 
@@ -126,7 +131,7 @@ func (client *Client) Enroll(ctx context.Context, token string, request Enrollme
 	if err := requireJSONEOF(decoder); err != nil {
 		return EnrollmentResponse{}, fmt.Errorf("decode enrollment response: %w", err)
 	}
-	if enrollment.ProtocolRevision != ProtocolRevision || !ulidPattern.MatchString(enrollment.ServerID) || enrollment.Generation == 0 || enrollment.ConfigRevision == 0 || !validateTimestamp(enrollment.EnrolledAt) {
+	if !compatibleProtocolRevision(enrollment.ProtocolRevision) || enrollment.ProtocolRevision != response.Header.Get(ProtocolHeader) || !ulidPattern.MatchString(enrollment.ServerID) || enrollment.Generation == 0 || enrollment.ConfigRevision == 0 || !validateTimestamp(enrollment.EnrolledAt) {
 		return EnrollmentResponse{}, fmt.Errorf("enrollment response is incompatible")
 	}
 	return enrollment, nil
@@ -302,7 +307,7 @@ func (client *Client) PollCommands(ctx context.Context, expectedGeneration uint6
 	if err := decodeStrict(body, &commands); err != nil {
 		return CommandsResponse{}, fmt.Errorf("decode commands: %w", err)
 	}
-	if commands.ProtocolRevision != ProtocolRevision || commands.Commands == nil || len(commands.Commands) > 25 {
+	if !compatibleProtocolRevision(commands.ProtocolRevision) || commands.ProtocolRevision != response.Header.Get(ProtocolHeader) || commands.Commands == nil || len(commands.Commands) > 25 {
 		return CommandsResponse{}, fmt.Errorf("commands response is incompatible")
 	}
 	for _, command := range commands.Commands {
@@ -319,6 +324,18 @@ func (client *Client) AcknowledgeCommand(ctx context.Context, commandID string, 
 
 func (client *Client) SubmitResult(ctx context.Context, commandID string, result CommandResult) error {
 	return client.postJSON(ctx, "/commands/"+commandID+"/result", result)
+}
+
+func (client *Client) SubmitInspectionResult(ctx context.Context, commandID string, result CommandResult) error {
+	return client.postJSON(ctx, "/commands/"+commandID+"/result", sourceInspectionResult{
+		Generation: result.Generation,
+		RunID:      result.RunID,
+		Status:     result.Status,
+		ResultCode: result.ResultCode,
+		Summary:    result.Summary,
+		Databases:  result.Databases,
+		Tools:      result.Tools,
+	})
 }
 
 func (client *Client) SubmitEvents(ctx context.Context, request EventRequest) (EventsResponse, error) {
@@ -348,7 +365,7 @@ func (client *Client) SubmitEvents(ctx context.Context, request EventRequest) (E
 	if err := decodeStrict(data, &result); err != nil {
 		return EventsResponse{}, fmt.Errorf("decode event response: %w", err)
 	}
-	if result.ProtocolRevision != ProtocolRevision || len(result.Results) != len(request.Events) {
+	if !compatibleProtocolRevision(result.ProtocolRevision) || result.ProtocolRevision != response.Header.Get(ProtocolHeader) || len(result.Results) != len(request.Events) {
 		return EventsResponse{}, fmt.Errorf("event response does not match request")
 	}
 	for index, item := range result.Results {
@@ -426,6 +443,38 @@ func (client *Client) request(ctx context.Context, method, path, credential, eta
 }
 
 func (client *Client) requestContent(ctx context.Context, method, path, credential string, body []byte, headers http.Header) (*http.Response, error) {
+	protocolRevision := client.selectedProtocolRevision()
+	requestBody, err := requestBodyForProtocol(path, body, protocolRevision)
+	if err != nil {
+		return nil, err
+	}
+	response, err := client.requestContentAtRevision(ctx, method, path, credential, requestBody, headers, protocolRevision)
+	if err != nil {
+		return nil, err
+	}
+
+	serverRevision := response.Header.Get(ProtocolHeader)
+	if response.StatusCode == http.StatusUpgradeRequired && compatibleProtocolRevision(serverRevision) && serverRevision != protocolRevision {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
+		_ = response.Body.Close()
+		client.selectProtocolRevision(serverRevision)
+
+		retryBody, rewriteErr := requestBodyForProtocol(path, body, serverRevision)
+		if rewriteErr != nil {
+			return nil, rewriteErr
+		}
+		response, err = client.requestContentAtRevision(ctx, method, path, credential, retryBody, headers, serverRevision)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	client.observeProtocolResponse(response)
+
+	return response, nil
+}
+
+func (client *Client) requestContentAtRevision(ctx context.Context, method, path, credential string, body []byte, headers http.Header, protocolRevision string) (*http.Response, error) {
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
@@ -434,7 +483,7 @@ func (client *Client) requestContent(ctx context.Context, method, path, credenti
 	if err != nil {
 		return nil, fmt.Errorf("create control-plane request: %w", err)
 	}
-	request.Header.Set(ProtocolHeader, ProtocolRevision)
+	request.Header.Set(ProtocolHeader, protocolRevision)
 	request.Header.Set("User-Agent", "backupchief/"+client.Version)
 	request.Header.Set("Accept", "application/json, application/problem+json")
 	request.Header.Set("Accept-Encoding", "identity")
@@ -456,6 +505,71 @@ func (client *Client) requestContent(ctx context.Context, method, path, credenti
 		client.ObserveServerTime(serverTime, startedAt.Add(finishedAt.Sub(startedAt)/2))
 	}
 	return response, nil
+}
+
+func (client *Client) selectedProtocolRevision() string {
+	client.protocolMu.RLock()
+	defer client.protocolMu.RUnlock()
+
+	return client.protocolRevision
+}
+
+func (client *Client) selectProtocolRevision(revision string) {
+	if !compatibleProtocolRevision(revision) {
+		return
+	}
+
+	client.protocolMu.Lock()
+	client.protocolRevision = revision
+	client.protocolMu.Unlock()
+}
+
+func (client *Client) observeProtocolResponse(response *http.Response) {
+	if latest := response.Header.Get(LatestProtocolHeader); compatibleProtocolRevision(latest) {
+		client.selectProtocolRevision(latest)
+		return
+	}
+
+	client.selectProtocolRevision(response.Header.Get(ProtocolHeader))
+}
+
+func requestBodyForProtocol(path string, body []byte, protocolRevision string) ([]byte, error) {
+	if len(body) == 0 || path != "/enroll" && path != "/heartbeat" {
+		return body, nil
+	}
+
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, fmt.Errorf("rewrite enrollment protocol revision: %w", err)
+	}
+	if path == "/enroll" {
+		revision, err := json.Marshal(protocolRevision)
+		if err != nil {
+			return nil, fmt.Errorf("rewrite enrollment protocol revision: %w", err)
+		}
+		payload["protocol_revision"] = revision
+	}
+	if path == "/heartbeat" && !protocolRevisionSupports(protocolRevision, "1.1.0") {
+		delete(payload, "capabilities")
+		if rawConfig, exists := payload["config"]; exists {
+			var config map[string]json.RawMessage
+			if err := json.Unmarshal(rawConfig, &config); err != nil {
+				return nil, fmt.Errorf("rewrite heartbeat protocol revision: %w", err)
+			}
+			delete(config, "protocol_revision")
+			encodedConfig, err := json.Marshal(config)
+			if err != nil {
+				return nil, fmt.Errorf("rewrite heartbeat protocol revision: %w", err)
+			}
+			payload["config"] = encodedConfig
+		}
+	}
+
+	rewritten, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("rewrite enrollment protocol revision: %w", err)
+	}
+	return rewritten, nil
 }
 
 func decodeStrict(data []byte, target any) error {
@@ -492,6 +606,10 @@ func validateCommand(command AgentCommand, expectedGeneration uint64) error {
 		if !ulidPattern.MatchString(command.Payload.JobID) || !ulidPattern.MatchString(command.Payload.RunID) || command.Payload.RequiredConfigRevision != 0 || command.Payload.Maintenance != "" {
 			return fmt.Errorf("cancellation command payload is invalid")
 		}
+	case "inspect_source":
+		if !contains([]string{"file", "mysql"}, command.Payload.Type) || len(command.Payload.Source) == 0 || !digestPattern.MatchString(command.Payload.SourceDigest) || command.Payload.JobID != "" || command.Payload.RunID != "" || command.Payload.RequiredConfigRevision != 0 || command.Payload.Maintenance != "" {
+			return fmt.Errorf("source inspection command payload is invalid")
+		}
 	default:
 		return fmt.Errorf("unsupported command kind %q", command.Kind)
 	}
@@ -499,7 +617,7 @@ func validateCommand(command AgentCommand, expectedGeneration uint64) error {
 }
 
 func requireProtocolResponse(response *http.Response) error {
-	if response.Header.Get(ProtocolHeader) != ProtocolRevision {
+	if !compatibleProtocolRevision(response.Header.Get(ProtocolHeader)) {
 		return fmt.Errorf("control plane returned an unsupported protocol revision")
 	}
 	return nil

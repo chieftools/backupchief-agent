@@ -13,22 +13,52 @@ import (
 )
 
 const (
-	ProtocolRevision = "1.0.0"
-	ProtocolHeader   = "BackupChief-Protocol-Revision"
-	DefaultEndpoint  = "https://backup.chief.app/agent/v1"
-	SpoolBytesLimit  = 268435456
-	maximumConfig    = 1 << 20
-	maximumCommands  = 512 << 10
-	maximumRunLog    = 8 << 20
-	maximumLogChunk  = 256 << 10
+	ProtocolRevision     = "1.1.0"
+	ProtocolHeader       = "BackupChief-Protocol-Revision"
+	LatestProtocolHeader = "BackupChief-Latest-Protocol-Revision"
+	DefaultEndpoint      = "https://backup.chief.app/agent/v1"
+	SpoolBytesLimit      = 268435456
+	maximumConfig        = 1 << 20
+	maximumCommands      = 512 << 10
+	maximumRunLog        = 8 << 20
+	maximumLogChunk      = 256 << 10
 )
 
 var (
-	ulidPattern      = regexp.MustCompile(`^[0-9a-hjkmnp-tv-z]{26}$`)
-	digestPattern    = regexp.MustCompile(`^[a-f0-9]{64}$`)
-	versionPattern   = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$`)
-	timestampPattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$`)
+	ulidPattern             = regexp.MustCompile(`^[0-9a-hjkmnp-tv-z]{26}$`)
+	digestPattern           = regexp.MustCompile(`^[a-f0-9]{64}$`)
+	versionPattern          = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$`)
+	protocolRevisionPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
+	timestampPattern        = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$`)
 )
+
+func compatibleProtocolRevision(revision string) bool {
+	matches := protocolRevisionPattern.FindStringSubmatch(revision)
+	return len(matches) == 4 && matches[1] == "1"
+}
+
+func protocolRevisionSupports(revision, introduced string) bool {
+	if !compatibleProtocolRevision(revision) || !compatibleProtocolRevision(introduced) {
+		return false
+	}
+
+	var revisionMajor, revisionMinor, revisionPatch int
+	var introducedMajor, introducedMinor, introducedPatch int
+	if _, err := fmt.Sscanf(revision, "%d.%d.%d", &revisionMajor, &revisionMinor, &revisionPatch); err != nil {
+		return false
+	}
+	if _, err := fmt.Sscanf(introduced, "%d.%d.%d", &introducedMajor, &introducedMinor, &introducedPatch); err != nil {
+		return false
+	}
+
+	if revisionMajor != introducedMajor {
+		return revisionMajor > introducedMajor
+	}
+	if revisionMinor != introducedMinor {
+		return revisionMinor > introducedMinor
+	}
+	return revisionPatch >= introducedPatch
+}
 
 type Bootstrap struct {
 	Endpoint            string `json:"endpoint"`
@@ -111,14 +141,16 @@ type HeartbeatRequest struct {
 	Config             HeartbeatConfig `json:"config"`
 	Spool              HeartbeatSpool  `json:"spool"`
 	ActiveRuns         []string        `json:"active_runs"`
+	Capabilities       map[string]any  `json:"capabilities,omitempty"`
 }
 
 type HeartbeatConfig struct {
-	Revision uint64   `json:"revision"`
-	Digest   string   `json:"digest"`
-	Status   string   `json:"status"`
-	Error    string   `json:"error,omitempty"`
-	Warnings []string `json:"warnings,omitempty"`
+	ProtocolRevision string   `json:"protocol_revision,omitempty"`
+	Revision         uint64   `json:"revision"`
+	Digest           string   `json:"digest"`
+	Status           string   `json:"status"`
+	Error            string   `json:"error,omitempty"`
+	Warnings         []string `json:"warnings,omitempty"`
 }
 
 type HeartbeatSpool struct {
@@ -142,10 +174,13 @@ type AgentCommand struct {
 }
 
 type CommandPayload struct {
-	JobID                  string `json:"job_id,omitempty"`
-	RunID                  string `json:"run_id,omitempty"`
-	RequiredConfigRevision uint64 `json:"required_config_revision,omitempty"`
-	Maintenance            string `json:"maintenance,omitempty"`
+	JobID                  string         `json:"job_id,omitempty"`
+	RunID                  string         `json:"run_id,omitempty"`
+	RequiredConfigRevision uint64         `json:"required_config_revision,omitempty"`
+	Maintenance            string         `json:"maintenance,omitempty"`
+	Type                   string         `json:"type,omitempty"`
+	Source                 map[string]any `json:"source,omitempty"`
+	SourceDigest           string         `json:"source_digest,omitempty"`
 }
 
 type CommandAcknowledgement struct {
@@ -157,18 +192,37 @@ type CommandAcknowledgement struct {
 type RunStatistics map[string]any
 
 type CommandResult struct {
-	Generation      uint64         `json:"generation"`
-	RunID           string         `json:"run_id"`
-	JobID           string         `json:"job_id"`
-	RunKind         string         `json:"run_kind"`
-	Status          string         `json:"status"`
-	ResultCode      string         `json:"result_code"`
-	StartedAt       string         `json:"started_at"`
-	FinishedAt      string         `json:"finished_at"`
-	SnapshotIDs     []string       `json:"snapshot_ids"`
-	Statistics      *RunStatistics `json:"statistics,omitempty"`
-	Summary         string         `json:"summary,omitempty"`
-	RepositoryBytes *uint64        `json:"repository_bytes,omitempty"`
+	Generation      uint64           `json:"generation"`
+	RunID           string           `json:"run_id"`
+	JobID           string           `json:"job_id,omitempty"`
+	RunKind         string           `json:"run_kind,omitempty"`
+	Status          string           `json:"status"`
+	ResultCode      string           `json:"result_code"`
+	StartedAt       string           `json:"started_at,omitempty"`
+	FinishedAt      string           `json:"finished_at,omitempty"`
+	SnapshotIDs     []string         `json:"snapshot_ids"`
+	Statistics      *RunStatistics   `json:"statistics,omitempty"`
+	Summary         string           `json:"summary,omitempty"`
+	RepositoryBytes *uint64          `json:"repository_bytes,omitempty"`
+	Artifacts       []BackupArtifact `json:"artifacts,omitempty"`
+	Databases       []string         `json:"databases,omitempty"`
+	Tools           map[string]any   `json:"tools,omitempty"`
+}
+
+type sourceInspectionResult struct {
+	Generation uint64         `json:"generation"`
+	RunID      string         `json:"run_id"`
+	Status     string         `json:"status"`
+	ResultCode string         `json:"result_code"`
+	Summary    string         `json:"summary"`
+	Databases  []string       `json:"databases,omitempty"`
+	Tools      map[string]any `json:"tools,omitempty"`
+}
+
+type BackupArtifact struct {
+	Database   string `json:"database"`
+	Filename   string `json:"filename"`
+	SnapshotID string `json:"snapshot_id"`
 }
 
 type EventRequest struct {

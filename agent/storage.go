@@ -151,7 +151,7 @@ func (store *FileStore) LoadBootstrap() (Bootstrap, error) {
 	if err := requireJSONEOF(decoder); err != nil {
 		return Bootstrap{}, fmt.Errorf("decode identity.json: %w", err)
 	}
-	if document.ProtocolRevision != ProtocolRevision {
+	if !compatibleProtocolRevision(document.ProtocolRevision) {
 		return Bootstrap{}, fmt.Errorf("managed identity protocol revision is invalid")
 	}
 	bootstrap := Bootstrap{

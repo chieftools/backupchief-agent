@@ -44,6 +44,9 @@ func executeBackup(
 	job Job,
 	now func() time.Time,
 ) (CommandResult, []byte, bool, uint64) {
+	if job.Type == JobTypeMySQL {
+		return executeMySQLBackup(ctx, executor, serverID, generation, command, job, now)
+	}
 	startedAt := now()
 	base := CommandResult{
 		Generation:  generation,
@@ -222,6 +225,9 @@ func terminalEventPayload(result CommandResult) map[string]any {
 	}
 	if result.RepositoryBytes != nil {
 		payload["repository_bytes"] = *result.RepositoryBytes
+	}
+	if len(result.Artifacts) > 0 {
+		payload["artifacts"] = result.Artifacts
 	}
 	return payload
 }

@@ -157,7 +157,7 @@ func Run(ctx context.Context, options RunOptions) error {
 		lastScheduleMinute: options.Now().UTC().Truncate(time.Minute),
 	}
 	client.ObserveServerTime = runtime.observeServerTime
-	runtime.replaceRealtime(config.Realtime)
+	runtime.replaceRealtime(config.Realtime, config.ProtocolRevision)
 	defer runtime.stopRealtime()
 
 	runContext, cancel := context.WithCancel(ctx)
@@ -223,7 +223,7 @@ func (daemon *daemon) reloadLocalConfig(context.Context) error {
 	daemon.config = config
 	daemon.metadata = metadata
 	daemon.mu.Unlock()
-	daemon.replaceRealtime(config.Realtime)
+	daemon.replaceRealtime(config.Realtime, config.ProtocolRevision)
 	notifyLoop(daemon.heartbeatWake)
 	for _, cancelRun := range cancellations {
 		cancelRun()
@@ -359,7 +359,7 @@ func (daemon *daemon) refreshConfig(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	daemon.replaceRealtime(config.Realtime)
+	daemon.replaceRealtime(config.Realtime, config.ProtocolRevision)
 	notifyLoop(daemon.heartbeatWake)
 	for _, cancelRun := range cancellations {
 		cancelRun()
@@ -393,18 +393,20 @@ func (daemon *daemon) sendHeartbeat(ctx context.Context) error {
 		SentAt:             protocolTimestamp(daemon.now()),
 		ClockOffsetSeconds: configState.ClockOffsetSeconds,
 		Config: HeartbeatConfig{
-			Revision: metadata.Revision,
-			Digest:   metadata.Digest,
-			Status:   status,
-			Error:    errorText,
-			Warnings: warnings,
+			ProtocolRevision: daemon.config.ProtocolRevision,
+			Revision:         metadata.Revision,
+			Digest:           metadata.Digest,
+			Status:           status,
+			Error:            errorText,
+			Warnings:         warnings,
 		},
 		Spool: HeartbeatSpool{
 			BytesUsed:   min(daemon.store.spoolUsage(), uint64(SpoolBytesLimit)),
 			BytesLimit:  SpoolBytesLimit,
 			GapDetected: configState.SpoolGapDetected,
 		},
-		ActiveRuns: daemon.activeRunIDs(),
+		ActiveRuns:   daemon.activeRunIDs(),
+		Capabilities: probeCapabilities(),
 	}
 	if err := daemon.client.Heartbeat(ctx, request); err != nil {
 		return daemon.handleRequestError(err)
@@ -489,11 +491,11 @@ func (daemon *daemon) clearAuthenticationPause() error {
 	return err
 }
 
-func (daemon *daemon) replaceRealtime(config *pusher.Config) {
+func (daemon *daemon) replaceRealtime(config *pusher.Config, protocolRevision string) {
 	var next *pusher.Client
 	if config != nil {
 		copied := *config
-		next = pusher.NewClient(&copied, "backupchief/"+daemon.client.Version, daemon.bootstrap.Credential, ProtocolRevision, daemon.client.HTTP, false)
+		next = pusher.NewClient(&copied, "backupchief/"+daemon.client.Version, daemon.bootstrap.Credential, protocolRevision, daemon.client.HTTP, false)
 		next.OnEvent("config.updated", func(pusher.Message) {
 			notifyLoop(daemon.configWake)
 		})

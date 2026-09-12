@@ -87,6 +87,45 @@ func TestMeasureRepositoryBytesUsesRawDataStats(t *testing.T) {
 	}
 }
 
+func TestExecuteMySQLBackupStreamsOneDatabaseIntoRestic(t *testing.T) {
+	snapshotID := strings.Repeat("d", 64)
+	executor := &recordingExecutor{result: restic.Result{ExitCode: 0, Outcome: "complete", Output: `{"message_type":"summary","total_files_processed":1,"total_bytes_processed":2048,"data_added_packed":512,"snapshot_id":"` + snapshotID + `"}`}}
+	command := &JournalCommand{RunID: "01k4p4f7m1r9d3t6v8w2x5y7zc"}
+	job := executionJob(t.TempDir())
+	job.Type = JobTypeMySQL
+	job.Source = JobSource{MySQL: &MySQLSource{Host: "mysql.example.test", Port: 3306, Username: "synthetic_reader", Password: "synthetic-secret", SelectionMode: "selected", Databases: []string{"synthetic_app"}, CustomFlags: []string{"--hex-blob"}}}
+	now := func() time.Time { return time.Date(2026, 9, 13, 8, 30, 0, 0, time.UTC) }
+
+	result, _, _, _ := executeBackup(context.Background(), executor, "01k4p4f7m1r9d3t6v8w2x5y7ze", 1, command, job, now)
+
+	if result.Status != "complete" || result.ResultCode != "success" || len(result.Artifacts) != 1 || result.Artifacts[0].Database != "synthetic_app" || result.Artifacts[0].Filename != "synthetic_app.sql" || result.Artifacts[0].SnapshotID != snapshotID {
+		t.Fatalf("result: %+v", result)
+	}
+	if len(executor.requests) != 1 {
+		t.Fatalf("requests: %d", len(executor.requests))
+	}
+	request := executor.requests[0]
+	if request.Operation != "backup_stdin" || request.StdinFilename != "synthetic_app.sql" || !strings.Contains(request.CommandConfig, `password="synthetic-secret"`) {
+		t.Fatalf("stream request: %+v", request)
+	}
+	if !contains(request.Tags, "backupchief-run-anchor") || !contains(request.Tags, "backupchief-database:73796e7468657469635f617070") {
+		t.Fatalf("tags: %v", request.Tags)
+	}
+	for _, argument := range request.StdinCommand {
+		if strings.Contains(argument, "synthetic-secret") {
+			t.Fatalf("password leaked into argv: %v", request.StdinCommand)
+		}
+	}
+}
+
+func TestMySQLDumpFilenameFallsBackForNonPortableNames(t *testing.T) {
+	filename := mysqlDumpFilename("synthetic schema")
+
+	if !strings.HasPrefix(filename, "~") || !strings.HasSuffix(filename, ".sql") || len(filename) != 69 {
+		t.Fatalf("filename: %q", filename)
+	}
+}
+
 func TestExecuteBackupClassifiesEmptyPartialAndInvalidRoots(t *testing.T) {
 	root := t.TempDir()
 	snapshotID := strings.Repeat("b", 64)

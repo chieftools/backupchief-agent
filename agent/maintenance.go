@@ -22,7 +22,8 @@ type MaintenancePlan struct {
 }
 
 type repositorySnapshot struct {
-	ID string `json:"id"`
+	ID   string   `json:"id"`
+	Tags []string `json:"tags"`
 }
 
 type forgetGroup struct {
@@ -182,13 +183,18 @@ func executeForget(
 			Weekly: job.Retention.Weekly, Monthly: job.Retention.Monthly, Yearly: job.Retention.Yearly,
 		}
 		if retentionPolicyEmpty(policy) {
-			for snapshotID := range inventory {
-				candidateIDs = append(candidateIDs, snapshotID)
+			for _, snapshot := range snapshotRecords(inventoryResult) {
+				if job.Type != JobTypeMySQL || contains(snapshot.Tags, "backupchief-run-anchor") {
+					candidateIDs = append(candidateIDs, snapshot.ID)
+				}
 			}
 			sort.Strings(candidateIDs)
 		} else {
 			request.Operation = "forget_plan"
 			request.Retention = &policy
+			if job.Type == JobTypeMySQL {
+				request.Tags = []string{"backupchief-run-anchor"}
+			}
 			planResult := run(request)
 			var parsed bool
 			candidateIDs, parsed = parseForgetCandidates(planResult)
@@ -196,6 +202,9 @@ func executeForget(
 				result = maintenanceResult(result, planResult, ctx, "Retention plan completed.")
 				return finish(result)
 			}
+		}
+		if job.Type == JobTypeMySQL {
+			candidateIDs = expandMySQLRunCandidates(snapshotRecords(inventoryResult), candidateIDs)
 		}
 		candidateIDs = withoutProtected(candidateIDs, protected)
 		plan = MaintenancePlan{
@@ -276,6 +285,40 @@ func executeForget(
 	result.ResultCode = "execution_failed"
 	result.Summary = "Retention did not remove its selected snapshots."
 	return finish(result)
+}
+
+func snapshotRecords(result restic.Result) []repositorySnapshot {
+	var snapshots []repositorySnapshot
+	if result.ExitCode != 0 || json.Unmarshal([]byte(result.Output), &snapshots) != nil {
+		return nil
+	}
+	return snapshots
+}
+
+func expandMySQLRunCandidates(snapshots []repositorySnapshot, anchors []string) []string {
+	anchorSet := stringSet(anchors)
+	runTags := map[string]bool{}
+	for _, snapshot := range snapshots {
+		if !anchorSet[snapshot.ID] {
+			continue
+		}
+		for _, tag := range snapshot.Tags {
+			if strings.HasPrefix(tag, "backupchief-run:") {
+				runTags[tag] = true
+			}
+		}
+	}
+	result := []string{}
+	for _, snapshot := range snapshots {
+		for _, tag := range snapshot.Tags {
+			if runTags[tag] {
+				result = append(result, snapshot.ID)
+				break
+			}
+		}
+	}
+	sort.Strings(result)
+	return result
 }
 func maintenanceRequest(job Job) restic.Request {
 	return restic.Request{

@@ -66,7 +66,7 @@ func (controlPlane *developmentControlPlane) enroll(response http.ResponseWriter
 	controlPlane.credential = enrollment.Credential
 	controlPlane.mu.Unlock()
 	response.WriteHeader(http.StatusCreated)
-	_, _ = fmt.Fprint(response, `{"protocol_revision":"1.0.0","server_id":"`+developmentTestServerID+`","generation":1,"enrolled_at":"2026-09-09T08:15:00.000000Z","config_revision":1}`)
+	_, _ = fmt.Fprint(response, `{"protocol_revision":"1.1.0","server_id":"`+developmentTestServerID+`","generation":1,"enrolled_at":"2026-09-09T08:15:00.000000Z","config_revision":1}`)
 }
 
 func (controlPlane *developmentControlPlane) config(response http.ResponseWriter, request *http.Request) {
@@ -345,7 +345,7 @@ func executeDevelopmentCommand(ctx context.Context, arguments ...string) (string
 
 func developmentConfig(revision uint64) []byte {
 	return []byte(fmt.Sprintf(
-		`{"metadata":{"protocol_revision":"1.0.0","generation":1,"revision":%d,"schema_version":1,"issued_at":"2026-09-09T08:15:00.000000Z"},"host":{"id":"server_01k4p4f7m1r9d3t6v8w2x5y7za"},"destinations":{},"jobs":{}}`,
+		`{"metadata":{"protocol_revision":"1.1.0","generation":1,"revision":%d,"schema_version":1,"issued_at":"2026-09-09T08:15:00.000000Z"},"host":{"id":"server_01k4p4f7m1r9d3t6v8w2x5y7za"},"destinations":{},"jobs":{}}`,
 		revision,
 	))
 }

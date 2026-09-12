@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -21,6 +22,25 @@ func testRunner(t *testing.T) Runner {
 	return Runner{
 		State:      filepath.Join(t.TempDir(), "state"),
 		AllowLocal: true,
+	}
+}
+
+func TestStdinBackupBuildsACommandWithoutShellInterpolation(t *testing.T) {
+	request := testRequest(t)
+	request.Operation = "backup_stdin"
+	request.Root = ""
+	request.StdinFilename = "73796e746865746963.sql"
+	request.StdinCommand = []string{"/usr/bin/mysqldump", "--defaults-extra-file={backupchief-command-config}", "--databases", "synthetic;literal"}
+	request.CommandConfig = "[client]\npassword=synthetic-secret\n"
+	request.Tags = []string{"backupchief-type:mysql"}
+
+	arguments, _, err := request.arguments("password", "", "cache", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTail := []string{"--", "/usr/bin/mysqldump", "--defaults-extra-file={backupchief-command-config}", "--databases", "synthetic;literal"}
+	if len(arguments) < len(wantTail) || !reflect.DeepEqual(arguments[len(arguments)-len(wantTail):], wantTail) {
+		t.Fatalf("arguments: %v", arguments)
 	}
 }
 

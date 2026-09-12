@@ -26,7 +26,7 @@ func TestConfigValidateUsesDownloadedConfigWhenManagedIdentityExists(t *testing.
 		t.Fatal(err)
 	}
 	managedConfig := []byte(`{
-  "metadata":{"protocol_revision":"1.0.0","generation":1,"revision":1,"schema_version":1,"issued_at":"2026-09-12T12:00:00.000000Z"},
+  "metadata":{"protocol_revision":"1.1.0","generation":1,"revision":1,"schema_version":1,"issued_at":"2026-09-12T12:00:00.000000Z"},
   "host":{"id":"server_01k4p4f7m1r9d3t6v8w2x5y7za","name":"managed-host.example.test"},
   "destinations":{"storage_01k4p4f7m1r9d3t6v8w2x5y7zc":{"driver":"local","path":"/srv/synthetic-repositories"}},
   "jobs":{"job_01k4p4f7m1r9d3t6v8w2x5y7zb":{"type":"file","source":{"root":"/srv/synthetic-records"},"repository":{"destination":"storage_01k4p4f7m1r9d3t6v8w2x5y7zc","path":"records/repository","password":"synthetic-repository-password"},"schedule":"30 4 * * *"}}

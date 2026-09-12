@@ -26,7 +26,7 @@ func TestDaemonPersistsRevocationAndRefusesRestart(t *testing.T) {
 	prepareDaemonStore(t, store, server.URL+"/agent/v1")
 
 	err := Run(context.Background(), RunOptions{
-		Store: store, HTTPClient: server.Client(), Version: "1.0.0",
+		Store: store, HTTPClient: server.Client(), Version: "1.1.0",
 		HeartbeatEvery: time.Millisecond, ConfigEvery: time.Millisecond,
 		Jitter: func(time.Duration) time.Duration { return time.Millisecond },
 	})
@@ -60,7 +60,7 @@ func TestDaemonPreservesCacheAndPausesAfter401(t *testing.T) {
 	defer cancel()
 
 	err := Run(ctx, RunOptions{
-		Store: store, HTTPClient: server.Client(), Version: "1.0.0",
+		Store: store, HTTPClient: server.Client(), Version: "1.1.0",
 		HeartbeatEvery: time.Millisecond, ConfigEvery: time.Millisecond,
 		Jitter: func(time.Duration) time.Duration { return time.Millisecond },
 	})
@@ -111,7 +111,7 @@ func TestDaemonReportsRejectedConfigWithoutReplacingAcceptedCache(t *testing.T) 
 	defer cancel()
 
 	err := Run(ctx, RunOptions{
-		Store: store, HTTPClient: server.Client(), Version: "1.0.0",
+		Store: store, HTTPClient: server.Client(), Version: "1.1.0",
 		HeartbeatEvery: time.Millisecond, ConfigEvery: time.Millisecond,
 		Jitter: func(time.Duration) time.Duration { return time.Millisecond },
 	})
@@ -142,7 +142,7 @@ func TestHeartbeatReportsAcceptedConfigurationWarnings(t *testing.T) {
 	bootstrap := testBootstrap()
 	warning := `job "job_01k4p4f7m1r9d3t6v8w2x5y7zb" uses unsupported type "database-export"; skipped`
 	var heartbeat HeartbeatRequest
-	client := NewClient(bootstrap.Endpoint, bootstrap.Credential, "1.0.0", &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+	client := NewClient(bootstrap.Endpoint, bootstrap.Credential, "1.1.0", &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.URL.Path != "/agent/v1/heartbeat" {
 			t.Fatalf("unexpected request path: %s", request.URL.Path)
 		}
@@ -185,7 +185,7 @@ func TestDaemonRetainsAcceptedConfigWhileControlPlaneIsUnreachable(t *testing.T)
 	defer cancel()
 
 	err := Run(ctx, RunOptions{
-		Store: store, HTTPClient: &http.Client{Timeout: 5 * time.Millisecond}, Version: "1.0.0",
+		Store: store, HTTPClient: &http.Client{Timeout: 5 * time.Millisecond}, Version: "1.1.0",
 		HeartbeatEvery: time.Millisecond, ConfigEvery: time.Millisecond,
 		Jitter: func(time.Duration) time.Duration { return time.Millisecond },
 	})
@@ -239,7 +239,7 @@ func TestDaemonRefreshesAnIncompatibleConfigBeforeStarting(t *testing.T) {
 	}
 	writeLegacyConfigCache(t, store, bootstrap, legacy)
 
-	if err := Run(ctx, RunOptions{Store: store, HTTPClient: server.Client(), Version: "1.0.0-test"}); err != nil {
+	if err := Run(ctx, RunOptions{Store: store, HTTPClient: server.Client(), Version: "1.1.0-test"}); err != nil {
 		t.Fatal(err)
 	}
 	plaintext, metadata, err := store.LoadConfig(bootstrap)

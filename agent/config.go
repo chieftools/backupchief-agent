@@ -24,7 +24,10 @@ const (
 
 type JobType string
 
-const JobTypeFile JobType = "file"
+const (
+	JobTypeFile  JobType = "file"
+	JobTypeMySQL JobType = "mysql"
+)
 
 var (
 	ErrConfigUnchanged           = errors.New("configuration is unchanged")
@@ -88,6 +91,19 @@ type JobSource struct {
 	Root          string
 	OneFileSystem bool
 	Excludes      []string
+	MySQL         *MySQLSource
+}
+
+type MySQLSource struct {
+	Host            string
+	Port            uint16
+	Username        string
+	Password        string
+	SelectionMode   string
+	Databases       []string
+	IncludeRoutines bool
+	IncludeEvents   bool
+	CustomFlags     []string
 }
 
 type JobRepository struct {
@@ -186,9 +202,26 @@ type jobDocument struct {
 }
 
 type sourceDocument struct {
-	Root          string   `json:"root"`
-	OneFileSystem *bool    `json:"one_file_system,omitempty"`
-	Excludes      []string `json:"excludes,omitempty"`
+	Root          string                  `json:"root,omitempty"`
+	OneFileSystem *bool                   `json:"one_file_system,omitempty"`
+	Excludes      []string                `json:"excludes,omitempty"`
+	Host          string                  `json:"host,omitempty"`
+	Port          uint16                  `json:"port,omitempty"`
+	Username      string                  `json:"username,omitempty"`
+	Password      string                  `json:"password,omitempty"`
+	Selection     *mysqlSelectionDocument `json:"selection,omitempty"`
+	Dump          *mysqlDumpDocument      `json:"dump,omitempty"`
+}
+
+type mysqlSelectionDocument struct {
+	Mode      string   `json:"mode"`
+	Databases []string `json:"databases,omitempty"`
+}
+
+type mysqlDumpDocument struct {
+	IncludeRoutines bool     `json:"include_routines,omitempty"`
+	IncludeEvents   bool     `json:"include_events,omitempty"`
+	CustomFlags     []string `json:"custom_flags,omitempty"`
 }
 
 type repositoryDocument struct {
@@ -264,7 +297,7 @@ func DecodeConfig(data []byte, expectedGeneration uint64) (Config, ConfigMetadat
 func normalizeConfig(document configDocument, expectedGeneration uint64) (Config, error) {
 	managed := document.Metadata.Generation != 0 || expectedGeneration != 0
 	if managed {
-		if document.Metadata.ProtocolRevision != ProtocolRevision || document.Metadata.SchemaVersion != ConfigSchemaVersion ||
+		if !compatibleProtocolRevision(document.Metadata.ProtocolRevision) || document.Metadata.SchemaVersion != ConfigSchemaVersion ||
 			document.Metadata.Generation == 0 || document.Metadata.Revision == 0 || !validateTimestamp(document.Metadata.IssuedAt) {
 			return Config{}, fmt.Errorf("managed configuration envelope is invalid")
 		}
@@ -355,7 +388,7 @@ func normalizeConfig(document configDocument, expectedGeneration uint64) (Config
 		if err != nil {
 			return Config{}, fmt.Errorf("job %q: %w", key, err)
 		}
-		if JobType(jobType) != JobTypeFile {
+		if !slices.Contains([]JobType{JobTypeFile, JobTypeMySQL}, JobType(jobType)) {
 			config.unsupportedJobs[key] = cloneRawMessage(raw)
 			config.addWarning(fmt.Sprintf("job %q uses unsupported type %q; skipped", key, jobType))
 			continue
@@ -450,7 +483,7 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 	if managed && !ulidPattern.MatchString(keyID) {
 		return Job{}, fmt.Errorf("key is invalid")
 	}
-	if raw.Type != JobTypeFile {
+	if !slices.Contains([]JobType{JobTypeFile, JobTypeMySQL}, raw.Type) {
 		return Job{}, fmt.Errorf("type %q is unsupported", raw.Type)
 	}
 	if raw.Name != "" && (runeLength(raw.Name) > 255 || strings.ContainsRune(raw.Name, 0)) {
@@ -511,17 +544,34 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 		}
 		retention.HasUnresolvedRuns = raw.Safety.HasUnresolvedRuns
 	}
+	jobSource := JobSource{
+		Root:          raw.Source.Root,
+		OneFileSystem: oneFileSystem,
+		Excludes:      append([]string{}, raw.Source.Excludes...),
+	}
+	if raw.Type == JobTypeMySQL {
+		if raw.Source.Selection == nil || raw.Source.Dump == nil {
+			return Job{}, fmt.Errorf("MySQL source is incomplete")
+		}
+		jobSource = JobSource{MySQL: &MySQLSource{
+			Host:            raw.Source.Host,
+			Port:            raw.Source.Port,
+			Username:        raw.Source.Username,
+			Password:        raw.Source.Password,
+			SelectionMode:   raw.Source.Selection.Mode,
+			Databases:       append([]string{}, raw.Source.Selection.Databases...),
+			IncludeRoutines: raw.Source.Dump.IncludeRoutines,
+			IncludeEvents:   raw.Source.Dump.IncludeEvents,
+			CustomFlags:     append([]string{}, raw.Source.Dump.CustomFlags...),
+		}}
+	}
 	job := Job{
 		Key:     key,
 		ID:      jobID,
 		Name:    raw.Name,
 		Type:    raw.Type,
 		Enabled: enabled,
-		Source: JobSource{
-			Root:          raw.Source.Root,
-			OneFileSystem: oneFileSystem,
-			Excludes:      append([]string{}, raw.Source.Excludes...),
-		},
+		Source:  jobSource,
 		Repository: JobRepository{
 			ID:              repositoryID,
 			Destination:     raw.Repository.Destination,
@@ -659,18 +709,20 @@ func (store *FileStore) SaveConfig(bootstrap Bootstrap, data []byte, previous *C
 	if err != nil {
 		return metadata, err
 	}
+	config.Host = HostConfig{Name: bootstrap.Hostname, ID: bootstrap.ServerID}
 	if previous != nil {
 		if metadata.Generation < previous.Generation || metadata.Generation == previous.Generation && metadata.Revision < previous.Revision {
 			return metadata, ErrConfigRollback
 		}
 		if metadata.Generation == previous.Generation && metadata.Revision == previous.Revision {
-			if metadata.Digest != previous.Digest {
+			if metadata.Digest != previous.Digest && !store.configDiffersOnlyByProtocol(bootstrap, config) {
 				return metadata, ErrConfigConflict
 			}
-			return metadata, ErrConfigUnchanged
+			if metadata.Digest == previous.Digest {
+				return metadata, ErrConfigUnchanged
+			}
 		}
 	}
-	config.Host = HostConfig{Name: bootstrap.Hostname, ID: bootstrap.ServerID}
 	encoded, err := encodeConfig(config, metadata.Digest)
 	if err != nil {
 		return metadata, err
@@ -681,6 +733,31 @@ func (store *FileStore) SaveConfig(bootstrap Bootstrap, data []byte, previous *C
 	}
 	metadata.FileDigest = fmt.Sprintf("%x", sha256.Sum256(encoded))
 	return metadata, nil
+}
+
+func (store *FileStore) configDiffersOnlyByProtocol(bootstrap Bootstrap, incoming Config) bool {
+	data, err := os.ReadFile(store.Paths.ManagedConfig)
+	if err != nil {
+		return false
+	}
+	installed, _, err := DecodeConfig(data, bootstrap.Generation)
+	if err != nil {
+		return false
+	}
+
+	installed.Host = HostConfig{Name: bootstrap.Hostname, ID: bootstrap.ServerID}
+	installed.ProtocolRevision = ProtocolRevision
+	incoming.ProtocolRevision = ProtocolRevision
+	installedBody, err := encodeConfig(installed, "")
+	if err != nil {
+		return false
+	}
+	incomingBody, err := encodeConfig(incoming, "")
+	if err != nil {
+		return false
+	}
+
+	return bytes.Equal(installedBody, incomingBody)
 }
 
 func (store *FileStore) LoadConfig(bootstrap Bootstrap) ([]byte, ConfigMetadata, error) {
@@ -750,15 +827,22 @@ func encodeConfig(config Config, managedDigest string) ([]byte, error) {
 			}
 		}
 		jobKey := prefixConfigKey(job.Key, "job_")
+		source := sourceDocument{
+			Root: job.Source.Root, OneFileSystem: &oneFileSystem, Excludes: job.Source.Excludes,
+		}
+		if job.Type == JobTypeMySQL && job.Source.MySQL != nil {
+			mysql := job.Source.MySQL
+			source = sourceDocument{
+				Host: mysql.Host, Port: mysql.Port, Username: mysql.Username, Password: mysql.Password,
+				Selection: &mysqlSelectionDocument{Mode: mysql.SelectionMode, Databases: mysql.Databases},
+				Dump:      &mysqlDumpDocument{IncludeRoutines: mysql.IncludeRoutines, IncludeEvents: mysql.IncludeEvents, CustomFlags: mysql.CustomFlags},
+			}
+		}
 		documentJob := jobDocument{
 			Name:    job.Name,
 			Type:    job.Type,
 			Enabled: &enabled,
-			Source: sourceDocument{
-				Root:          job.Source.Root,
-				OneFileSystem: &oneFileSystem,
-				Excludes:      job.Source.Excludes,
-			},
+			Source:  source,
 			Repository: repositoryDocument{
 				ID:          job.Repository.ID,
 				Destination: destinationKey,
@@ -841,20 +925,26 @@ func uint64Pointer(value uint64) *uint64 {
 	return &value
 }
 
+const maximumMySQLDatabases = 1000
+
 func validateJob(job Job) error {
-	if job.Type != JobTypeFile {
+	if !slices.Contains([]JobType{JobTypeFile, JobTypeMySQL}, job.Type) {
 		return fmt.Errorf("type %q is unsupported", job.Type)
 	}
 	if job.ID == "" || !digestPattern.MatchString(job.ID) && !ulidPattern.MatchString(job.ID) {
 		return fmt.Errorf("id is invalid")
 	}
-	if !filepath.IsAbs(job.Source.Root) || runeLength(job.Source.Root) > 4096 || !job.Source.OneFileSystem || len(job.Source.Excludes) > 100 {
-		return fmt.Errorf("source is invalid")
-	}
-	for _, exclude := range job.Source.Excludes {
-		if exclude == "" || runeLength(exclude) > 4096 || strings.ContainsRune(exclude, 0) {
-			return fmt.Errorf("exclude is invalid")
+	if job.Type == JobTypeFile {
+		if !filepath.IsAbs(job.Source.Root) || runeLength(job.Source.Root) > 4096 || !job.Source.OneFileSystem || len(job.Source.Excludes) > 100 || job.Source.MySQL != nil {
+			return fmt.Errorf("source is invalid")
 		}
+		for _, exclude := range job.Source.Excludes {
+			if exclude == "" || runeLength(exclude) > 4096 || strings.ContainsRune(exclude, 0) {
+				return fmt.Errorf("exclude is invalid")
+			}
+		}
+	} else if err := validateMySQLSource(job.Source); err != nil {
+		return err
 	}
 	if job.Repository.Location == "" || runeLength(job.Repository.Location) > 2048 || !digestPattern.MatchString(job.Repository.ID) {
 		return fmt.Errorf("repository identity is invalid")
@@ -876,7 +966,7 @@ func validateJob(job Job) error {
 		return fmt.Errorf("prune schedule is invalid: %w", err)
 	}
 	if proof := retention.LatestComplete; proof != nil {
-		if !ulidPattern.MatchString(proof.RunID) || !validateTimestamp(proof.FinishedAt) || len(proof.SnapshotIDs) == 0 || len(proof.SnapshotIDs) > 100 {
+		if !ulidPattern.MatchString(proof.RunID) || !validateTimestamp(proof.FinishedAt) || len(proof.SnapshotIDs) == 0 || len(proof.SnapshotIDs) > maximumMySQLDatabases {
 			return fmt.Errorf("latest complete snapshot proof is invalid")
 		}
 		seen := map[string]bool{}
@@ -898,6 +988,57 @@ func validateJob(job Job) error {
 		return fmt.Errorf("data check schedule is invalid: %w", err)
 	}
 	return nil
+}
+
+func validateMySQLSource(source JobSource) error {
+	mysql := source.MySQL
+	if mysql == nil || source.Root != "" || len(source.Excludes) != 0 || mysql.Host == "" || runeLength(mysql.Host) > 255 || strings.ContainsAny(mysql.Host, "\r\n\x00") || mysql.Port == 0 || mysql.Username == "" || runeLength(mysql.Username) > 255 || strings.ContainsAny(mysql.Username, "\r\n\x00") || runeLength(mysql.Password) > 4096 || strings.ContainsRune(mysql.Password, 0) {
+		return fmt.Errorf("MySQL source is invalid")
+	}
+	if !slices.Contains([]string{"selected", "all_accessible"}, mysql.SelectionMode) || len(mysql.Databases) > maximumMySQLDatabases || mysql.SelectionMode == "selected" && len(mysql.Databases) == 0 || mysql.SelectionMode == "all_accessible" && len(mysql.Databases) != 0 {
+		return fmt.Errorf("MySQL database selection is invalid")
+	}
+	seen := map[string]bool{}
+	for _, database := range mysql.Databases {
+		if database == "" || runeLength(database) > 64 || strings.ContainsAny(database, "\r\n\x00") || seen[database] {
+			return fmt.Errorf("MySQL database selection is invalid")
+		}
+		seen[database] = true
+	}
+	if len(mysql.CustomFlags) > 50 {
+		return fmt.Errorf("MySQL dump options are invalid")
+	}
+	for _, flag := range mysql.CustomFlags {
+		if !validMySQLFlag(flag) {
+			return fmt.Errorf("MySQL dump options are invalid")
+		}
+	}
+	return nil
+}
+
+var mysqlFlagPattern = regexp.MustCompile(`^--[a-z0-9][a-z0-9-]*(?:=[^\x00\r\n]{0,480})?$`)
+
+func validMySQLFlag(flag string) bool {
+	if len(flag) > 512 || !mysqlFlagPattern.MatchString(flag) {
+		return false
+	}
+	name := strings.TrimPrefix(strings.SplitN(flag, "=", 2)[0], "--")
+	forbidden := map[string]bool{
+		"all-databases": true, "all-tablespaces": true, "column-statistics": true, "databases": true,
+		"debug": true, "debug-info": true, "defaults-extra-file": true, "defaults-file": true,
+		"delete-master-logs": true, "delete-source-logs": true, "events": true, "flush-logs": true,
+		"force": true, "help": true, "host": true, "ignore-database": true, "ignore-error": true,
+		"ignore-table": true, "init-command": true, "init-command-add": true, "lock-all-tables": true,
+		"lock-tables": true, "log-error": true, "login-path": true, "master-data": true,
+		"no-create-info": true, "no-data": true, "no-tablespaces": true, "password": true,
+		"password1": true, "password2": true, "password3": true, "pipe": true, "port": true,
+		"print-defaults": true, "protocol": true, "quick": true, "result-file": true, "routines": true,
+		"single-transaction": true, "skip-events": true, "skip-lock-tables": true, "skip-quick": true,
+		"skip-routines": true, "skip-single-transaction": true, "skip-triggers": true, "socket": true,
+		"source-data": true, "tab": true, "tables": true, "user": true, "version": true,
+		"where": true, "xml": true,
+	}
+	return !forbidden[name] && !strings.HasPrefix(name, "fields-") && !strings.HasPrefix(name, "lines-")
 }
 
 func derivedID(value string) string {

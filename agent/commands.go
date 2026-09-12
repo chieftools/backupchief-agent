@@ -65,7 +65,7 @@ func (daemon *daemon) receiveCommand(command AgentCommand) error {
 	}
 
 	runID := command.Payload.RunID
-	if command.Kind == "run_backup" || command.Kind == "run_maintenance" {
+	if command.Kind == "run_backup" || command.Kind == "run_maintenance" || command.Kind == "inspect_source" {
 		var err error
 		runID, err = newULID(daemon.now())
 		if err != nil {
@@ -75,6 +75,8 @@ func (daemon *daemon) receiveCommand(command AgentCommand) error {
 	runKind := command.Payload.Maintenance
 	if command.Kind == "run_backup" {
 		runKind = "backup"
+	} else if command.Kind == "inspect_source" {
+		runKind = "inspection"
 	}
 	daemon.journal.Commands[command.ID] = &JournalCommand{
 		Command:        command,
@@ -147,6 +149,20 @@ func (daemon *daemon) advanceCommands(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
+			continue
+		}
+		if command.Kind == "inspect_source" && state == "received" {
+			result := inspectSource(ctx, daemon.bootstrap.Generation, runID, command.Payload)
+			daemon.mu.Lock()
+			if current := daemon.journal.Commands[id]; current != nil {
+				current.State = "finished"
+				current.Result = &result
+				if err := daemon.store.SaveCommandJournal(daemon.journal); err != nil {
+					daemon.mu.Unlock()
+					return err
+				}
+			}
+			daemon.mu.Unlock()
 			continue
 		}
 		if (!contains([]string{"run_backup", "run_maintenance"}, command.Kind) && !strings.HasPrefix(command.Kind, "scheduled_")) || state != "received" {
@@ -606,7 +622,13 @@ func (daemon *daemon) flushCommand(ctx context.Context, commandID string) error 
 	}
 
 	if result != nil && !resultReported {
-		if err := daemon.client.SubmitResult(ctx, command.ID, *result); err != nil {
+		var err error
+		if command.Kind == "inspect_source" {
+			err = daemon.client.SubmitInspectionResult(ctx, command.ID, *result)
+		} else {
+			err = daemon.client.SubmitResult(ctx, command.ID, *result)
+		}
+		if err != nil {
 			return err
 		}
 		daemon.mu.Lock()

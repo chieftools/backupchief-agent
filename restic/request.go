@@ -45,6 +45,9 @@ type Request struct {
 	DataSubsetPart  int        `json:"data_subset_part,omitempty"`
 	DataSubsetTotal int        `json:"data_subset_total,omitempty"`
 	Target          string     `json:"target,omitempty"`
+	StdinFilename   string     `json:"stdin_filename,omitempty"`
+	StdinCommand    []string   `json:"stdin_command,omitempty"`
+	CommandConfig   string     `json:"command_config,omitempty"`
 	TimeoutSeconds  int        `json:"timeout_seconds"`
 	LockWaitSeconds int        `json:"lock_wait_seconds"`
 }
@@ -197,6 +200,30 @@ func (r Request) arguments(passwordFile, newPasswordFile, cache string, local bo
 		}
 
 		arguments = append(arguments, "--", r.Root)
+	case "backup_stdin":
+		if !safeStdinFilename(r.StdinFilename) || len(r.StdinCommand) < 1 || len(r.StdinCommand) > 100 || !filepath.IsAbs(r.StdinCommand[0]) || r.CommandConfig == "" || len(r.CommandConfig) > 1<<20 || strings.ContainsRune(r.CommandConfig, 0) {
+			return nil, nil, errors.New("stdin backup command is invalid")
+		}
+		for _, argument := range r.StdinCommand {
+			if argument == "" || strings.ContainsRune(argument, 0) || len(argument) > 4096 {
+				return nil, nil, errors.New("stdin backup command is invalid")
+			}
+		}
+		if strings.ContainsRune(r.Host, 0) || len(r.Host) > 255 {
+			return nil, nil, errors.New("invalid backup host")
+		}
+		arguments = append(arguments, "backup", "--json", "--stdin-from-command", "--stdin-filename", r.StdinFilename)
+		if r.Host != "" {
+			arguments = append(arguments, "--host", r.Host)
+		}
+		for _, tag := range r.Tags {
+			if tag == "" || strings.ContainsRune(tag, 0) || len(tag) > 255 {
+				return nil, nil, errors.New("invalid backup tag")
+			}
+			arguments = append(arguments, "--tag", tag)
+		}
+		arguments = append(arguments, "--", r.StdinCommand[0])
+		arguments = append(arguments, r.StdinCommand[1:]...)
 	case "snapshots":
 		arguments = append(arguments, "snapshots", "--json")
 		if r.Host != "" {
@@ -232,6 +259,12 @@ func (r Request) arguments(passwordFile, newPasswordFile, cache string, local bo
 			"--keep-monthly", strconv.FormatUint(r.Retention.Monthly, 10),
 			"--keep-yearly", strconv.FormatUint(r.Retention.Yearly, 10),
 		)
+		for _, tag := range r.Tags {
+			if tag == "" || strings.ContainsRune(tag, 0) || len(tag) > 255 {
+				return nil, nil, errors.New("invalid snapshot tag")
+			}
+			arguments = append(arguments, "--tag", tag)
+		}
 	case "forget":
 		if len(r.SnapshotIDs) == 0 || len(r.SnapshotIDs) > 100 {
 			return nil, nil, errors.New("forget requires one to 100 full snapshot IDs")
@@ -258,6 +291,10 @@ func (r Request) arguments(passwordFile, newPasswordFile, cache string, local bo
 	}
 
 	return arguments, environment, nil
+}
+
+func safeStdinFilename(value string) bool {
+	return value != "" && len(value) <= 255 && filepath.Base(value) == value && value != "." && value != ".." && !strings.ContainsAny(value, "/\\\x00\r\n")
 }
 
 func retentionEmpty(retention Retention) bool {
