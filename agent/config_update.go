@@ -48,7 +48,7 @@ func UpdateConfig(ctx context.Context, options ConfigUpdateOptions) (ConfigUpdat
 		etag = `"` + current.Digest + `"`
 	}
 
-	client := NewClient(bootstrap.Endpoint, bootstrap.Credential, options.Version, options.HTTPClient)
+	client := NewManagedClient(bootstrap.Endpoint, bootstrap.Credential, options.Version, bootstrap.ServerID, options.HTTPClient)
 	response, err := client.FetchConfig(ctx, etag, bootstrap.Generation)
 	if err != nil {
 		return ConfigUpdateResult{}, err

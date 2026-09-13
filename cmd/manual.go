@@ -11,7 +11,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newBackupCommand(configPath *string) *cobra.Command {
+func newBackupCommand(version string, configPath *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "backup <job>",
 		Short: "Run a configured backup and wait for it to finish",
@@ -26,7 +26,7 @@ func newBackupCommand(configPath *string) *cobra.Command {
 				return err
 			}
 			if config.Host.Key != "" {
-				return runManagedBackup(command, config, job)
+				return runManagedBackup(command, config, job, version)
 			}
 			request := agent.ResticRequest(job, "backup", config.Host.Name)
 			request.Tags = append(request.Tags, "backupchief-run:manual")
@@ -115,8 +115,8 @@ func loadCommandConfiguration(configPath string) (agent.Config, agent.ConfigMeta
 	return config, metadata, nil
 }
 
-func runManagedBackup(command *cobra.Command, config agent.Config, job agent.Job) error {
-	client := agent.NewClient(config.Host.Endpoint, config.Host.Key, "dev", nil)
+func runManagedBackup(command *cobra.Command, config agent.Config, job agent.Job, version string) error {
+	client := agent.NewManagedClient(config.Host.Endpoint, config.Host.Key, version, config.Host.ID, nil)
 	status, err := client.StartManagedBackup(command.Context(), job.ID)
 	if err != nil {
 		return operationError(1, "queue managed backup: %w", err)

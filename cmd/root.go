@@ -44,7 +44,7 @@ func NewRootCommand(version string) *cobra.Command {
 	root.AddCommand(newSetupCommand(version, &configPath))
 	root.AddCommand(newRunCommand(version, &configPath))
 	root.AddCommand(newConfigCommand(version, &configPath))
-	root.AddCommand(newBackupCommand(&configPath))
+	root.AddCommand(newBackupCommand(version, &configPath))
 	root.AddCommand(newRepositoryCommand(&configPath))
 	addDevelopmentCommands(root, version)
 

@@ -23,6 +23,7 @@ type realtimeTestServer struct {
 	sendEstablished bool
 	accepts         atomic.Int32
 	closeCodes      chan int
+	userAgents      chan string
 }
 
 type pusherRoundTripFunc func(*http.Request) (*http.Response, error)
@@ -37,10 +38,12 @@ func newRealtimeTestServer(t *testing.T, sendEstablished bool) *realtimeTestServ
 	rts := &realtimeTestServer{
 		sendEstablished: sendEstablished,
 		closeCodes:      make(chan int, 10),
+		userAgents:      make(chan string, 10),
 	}
 
 	upgrader := websocket.Upgrader{}
 	rts.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rts.userAgents <- r.Header.Get("User-Agent")
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			t.Errorf("failed to upgrade websocket: %v", err)
@@ -124,7 +127,7 @@ func TestGenerateChannelAuthReusesHTTPClient(t *testing.T) {
 			if got := req.Header.Get("BackupChief-Protocol-Revision"); got != "1.0.0" {
 				t.Fatalf("unexpected protocol header: %q", got)
 			}
-			if got := req.Header.Get("User-Agent"); got != "backupchief/1.2.3" {
+			if got := req.Header.Get("User-Agent"); got != "backupchief/1.2.3 server/01k4p4f7m1r9d3t6v8w2x5y7za" {
 				t.Fatalf("unexpected user agent: %q", got)
 			}
 			if err := req.ParseForm(); err != nil || req.Form.Get("socket_id") != "socket-42" || req.Form.Get("channel_name") != "private-agent.synthetic" {
@@ -137,10 +140,10 @@ func TestGenerateChannelAuthReusesHTTPClient(t *testing.T) {
 			}, nil
 		}),
 	}
-	client := NewClient(&Config{}, "backupchief/1.2.3", "synthetic-credential", "1.0.0", sharedClient, false)
+	client := NewClient(&Config{}, "backupchief/1.2.3 server/01k4p4f7m1r9d3t6v8w2x5y7za", "synthetic-credential", "1.0.0", sharedClient, false)
 
 	for range 2 {
-		auth, err := client.generateChannelAuth("socket-42", "private-agent.synthetic", "https://control.example.test/auth", "synthetic-credential", "backupchief/1.2.3", "1.0.0")
+		auth, err := client.generateChannelAuth("socket-42", "private-agent.synthetic", "https://control.example.test/auth", "synthetic-credential", "backupchief/1.2.3 server/01k4p4f7m1r9d3t6v8w2x5y7za", "1.0.0")
 		if err != nil {
 			t.Fatalf("generate channel auth: %v", err)
 		}
@@ -159,13 +162,21 @@ func TestGenerateChannelAuthReusesHTTPClient(t *testing.T) {
 
 func TestConnectDoesNotCreateSecondSocketBeforePusherEstablished(t *testing.T) {
 	server := newRealtimeTestServer(t, false)
-	client := NewClient(server.config(t, "public-synthetic"), "backupchief/test", "synthetic-credential", "1.0.0", server.server.Client(), false)
+	client := NewClient(server.config(t, "public-synthetic"), "backupchief/1.2.3 server/01k4p4f7m1r9d3t6v8w2x5y7za", "synthetic-credential", "1.0.0", server.server.Client(), false)
 	t.Cleanup(client.Disconnect)
 
 	if err := client.Connect(); err != nil {
 		t.Fatalf("connect failed: %v", err)
 	}
 	waitForAccepts(t, server, 1)
+	select {
+	case userAgent := <-server.userAgents:
+		if userAgent != "backupchief/1.2.3 server/01k4p4f7m1r9d3t6v8w2x5y7za" {
+			t.Fatalf("unexpected websocket user agent: %q", userAgent)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for websocket user agent")
+	}
 
 	if client.IsConnected() {
 		t.Fatalf("expected pusher connection to remain unestablished until server sends connection_established")

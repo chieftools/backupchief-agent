@@ -134,7 +134,7 @@ func Run(ctx context.Context, options RunOptions) error {
 	if executor == nil {
 		executor = restic.Runner{State: options.Store.stateDirectory(), AllowLocal: options.AllowLocal}
 	}
-	client := NewClient(bootstrap.Endpoint, bootstrap.Credential, options.Version, options.HTTPClient)
+	client := NewManagedClient(bootstrap.Endpoint, bootstrap.Credential, options.Version, bootstrap.ServerID, options.HTTPClient)
 	client.Now = options.Now
 	runtime := &daemon{
 		store:              options.Store,
@@ -495,7 +495,7 @@ func (daemon *daemon) replaceRealtime(config *pusher.Config, protocolRevision st
 	var next *pusher.Client
 	if config != nil {
 		copied := *config
-		next = pusher.NewClient(&copied, "backupchief/"+daemon.client.Version, daemon.bootstrap.Credential, protocolRevision, daemon.client.HTTP, false)
+		next = pusher.NewClient(&copied, daemon.client.userAgent(), daemon.bootstrap.Credential, protocolRevision, daemon.client.HTTP, false)
 		next.OnEvent("config.updated", func(pusher.Message) {
 			notifyLoop(daemon.configWake)
 		})

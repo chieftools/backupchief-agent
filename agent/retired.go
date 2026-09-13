@@ -200,7 +200,7 @@ func (daemon *daemon) reportRetiredJournal(ctx context.Context) error {
 }
 
 func (daemon *daemon) flushRetiredGeneration(ctx context.Context, retired retiredEnrollment) (bool, error) {
-	client := NewClient(retired.Endpoint, retired.Credential, daemon.client.Version, daemon.client.HTTP)
+	client := NewManagedClient(retired.Endpoint, retired.Credential, daemon.client.Version, retired.ServerID, daemon.client.HTTP)
 	client.Now = daemon.now
 
 	daemon.mu.Lock()

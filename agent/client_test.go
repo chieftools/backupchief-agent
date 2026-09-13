@@ -15,6 +15,9 @@ func TestClientNegotiatesDownAfterRollbackAndBackUpAfterUpgrade(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		attempt := requests.Add(1)
 		revision := request.Header.Get(ProtocolHeader)
+		if userAgent := request.Header.Get("User-Agent"); userAgent != "backupchief/1.2.3-test server/"+testBootstrap().ServerID {
+			t.Fatalf("managed user agent: %q", userAgent)
+		}
 		var payload map[string]any
 		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
 			t.Fatal(err)
@@ -60,7 +63,7 @@ func TestClientNegotiatesDownAfterRollbackAndBackUpAfterUpgrade(t *testing.T) {
 		response.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
-	client := NewClient(server.URL, testBootstrap().Credential, "1.2.3-test", server.Client())
+	client := NewManagedClient(server.URL, testBootstrap().Credential, "1.2.3-test", testBootstrap().ServerID, server.Client())
 	heartbeat := HeartbeatRequest{
 		Config:       HeartbeatConfig{ProtocolRevision: ProtocolRevision},
 		Capabilities: map[string]any{"backup_types": map[string]any{"file": map[string]any{"available": true}}},
@@ -114,6 +117,9 @@ func TestEnrollmentFallbackUsesTheServerRevisionInItsHeaderAndBody(t *testing.T)
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		attempt := requests.Add(1)
+		if userAgent := request.Header.Get("User-Agent"); userAgent != "backupchief/1.2.3-test" {
+			t.Fatalf("enrollment user agent: %q", userAgent)
+		}
 		var payload EnrollmentRequest
 		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
 			t.Fatal(err)

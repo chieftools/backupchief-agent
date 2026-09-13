@@ -76,6 +76,7 @@ type Client struct {
 
 	protocolMu       sync.RWMutex
 	protocolRevision string
+	serverID         string
 }
 
 func NewClient(endpoint, credential, version string, httpClient *http.Client) *Client {
@@ -97,6 +98,20 @@ func NewClient(endpoint, credential, version string, httpClient *http.Client) *C
 		Now:              time.Now,
 		protocolRevision: ProtocolRevision,
 	}
+}
+
+func NewManagedClient(endpoint, credential, version, serverID string, httpClient *http.Client) *Client {
+	client := NewClient(endpoint, credential, version, httpClient)
+	client.serverID = serverID
+	return client
+}
+
+func (client *Client) userAgent() string {
+	userAgent := "backupchief/" + client.Version
+	if client.serverID != "" {
+		userAgent += " server/" + client.serverID
+	}
+	return userAgent
 }
 
 func (client *Client) Enroll(ctx context.Context, token string, request EnrollmentRequest) (EnrollmentResponse, error) {
@@ -494,7 +509,7 @@ func (client *Client) requestContentAtRevision(ctx context.Context, method, path
 		return nil, fmt.Errorf("create control-plane request: %w", err)
 	}
 	request.Header.Set(ProtocolHeader, protocolRevision)
-	request.Header.Set("User-Agent", "backupchief/"+client.Version)
+	request.Header.Set("User-Agent", client.userAgent())
 	request.Header.Set("Accept", "application/json, application/problem+json")
 	request.Header.Set("Accept-Encoding", "identity")
 	for name, values := range headers {

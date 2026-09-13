@@ -148,6 +148,9 @@ func Enroll(ctx context.Context, token string, options EnrollOptions) (Bootstrap
 	}
 
 	client := NewClient(options.Endpoint, "", options.Version, options.HTTPClient)
+	if reenrolling {
+		client = NewManagedClient(options.Endpoint, "", options.Version, bootstrap.ServerID, options.HTTPClient)
+	}
 	response, err := client.Enroll(ctx, token, EnrollmentRequest{
 		ProtocolRevision: ProtocolRevision,
 		AttemptID:        pending.AttemptID,
@@ -198,7 +201,7 @@ func ensureUsableConfig(ctx context.Context, options EnrollOptions, bootstrap Bo
 	if _, _, err := options.Store.LoadConfig(bootstrap); err == nil {
 		return nil
 	}
-	client := NewClient(bootstrap.Endpoint, bootstrap.Credential, options.Version, options.HTTPClient)
+	client := NewManagedClient(bootstrap.Endpoint, bootstrap.Credential, options.Version, bootstrap.ServerID, options.HTTPClient)
 	response, err := client.FetchConfig(ctx, "", bootstrap.Generation)
 	if err != nil {
 		return err
