@@ -4,6 +4,12 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.4.2]
+
+### Added
+
+- Reported the processed and stored bytes of each database's own snapshot alongside its backup artifact, so per-database sizes no longer collapse into the run total. Sent only to control planes on protocol revision 1.3.0 or later.
+
 ## [0.4.1]
 
 ### Added
@@ -61,7 +67,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/chieftools/backupchief-agent/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/chieftools/backupchief-agent/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/chieftools/backupchief-agent/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/chieftools/backupchief-agent/compare/v0.2.0...v0.3.0
