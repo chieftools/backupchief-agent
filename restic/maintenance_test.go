@@ -52,4 +52,20 @@ func TestMaintenanceRequestsUseExplicitBoundedArguments(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(arguments[len(arguments)-2:], []string{"check", "--json"}) {
 		t.Fatalf("metadata check arguments: %v %v", arguments, err)
 	}
+
+	request.Operation = "prune"
+	request.RecoverStaleLocks = true
+	arguments, _, err = request.arguments("password", "new-password", "cache", true)
+	if err != nil || arguments[len(arguments)-1] != "prune" {
+		t.Fatalf("maintenance recovery arguments: %v %v", arguments, err)
+	}
+	unlockArguments, _, err := request.staleLockArguments("password", "cache", true)
+	if err != nil || unlockArguments[len(unlockArguments)-1] != "unlock" {
+		t.Fatalf("stale lock arguments: %v %v", unlockArguments, err)
+	}
+	for _, argument := range unlockArguments {
+		if argument == "--remove-all" {
+			t.Fatalf("unsafe unlock argument: %q", argument)
+		}
+	}
 }

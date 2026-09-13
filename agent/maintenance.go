@@ -79,11 +79,19 @@ func executeMaintenance(
 		result.Summary = "The persisted maintenance plan does not match this operation."
 		return finish(result)
 	}
+	maintenancePrepared := false
 	run := func(request restic.Request) restic.Result {
 		request.TimeoutSeconds = int(timeout / time.Second)
 		request.LockWaitSeconds = 5 * 60
+		request.RecoverStaleLocks = !maintenancePrepared
+		maintenancePrepared = true
 		response := executor.Run(runContext, request)
 		appendMaintenanceLog(&log, response)
+		if response.ExitCode == 11 && !request.RecoverStaleLocks {
+			request.RecoverStaleLocks = true
+			response = executor.Run(runContext, request)
+			appendMaintenanceLog(&log, response)
+		}
 		return response
 	}
 

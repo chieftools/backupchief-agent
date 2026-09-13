@@ -68,8 +68,7 @@ func (runner Runner) InspectExport(ctx context.Context, request ExportRequest) (
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			_ = command.Process.Kill()
-			_ = command.Wait()
+			stopExportCommand(command)
 			return ExportInspection{}, errors.New("invalid restic inspection output")
 		}
 
@@ -81,8 +80,7 @@ func (runner Runner) InspectExport(ctx context.Context, request ExportRequest) (
 		}
 		if node.Type == "file" {
 			if node.Size < 0 || total > math.MaxInt64-node.Size {
-				_ = command.Process.Kill()
-				_ = command.Wait()
+				stopExportCommand(command)
 				return ExportInspection{}, errors.New("snapshot selection size overflow")
 			}
 			total += node.Size
@@ -236,9 +234,42 @@ func (runner Runner) exportCommand(ctx context.Context, request ExportRequest, m
 	command.Env = env
 	command.Dir = work
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	command.Cancel = func() error {
+		if command.Process == nil {
+			return os.ErrProcessDone
+		}
+		if err := syscall.Kill(-command.Process.Pid, syscall.SIGTERM); err != nil {
+			if errors.Is(err, syscall.ESRCH) {
+				return os.ErrProcessDone
+			}
+			return err
+		}
+
+		return nil
+	}
 	command.WaitDelay = 10 * time.Second
 
 	return command, cleanup, nil
+}
+
+func stopExportCommand(command *exec.Cmd) {
+	if command.Process == nil {
+		return
+	}
+
+	_ = syscall.Kill(-command.Process.Pid, syscall.SIGTERM)
+	done := make(chan struct{})
+	go func() {
+		_ = command.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+		<-done
+	}
 }
 
 func validExportSelection(request ExportRequest) bool {

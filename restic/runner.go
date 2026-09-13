@@ -121,11 +121,47 @@ func (runner Runner) Run(ctx context.Context, request Request) Result {
 		)
 	}
 
-	command := exec.Command(binary, args...)
-	command.Env = env
-	command.Dir = work
+	execute := func(arguments []string, executionRequest Request) Result {
+		command := exec.Command(binary, arguments...)
+		command.Env = env
+		command.Dir = work
 
-	return runProcess(ctx, command, request)
+		return runProcess(ctx, command, executionRequest)
+	}
+
+	if request.RecoverStaleLocks {
+		unlockArgs, _, unlockErr := request.staleLockArguments(passwordFile, cache, runner.AllowLocal)
+		if unlockErr != nil {
+			result.Diagnostic = unlockErr.Error()
+			return result
+		}
+		unlocked := execute(unlockArgs, request)
+		if ctx.Err() != nil {
+			return unlocked
+		}
+
+		result = execute(args, request)
+		result.Diagnostic = strings.TrimSpace(joinResultLogs("stale repository lock cleanup attempted before maintenance", unlocked) + "\n" + result.Diagnostic)
+		return result
+	}
+
+	return execute(args, request)
+}
+
+func joinResultLogs(prefix string, results ...Result) string {
+	parts := []string{prefix}
+	for _, result := range results {
+		parts = append(parts, result.Output, result.Diagnostic)
+	}
+
+	joined := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if strings.TrimSpace(part) != "" {
+			joined = append(joined, strings.TrimSpace(part))
+		}
+	}
+
+	return strings.Join(joined, "\n")
 }
 
 func lockRepository(ctx context.Context, state string, connection Connection) (*os.File, error) {

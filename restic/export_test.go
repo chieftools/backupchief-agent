@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestExportSelectionBoundaries(t *testing.T) {
@@ -120,4 +121,85 @@ func TestSnapshotDirectoryExportIncludesSelectedTopLevelFolder(t *testing.T) {
 	if err != nil || !bytes.Equal(archivedContents, contents) {
 		t.Fatalf("file archive contents: %q %v", archivedContents, err)
 	}
+}
+
+func TestCancelledSnapshotExportRemovesItsRepositoryLock(t *testing.T) {
+	runner := testRunner(t)
+	request := testRequest(t)
+	requireComplete(t, runner, request)
+
+	root := filepath.Join(t.TempDir(), "synthetic export source")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "archive.bin"), []byte(strings.Repeat("synthetic export data\n", 4096)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	request.Operation = "backup"
+	request.Root = root
+	result := requireComplete(t, runner, request)
+	var summary struct {
+		MessageType string `json:"message_type"`
+		SnapshotID  string `json:"snapshot_id"`
+	}
+	for _, line := range strings.Split(result.Output, "\n") {
+		var candidate struct {
+			MessageType string `json:"message_type"`
+			SnapshotID  string `json:"snapshot_id"`
+		}
+		if json.Unmarshal([]byte(line), &candidate) == nil && candidate.MessageType == "summary" {
+			summary = candidate
+		}
+	}
+	if summary.SnapshotID == "" {
+		t.Fatalf("missing snapshot id: %s", result.Output)
+	}
+
+	exportRequest := ExportRequest{
+		Version: 1, Connection: request.Connection, Password: request.Password,
+		Snapshot: summary.SnapshotID, Kind: "directory", Path: root,
+		ArchiveEntryName: filepath.Base(root), TimeoutSeconds: 300, LockWaitSeconds: 0,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	releaseOutput := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- runner.StreamExport(ctx, exportRequest, blockingExportWriter{release: releaseOutput})
+	}()
+
+	waitFor(t, func() bool {
+		entries, _ := os.ReadDir(filepath.Join(request.Connection.Path, "locks"))
+		for _, entry := range entries {
+			if snapshotPattern.MatchString(entry.Name()) {
+				return true
+			}
+		}
+		return false
+	})
+	cancel()
+	time.Sleep(100 * time.Millisecond)
+	close(releaseOutput)
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("cancelled export completed successfully")
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("cancelled export did not stop")
+	}
+	waitFor(t, func() bool {
+		entries, _ := os.ReadDir(filepath.Join(request.Connection.Path, "locks"))
+		return len(entries) == 0
+	})
+}
+
+type blockingExportWriter struct {
+	release <-chan struct{}
+}
+
+func (writer blockingExportWriter) Write(contents []byte) (int, error) {
+	<-writer.release
+	return len(contents), nil
 }

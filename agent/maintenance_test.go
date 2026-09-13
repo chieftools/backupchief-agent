@@ -99,7 +99,7 @@ func TestSnapshotInventoryReportsTheExactRepositoryState(t *testing.T) {
 	if result.SnapshotEvidence.Scope != "repository" || result.SnapshotEvidence.SnapshotCount != 2 || result.SnapshotEvidence.ChunkCount != 1 {
 		t.Fatalf("inventory manifest: %+v", result.SnapshotEvidence)
 	}
-	if !reflect.DeepEqual(result.SnapshotEvidenceIDs, []string{first, second}) || executor.requests[0].Operation != "snapshots" {
+	if !reflect.DeepEqual(result.SnapshotEvidenceIDs, []string{first, second}) || executor.requests[0].Operation != "snapshots" || !executor.requests[0].RecoverStaleLocks {
 		t.Fatalf("inventory ids=%v requests=%+v", result.SnapshotEvidenceIDs, executor.requests)
 	}
 }
@@ -124,6 +124,36 @@ func TestForgetResumesThePersistedFixedPlanWithoutRecomputingPolicy(t *testing.T
 
 	if result.ResultCode != "success" || len(executor.requests) != 3 || executor.requests[1].Operation != "forget" {
 		t.Fatalf("resumed result=%+v requests=%+v", result, executor.requests)
+	}
+}
+
+func TestForgetRetriesOnceWithStaleLockRecoveryWhenARepositoryLockAppearsAfterPreflight(t *testing.T) {
+	remove := strings.Repeat("6", 64)
+	protected := strings.Repeat("7", 64)
+	executor := &scriptedMaintenanceExecutor{results: []restic.Result{
+		{ExitCode: 0, Outcome: "complete", Output: `[{"id":"` + remove + `"},{"id":"` + protected + `"}]`},
+		{ExitCode: 0, Outcome: "complete", Output: `[{"remove":[{"id":"` + remove + `"}]}]`},
+		{ExitCode: 11, Outcome: "locked"},
+		{ExitCode: 0, Outcome: "complete"},
+		{ExitCode: 0, Outcome: "complete", Output: `[{"id":"` + protected + `"}]`},
+	}}
+	job := maintenanceExecutionJob(t)
+	job.Retention = JobRetention{
+		Daily: 2, KeepLatestComplete: true,
+		LatestComplete: &CompleteSnapshotProof{
+			RunID: "01k4p4f7m1r9d3t6v8w2x5y7zh", FinishedAt: "2026-09-10T10:00:00.000000Z", SnapshotIDs: []string{protected},
+		},
+	}
+	result, _, _, _ := executeMaintenance(
+		context.Background(), executor, 1, maintenanceJournalCommand("forget", job.ID), job, nil,
+		func(MaintenancePlan) error { return nil }, time.Now,
+	)
+
+	if result.ResultCode != "success" || len(executor.requests) != 5 {
+		t.Fatalf("result=%+v requests=%+v", result, executor.requests)
+	}
+	if !executor.requests[0].RecoverStaleLocks || executor.requests[2].RecoverStaleLocks || !executor.requests[3].RecoverStaleLocks {
+		t.Fatalf("stale lock recovery requests: %+v", executor.requests)
 	}
 }
 

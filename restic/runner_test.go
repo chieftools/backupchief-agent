@@ -188,6 +188,14 @@ func TestRequestBoundaries(t *testing.T) {
 	}
 
 	request := testRequest(t)
+	request.Operation = "backup"
+	request.Root = t.TempDir()
+	request.RecoverStaleLocks = true
+	if _, _, err := request.arguments("password", "new-password", "cache", true); err == nil {
+		t.Fatal("accepted stale lock recovery for a backup")
+	}
+
+	request = testRequest(t)
 	request.Operation = "key_remove"
 	request.KeyID = "short"
 

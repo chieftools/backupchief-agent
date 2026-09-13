@@ -29,28 +29,29 @@ type Connection struct {
 }
 
 type Request struct {
-	Version         int        `json:"version"`
-	Operation       string     `json:"operation"`
-	Connection      Connection `json:"connection"`
-	Password        string     `json:"password"`
-	NewPassword     string     `json:"new_password,omitempty"`
-	KeyID           string     `json:"key_id,omitempty"`
-	Root            string     `json:"root,omitempty"`
-	Excludes        []string   `json:"excludes,omitempty"`
-	Host            string     `json:"host,omitempty"`
-	Tags            []string   `json:"tags,omitempty"`
-	Snapshot        string     `json:"snapshot,omitempty"`
-	SnapshotIDs     []string   `json:"snapshot_ids,omitempty"`
-	Retention       *Retention `json:"retention,omitempty"`
-	DataSubsetPart  int        `json:"data_subset_part,omitempty"`
-	DataSubsetTotal int        `json:"data_subset_total,omitempty"`
-	Target          string     `json:"target,omitempty"`
-	Path            string     `json:"path,omitempty"`
-	StdinFilename   string     `json:"stdin_filename,omitempty"`
-	StdinCommand    []string   `json:"stdin_command,omitempty"`
-	CommandConfig   string     `json:"command_config,omitempty"`
-	TimeoutSeconds  int        `json:"timeout_seconds"`
-	LockWaitSeconds int        `json:"lock_wait_seconds"`
+	Version           int        `json:"version"`
+	Operation         string     `json:"operation"`
+	Connection        Connection `json:"connection"`
+	Password          string     `json:"password"`
+	NewPassword       string     `json:"new_password,omitempty"`
+	KeyID             string     `json:"key_id,omitempty"`
+	Root              string     `json:"root,omitempty"`
+	Excludes          []string   `json:"excludes,omitempty"`
+	Host              string     `json:"host,omitempty"`
+	Tags              []string   `json:"tags,omitempty"`
+	Snapshot          string     `json:"snapshot,omitempty"`
+	SnapshotIDs       []string   `json:"snapshot_ids,omitempty"`
+	Retention         *Retention `json:"retention,omitempty"`
+	DataSubsetPart    int        `json:"data_subset_part,omitempty"`
+	DataSubsetTotal   int        `json:"data_subset_total,omitempty"`
+	Target            string     `json:"target,omitempty"`
+	Path              string     `json:"path,omitempty"`
+	StdinFilename     string     `json:"stdin_filename,omitempty"`
+	StdinCommand      []string   `json:"stdin_command,omitempty"`
+	CommandConfig     string     `json:"command_config,omitempty"`
+	TimeoutSeconds    int        `json:"timeout_seconds"`
+	LockWaitSeconds   int        `json:"lock_wait_seconds"`
+	RecoverStaleLocks bool       `json:"recover_stale_locks,omitempty"`
 }
 
 type Retention struct {
@@ -73,80 +74,13 @@ type Result struct {
 }
 
 func (r Request) arguments(passwordFile, newPasswordFile, cache string, local bool) ([]string, []string, error) {
-	if r.Version != protocolVersion || r.Password == "" || strings.ContainsAny(r.Password, "\r\n\x00") {
-		return nil, nil, errors.New("invalid restic request or execution limits")
+	if r.RecoverStaleLocks && !allowsStaleLockRecovery(r.Operation) {
+		return nil, nil, errors.New("stale lock recovery is limited to maintenance operations")
 	}
 
-	if r.TimeoutSeconds < 1 ||
-		r.TimeoutSeconds > 86400 ||
-		r.LockWaitSeconds < 0 ||
-		r.LockWaitSeconds > 300 ||
-		r.LockWaitSeconds >= r.TimeoutSeconds {
-		return nil, nil, errors.New("invalid restic request or execution limits")
-	}
-
-	lockWait := time.Duration(r.LockWaitSeconds) * time.Second
-	arguments := []string{
-		"--password-file",
-		passwordFile,
-		"--cache-dir",
-		cache,
-		"--retry-lock",
-		lockWait.String(),
-	}
-	environment := []string{
-		"PATH=/usr/bin:/bin",
-		"HOME=" + cache,
-		"TMPDIR=" + cache,
-		"LANG=C",
-		"RESTIC_PROGRESS_FPS=1",
-	}
-
-	connection := r.Connection
-
-	switch connection.Driver {
-	case "local":
-		if !local || !filepath.IsAbs(connection.Path) || strings.ContainsRune(connection.Path, 0) {
-			return nil, nil, errors.New("local repositories require an absolute path and local execution permission")
-		}
-
-		arguments = append(arguments, "--repo", connection.Path)
-	case "s3":
-		endpoint, err := egress.Endpoint(connection.Endpoint)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		if !bucketPattern.MatchString(connection.Bucket) ||
-			connection.Region == "" ||
-			connection.AccessKey == "" ||
-			connection.SecretKey == "" ||
-			!safePrefix(connection.Prefix) {
-			return nil, nil, errors.New("invalid or missing S3 settings")
-		}
-
-		// Keep the original authority for TLS and request signing; the proxy pins only the dial address.
-		endpoint.Host = strings.TrimSuffix(endpoint.Host, ":443")
-		endpoint.Path = "/" + connection.Bucket + "/" + connection.Prefix
-
-		arguments = append(
-			arguments,
-			"--repo",
-			"s3:"+endpoint.String(),
-			"-o",
-			"s3.region="+connection.Region,
-			"-o",
-			"s3.bucket-lookup=path",
-			"-o",
-			"s3.retries=1",
-		)
-		environment = append(
-			environment,
-			"AWS_ACCESS_KEY_ID="+connection.AccessKey,
-			"AWS_SECRET_ACCESS_KEY="+connection.SecretKey,
-		)
-	default:
-		return nil, nil, errors.New("unsupported repository driver")
+	arguments, environment, err := r.baseArguments(passwordFile, cache, local)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	switch r.Operation {
@@ -182,8 +116,8 @@ func (r Request) arguments(passwordFile, newPasswordFile, cache string, local bo
 			arguments = append(arguments, "--host", r.Host)
 		}
 		arguments = append(arguments, "--exclude", cache)
-		if connection.Driver == "local" {
-			arguments = append(arguments, "--exclude", connection.Path)
+		if r.Connection.Driver == "local" {
+			arguments = append(arguments, "--exclude", r.Connection.Path)
 		}
 		for _, tag := range r.Tags {
 			if tag == "" || strings.ContainsRune(tag, 0) || len(tag) > 255 {
@@ -298,6 +232,106 @@ func (r Request) arguments(passwordFile, newPasswordFile, cache string, local bo
 	}
 
 	return arguments, environment, nil
+}
+
+func (r Request) staleLockArguments(passwordFile, cache string, local bool) ([]string, []string, error) {
+	r.LockWaitSeconds = 0
+	r.RecoverStaleLocks = false
+	arguments, environment, err := r.baseArguments(passwordFile, cache, local)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return append(arguments, "unlock"), environment, nil
+}
+
+func (r Request) baseArguments(passwordFile, cache string, local bool) ([]string, []string, error) {
+	if r.Version != protocolVersion || r.Password == "" || strings.ContainsAny(r.Password, "\r\n\x00") {
+		return nil, nil, errors.New("invalid restic request or execution limits")
+	}
+
+	if r.TimeoutSeconds < 1 ||
+		r.TimeoutSeconds > 86400 ||
+		r.LockWaitSeconds < 0 ||
+		r.LockWaitSeconds > 300 ||
+		r.LockWaitSeconds >= r.TimeoutSeconds {
+		return nil, nil, errors.New("invalid restic request or execution limits")
+	}
+
+	lockWait := time.Duration(r.LockWaitSeconds) * time.Second
+	arguments := []string{
+		"--password-file",
+		passwordFile,
+		"--cache-dir",
+		cache,
+		"--retry-lock",
+		lockWait.String(),
+	}
+	environment := []string{
+		"PATH=/usr/bin:/bin",
+		"HOME=" + cache,
+		"TMPDIR=" + cache,
+		"LANG=C",
+		"RESTIC_PROGRESS_FPS=1",
+	}
+
+	connection := r.Connection
+
+	switch connection.Driver {
+	case "local":
+		if !local || !filepath.IsAbs(connection.Path) || strings.ContainsRune(connection.Path, 0) {
+			return nil, nil, errors.New("local repositories require an absolute path and local execution permission")
+		}
+
+		arguments = append(arguments, "--repo", connection.Path)
+	case "s3":
+		endpoint, err := egress.Endpoint(connection.Endpoint)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		if !bucketPattern.MatchString(connection.Bucket) ||
+			connection.Region == "" ||
+			connection.AccessKey == "" ||
+			connection.SecretKey == "" ||
+			!safePrefix(connection.Prefix) {
+			return nil, nil, errors.New("invalid or missing S3 settings")
+		}
+
+		// Keep the original authority for TLS and request signing; the proxy pins only the dial address.
+		endpoint.Host = strings.TrimSuffix(endpoint.Host, ":443")
+		endpoint.Path = "/" + connection.Bucket + "/" + connection.Prefix
+
+		arguments = append(
+			arguments,
+			"--repo",
+			"s3:"+endpoint.String(),
+			"-o",
+			"s3.region="+connection.Region,
+			"-o",
+			"s3.bucket-lookup=path",
+			"-o",
+			"s3.retries=1",
+		)
+		environment = append(
+			environment,
+			"AWS_ACCESS_KEY_ID="+connection.AccessKey,
+			"AWS_SECRET_ACCESS_KEY="+connection.SecretKey,
+		)
+	default:
+		return nil, nil, errors.New("unsupported repository driver")
+	}
+
+	return arguments, environment, nil
+}
+
+func allowsStaleLockRecovery(operation string) bool {
+	switch operation {
+	case "snapshots", "forget_plan", "forget", "prune", "check_metadata", "check_data":
+		return true
+	default:
+		return false
+	}
 }
 
 func safeStdinFilename(value string) bool {
