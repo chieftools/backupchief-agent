@@ -85,7 +85,7 @@ func resolveExternalTool(name string) (string, error) {
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 {
 		return "", fmt.Errorf("tool is not an executable regular file")
 	}
-	return resolved, nil
+	return path, nil
 }
 
 func capabilityReason(available bool, tools string) string {

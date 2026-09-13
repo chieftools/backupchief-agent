@@ -189,7 +189,7 @@ func postgresqlPassfile(source PostgreSQLSource, database, stateDirectory string
 
 func discoverPostgreSQLDatabases(ctx context.Context, binary string, source PostgreSQLSource, passfile string) ([]string, error) {
 	query := "SELECT encode(convert_to(datname, 'UTF8'), 'hex') FROM pg_database WHERE datallowconn AND NOT datistemplate AND has_database_privilege(datname, 'CONNECT') ORDER BY datname"
-	arguments := []string{"--no-psqlrc", "--no-password", "--tuples-only", "--no-align", "--quiet", "--dbname=" + postgresqlConnectionString(source, source.ConnectionDatabase, passfile), "--command=" + query}
+	arguments := []string{"--no-psqlrc", "--no-password", "--tuples-only", "--no-align", "--quiet", "--set=ON_ERROR_STOP=on", "--dbname=" + postgresqlConnectionString(source, source.ConnectionDatabase, passfile), "--command=" + query}
 	command := exec.CommandContext(ctx, binary, arguments...)
 	command.Env = []string{"PATH=/usr/bin:/bin:/usr/local/bin", "LANG=C"}
 	var output bytes.Buffer

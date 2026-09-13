@@ -228,6 +228,16 @@ if [ "$1" = "--version" ]; then
     echo "psql synthetic-version"
     exit 0
 fi
+found_on_error_stop=false
+for argument in "$@"; do
+    if [ "$argument" = "--set=ON_ERROR_STOP=on" ]; then
+        found_on_error_stop=true
+    fi
+done
+if [ "$found_on_error_stop" != "true" ]; then
+    printf 'missing ON_ERROR_STOP\n' >&2
+    exit 1
+fi
 printf '706f737467726573\n73796e7468657469635f617070\n'
 `
 
