@@ -17,6 +17,11 @@ type recordingExecutor struct {
 	result   restic.Result
 }
 
+type sequentialExecutor struct {
+	requests []restic.Request
+	results  []restic.Result
+}
+
 type blockingExecutor struct {
 	started chan struct{}
 	stopped chan struct{}
@@ -32,6 +37,13 @@ func (executor *blockingExecutor) Run(ctx context.Context, _ restic.Request) res
 func (executor *recordingExecutor) Run(_ context.Context, request restic.Request) restic.Result {
 	executor.requests = append(executor.requests, request)
 	return executor.result
+}
+
+func (executor *sequentialExecutor) Run(_ context.Context, request restic.Request) restic.Result {
+	executor.requests = append(executor.requests, request)
+	result := executor.results[0]
+	executor.results = executor.results[1:]
+	return result
 }
 
 func TestExecuteBackupPassesLiteralSelectionAndParsesSummary(t *testing.T) {
@@ -123,6 +135,54 @@ func TestMySQLDumpFilenameFallsBackForNonPortableNames(t *testing.T) {
 
 	if !strings.HasPrefix(filename, "~") || !strings.HasSuffix(filename, ".sql") || len(filename) != 69 {
 		t.Fatalf("filename: %q", filename)
+	}
+}
+
+func TestExecutePostgreSQLBackupUsesAPrivatePassfileAndPortableDumpFlags(t *testing.T) {
+	installPostgreSQLInspectionTools(t, successfulPostgreSQLTool, successfulPostgreSQLDumpTool)
+	snapshotID := strings.Repeat("e", 64)
+	executor := &recordingExecutor{result: restic.Result{ExitCode: 0, Outcome: "complete", Output: `{"message_type":"summary","total_files_processed":1,"total_bytes_processed":3072,"data_added_packed":768,"snapshot_id":"` + snapshotID + `"}`}}
+	command := &JournalCommand{RunID: "01k4p4f7m1r9d3t6v8w2x5y7zc"}
+	job := executionJob(t.TempDir())
+	job.Type = JobTypePostgreSQL
+	job.Source = JobSource{PostgreSQL: &PostgreSQLSource{Host: "postgresql.example.test", Port: 5432, Username: "synthetic_reader", Password: "synthetic-secret", ConnectionDatabase: "postgres", SelectionMode: "selected", Databases: []string{"synthetic_app"}}}
+	now := func() time.Time { return time.Date(2026, 9, 13, 9, 30, 0, 0, time.UTC) }
+
+	result, _, _, _ := executeBackup(context.Background(), executor, t.TempDir(), "01k4p4f7m1r9d3t6v8w2x5y7ze", 1, command, job, now)
+
+	if result.Status != "complete" || result.ResultCode != "success" || len(result.Artifacts) != 1 || result.Artifacts[0].Filename != "synthetic_app.sql" {
+		t.Fatalf("result: %+v", result)
+	}
+	if len(executor.requests) != 1 {
+		t.Fatalf("requests: %d", len(executor.requests))
+	}
+	request := executor.requests[0]
+	if !strings.Contains(request.CommandConfig, "synthetic-secret") || !contains(request.StdinCommand, "--no-owner") || !contains(request.StdinCommand, "--no-privileges") || !contains(request.StdinCommand, "--no-tablespaces") || !contains(request.StdinCommand, "--quote-all-identifiers") || !contains(request.Tags, "backupchief-run-anchor") {
+		t.Fatalf("stream request: %+v", request)
+	}
+	for _, argument := range request.StdinCommand {
+		if strings.Contains(argument, "synthetic-secret") || strings.Contains(argument, "--create") || strings.Contains(argument, "--clean") {
+			t.Fatalf("unsafe pg_dump argument: %q", argument)
+		}
+	}
+}
+
+func TestPostgreSQLRunAnchorMovesToTheFirstSuccessfulSnapshot(t *testing.T) {
+	installPostgreSQLInspectionTools(t, successfulPostgreSQLTool, successfulPostgreSQLDumpTool)
+	snapshotID := strings.Repeat("f", 64)
+	executor := &sequentialExecutor{results: []restic.Result{
+		{ExitCode: 1, Outcome: "failed", Output: "synthetic first database failure"},
+		{ExitCode: 0, Outcome: "complete", Output: `{"message_type":"summary","total_files_processed":1,"total_bytes_processed":1024,"data_added_packed":256,"snapshot_id":"` + snapshotID + `"}`},
+	}}
+	job := executionJob(t.TempDir())
+	job.Type = JobTypePostgreSQL
+	job.Source = JobSource{PostgreSQL: &PostgreSQLSource{Host: "postgresql.example.test", Port: 5432, Username: "synthetic_reader", ConnectionDatabase: "postgres", SelectionMode: "selected", Databases: []string{"postgres", "synthetic_app"}}}
+	command := &JournalCommand{RunID: "01k4p4f7m1r9d3t6v8w2x5y7zc"}
+
+	result, _, _, _ := executeBackup(context.Background(), executor, t.TempDir(), "01k4p4f7m1r9d3t6v8w2x5y7ze", 1, command, job, time.Now)
+
+	if result.Status != "partial" || len(result.SnapshotIDs) != 1 || len(executor.requests) != 2 || !contains(executor.requests[1].Tags, "backupchief-run-anchor") {
+		t.Fatalf("result=%+v requests=%+v", result, executor.requests)
 	}
 }
 

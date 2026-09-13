@@ -311,7 +311,7 @@ func (client *Client) PollCommands(ctx context.Context, expectedGeneration uint6
 		return CommandsResponse{}, fmt.Errorf("commands response is incompatible")
 	}
 	for _, command := range commands.Commands {
-		if err := validateCommand(command, expectedGeneration); err != nil {
+		if err := validateCommand(command, expectedGeneration, commands.ProtocolRevision); err != nil {
 			return CommandsResponse{}, err
 		}
 	}
@@ -574,6 +574,26 @@ func requestBodyForProtocol(path string, body []byte, protocolRevision string) (
 			payload["config"] = encodedConfig
 		}
 	}
+	if path == "/heartbeat" && protocolRevisionSupports(protocolRevision, "1.1.0") && !protocolRevisionSupports(protocolRevision, "1.2.0") {
+		if rawCapabilities, exists := payload["capabilities"]; exists {
+			var capabilities map[string]any
+			if err := json.Unmarshal(rawCapabilities, &capabilities); err != nil {
+				return nil, fmt.Errorf("rewrite heartbeat capabilities: %w", err)
+			}
+			if backupTypes, ok := capabilities["backup_types"].(map[string]any); ok {
+				delete(backupTypes, "postgresql")
+			}
+			if tools, ok := capabilities["tools"].(map[string]any); ok {
+				delete(tools, "psql")
+				delete(tools, "pg_dump")
+			}
+			encodedCapabilities, err := json.Marshal(capabilities)
+			if err != nil {
+				return nil, fmt.Errorf("rewrite heartbeat capabilities: %w", err)
+			}
+			payload["capabilities"] = encodedCapabilities
+		}
+	}
 
 	rewritten, err := json.Marshal(payload)
 	if err != nil {
@@ -594,7 +614,7 @@ func decodeStrict(data []byte, target any) error {
 	return requireJSONEOF(decoder)
 }
 
-func validateCommand(command AgentCommand, expectedGeneration uint64) error {
+func validateCommand(command AgentCommand, expectedGeneration uint64, protocolRevision string) error {
 	if !ulidPattern.MatchString(command.ID) || command.Generation != expectedGeneration || !validateTimestamp(command.IssuedAt) || !validateTimestamp(command.ExpiresAt) {
 		return fmt.Errorf("command identity is invalid")
 	}
@@ -617,7 +637,7 @@ func validateCommand(command AgentCommand, expectedGeneration uint64) error {
 			return fmt.Errorf("cancellation command payload is invalid")
 		}
 	case "inspect_source":
-		if !contains([]string{"file", "mysql"}, command.Payload.Type) || len(command.Payload.Source) == 0 || !digestPattern.MatchString(command.Payload.SourceDigest) || command.Payload.JobID != "" || command.Payload.RunID != "" || command.Payload.RequiredConfigRevision != 0 || command.Payload.Maintenance != "" {
+		if !contains([]string{"file", "mysql", "postgresql"}, command.Payload.Type) || command.Payload.Type == "postgresql" && !protocolRevisionSupports(protocolRevision, "1.2.0") || len(command.Payload.Source) == 0 || !digestPattern.MatchString(command.Payload.SourceDigest) || command.Payload.JobID != "" || command.Payload.RunID != "" || command.Payload.RequiredConfigRevision != 0 || command.Payload.Maintenance != "" {
 			return fmt.Errorf("source inspection command payload is invalid")
 		}
 	default:

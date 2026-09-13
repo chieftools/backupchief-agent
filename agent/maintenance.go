@@ -203,7 +203,7 @@ func executeForget(
 		}
 		if retentionPolicyEmpty(policy) {
 			for _, snapshot := range snapshotRecords(inventoryResult) {
-				if job.Type != JobTypeMySQL || contains(snapshot.Tags, "backupchief-run-anchor") {
+				if !isDatabaseJob(job.Type) || contains(snapshot.Tags, "backupchief-run-anchor") {
 					candidateIDs = append(candidateIDs, snapshot.ID)
 				}
 			}
@@ -211,7 +211,7 @@ func executeForget(
 		} else {
 			request.Operation = "forget_plan"
 			request.Retention = &policy
-			if job.Type == JobTypeMySQL {
+			if isDatabaseJob(job.Type) {
 				request.Tags = []string{"backupchief-run-anchor"}
 			}
 			planResult := run(request)
@@ -222,8 +222,8 @@ func executeForget(
 				return finish(result)
 			}
 		}
-		if job.Type == JobTypeMySQL {
-			candidateIDs = expandMySQLRunCandidates(snapshotRecords(inventoryResult), candidateIDs)
+		if isDatabaseJob(job.Type) {
+			candidateIDs = expandDatabaseRunCandidates(snapshotRecords(inventoryResult), candidateIDs)
 		}
 		candidateIDs = withoutProtected(candidateIDs, protected)
 		plan = MaintenancePlan{
@@ -341,7 +341,7 @@ func snapshotRecords(result restic.Result) []repositorySnapshot {
 	return snapshots
 }
 
-func expandMySQLRunCandidates(snapshots []repositorySnapshot, anchors []string) []string {
+func expandDatabaseRunCandidates(snapshots []repositorySnapshot, anchors []string) []string {
 	anchorSet := stringSet(anchors)
 	runTags := map[string]bool{}
 	for _, snapshot := range snapshots {
@@ -366,6 +366,15 @@ func expandMySQLRunCandidates(snapshots []repositorySnapshot, anchors []string) 
 	sort.Strings(result)
 	return result
 }
+
+func expandMySQLRunCandidates(snapshots []repositorySnapshot, anchors []string) []string {
+	return expandDatabaseRunCandidates(snapshots, anchors)
+}
+
+func isDatabaseJob(jobType JobType) bool {
+	return jobType == JobTypeMySQL || jobType == JobTypePostgreSQL
+}
+
 func maintenanceRequest(job Job) restic.Request {
 	return restic.Request{
 		Version: 1,

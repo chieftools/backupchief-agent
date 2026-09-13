@@ -25,8 +25,9 @@ const (
 type JobType string
 
 const (
-	JobTypeFile  JobType = "file"
-	JobTypeMySQL JobType = "mysql"
+	JobTypeFile       JobType = "file"
+	JobTypeMySQL      JobType = "mysql"
+	JobTypePostgreSQL JobType = "postgresql"
 )
 
 var (
@@ -92,6 +93,7 @@ type JobSource struct {
 	OneFileSystem bool
 	Excludes      []string
 	MySQL         *MySQLSource
+	PostgreSQL    *PostgreSQLSource
 }
 
 type MySQLSource struct {
@@ -104,6 +106,16 @@ type MySQLSource struct {
 	IncludeRoutines bool
 	IncludeEvents   bool
 	CustomFlags     []string
+}
+
+type PostgreSQLSource struct {
+	Host               string
+	Port               uint16
+	Username           string
+	Password           string
+	ConnectionDatabase string
+	SelectionMode      string
+	Databases          []string
 }
 
 type JobRepository struct {
@@ -202,18 +214,19 @@ type jobDocument struct {
 }
 
 type sourceDocument struct {
-	Root          string                  `json:"root,omitempty"`
-	OneFileSystem *bool                   `json:"one_file_system,omitempty"`
-	Excludes      []string                `json:"excludes,omitempty"`
-	Host          string                  `json:"host,omitempty"`
-	Port          uint16                  `json:"port,omitempty"`
-	Username      string                  `json:"username,omitempty"`
-	Password      string                  `json:"password,omitempty"`
-	Selection     *mysqlSelectionDocument `json:"selection,omitempty"`
-	Dump          *mysqlDumpDocument      `json:"dump,omitempty"`
+	Root               string                     `json:"root,omitempty"`
+	OneFileSystem      *bool                      `json:"one_file_system,omitempty"`
+	Excludes           []string                   `json:"excludes,omitempty"`
+	Host               string                     `json:"host,omitempty"`
+	Port               uint16                     `json:"port,omitempty"`
+	Username           string                     `json:"username,omitempty"`
+	Password           string                     `json:"password,omitempty"`
+	ConnectionDatabase string                     `json:"connection_database,omitempty"`
+	Selection          *databaseSelectionDocument `json:"selection,omitempty"`
+	Dump               *mysqlDumpDocument         `json:"dump,omitempty"`
 }
 
-type mysqlSelectionDocument struct {
+type databaseSelectionDocument struct {
 	Mode      string   `json:"mode"`
 	Databases []string `json:"databases,omitempty"`
 }
@@ -388,9 +401,14 @@ func normalizeConfig(document configDocument, expectedGeneration uint64) (Config
 		if err != nil {
 			return Config{}, fmt.Errorf("job %q: %w", key, err)
 		}
-		if !slices.Contains([]JobType{JobTypeFile, JobTypeMySQL}, JobType(jobType)) {
+		if !slices.Contains([]JobType{JobTypeFile, JobTypeMySQL, JobTypePostgreSQL}, JobType(jobType)) {
 			config.unsupportedJobs[key] = cloneRawMessage(raw)
 			config.addWarning(fmt.Sprintf("job %q uses unsupported type %q; skipped", key, jobType))
+			continue
+		}
+		if managed && JobType(jobType) == JobTypePostgreSQL && !protocolRevisionSupports(document.Metadata.ProtocolRevision, "1.2.0") {
+			config.unsupportedJobs[key] = cloneRawMessage(raw)
+			config.addWarning(fmt.Sprintf("job %q requires protocol revision 1.2.0; skipped", key))
 			continue
 		}
 		var document jobDocument
@@ -483,7 +501,7 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 	if managed && !ulidPattern.MatchString(keyID) {
 		return Job{}, fmt.Errorf("key is invalid")
 	}
-	if !slices.Contains([]JobType{JobTypeFile, JobTypeMySQL}, raw.Type) {
+	if !slices.Contains([]JobType{JobTypeFile, JobTypeMySQL, JobTypePostgreSQL}, raw.Type) {
 		return Job{}, fmt.Errorf("type %q is unsupported", raw.Type)
 	}
 	if raw.Name != "" && (runeLength(raw.Name) > 255 || strings.ContainsRune(raw.Name, 0)) {
@@ -563,6 +581,19 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 			IncludeRoutines: raw.Source.Dump.IncludeRoutines,
 			IncludeEvents:   raw.Source.Dump.IncludeEvents,
 			CustomFlags:     append([]string{}, raw.Source.Dump.CustomFlags...),
+		}}
+	} else if raw.Type == JobTypePostgreSQL {
+		if raw.Source.Selection == nil || raw.Source.Dump != nil {
+			return Job{}, fmt.Errorf("PostgreSQL source is incomplete")
+		}
+		jobSource = JobSource{PostgreSQL: &PostgreSQLSource{
+			Host:               raw.Source.Host,
+			Port:               raw.Source.Port,
+			Username:           raw.Source.Username,
+			Password:           raw.Source.Password,
+			ConnectionDatabase: raw.Source.ConnectionDatabase,
+			SelectionMode:      raw.Source.Selection.Mode,
+			Databases:          append([]string{}, raw.Source.Selection.Databases...),
 		}}
 	}
 	job := Job{
@@ -834,8 +865,15 @@ func encodeConfig(config Config, managedDigest string) ([]byte, error) {
 			mysql := job.Source.MySQL
 			source = sourceDocument{
 				Host: mysql.Host, Port: mysql.Port, Username: mysql.Username, Password: mysql.Password,
-				Selection: &mysqlSelectionDocument{Mode: mysql.SelectionMode, Databases: mysql.Databases},
+				Selection: &databaseSelectionDocument{Mode: mysql.SelectionMode, Databases: mysql.Databases},
 				Dump:      &mysqlDumpDocument{IncludeRoutines: mysql.IncludeRoutines, IncludeEvents: mysql.IncludeEvents, CustomFlags: mysql.CustomFlags},
+			}
+		} else if job.Type == JobTypePostgreSQL && job.Source.PostgreSQL != nil {
+			postgresql := job.Source.PostgreSQL
+			source = sourceDocument{
+				Host: postgresql.Host, Port: postgresql.Port, Username: postgresql.Username, Password: postgresql.Password,
+				ConnectionDatabase: postgresql.ConnectionDatabase,
+				Selection:          &databaseSelectionDocument{Mode: postgresql.SelectionMode, Databases: postgresql.Databases},
 			}
 		}
 		documentJob := jobDocument{
@@ -925,17 +963,20 @@ func uint64Pointer(value uint64) *uint64 {
 	return &value
 }
 
-const maximumMySQLDatabases = 1000
+const (
+	maximumMySQLDatabases      = 1000
+	maximumPostgreSQLDatabases = 1000
+)
 
 func validateJob(job Job) error {
-	if !slices.Contains([]JobType{JobTypeFile, JobTypeMySQL}, job.Type) {
+	if !slices.Contains([]JobType{JobTypeFile, JobTypeMySQL, JobTypePostgreSQL}, job.Type) {
 		return fmt.Errorf("type %q is unsupported", job.Type)
 	}
 	if job.ID == "" || !digestPattern.MatchString(job.ID) && !ulidPattern.MatchString(job.ID) {
 		return fmt.Errorf("id is invalid")
 	}
 	if job.Type == JobTypeFile {
-		if !filepath.IsAbs(job.Source.Root) || runeLength(job.Source.Root) > 4096 || !job.Source.OneFileSystem || len(job.Source.Excludes) > 100 || job.Source.MySQL != nil {
+		if !filepath.IsAbs(job.Source.Root) || runeLength(job.Source.Root) > 4096 || !job.Source.OneFileSystem || len(job.Source.Excludes) > 100 || job.Source.MySQL != nil || job.Source.PostgreSQL != nil {
 			return fmt.Errorf("source is invalid")
 		}
 		for _, exclude := range job.Source.Excludes {
@@ -943,7 +984,11 @@ func validateJob(job Job) error {
 				return fmt.Errorf("exclude is invalid")
 			}
 		}
-	} else if err := validateMySQLSource(job.Source); err != nil {
+	} else if job.Type == JobTypeMySQL {
+		if err := validateMySQLSource(job.Source); err != nil {
+			return err
+		}
+	} else if err := validatePostgreSQLSource(job.Source); err != nil {
 		return err
 	}
 	if job.Repository.Location == "" || runeLength(job.Repository.Location) > 2048 || !digestPattern.MatchString(job.Repository.ID) {
@@ -992,7 +1037,7 @@ func validateJob(job Job) error {
 
 func validateMySQLSource(source JobSource) error {
 	mysql := source.MySQL
-	if mysql == nil || source.Root != "" || len(source.Excludes) != 0 || mysql.Host == "" || runeLength(mysql.Host) > 255 || strings.ContainsAny(mysql.Host, "\r\n\x00") || mysql.Port == 0 || mysql.Username == "" || runeLength(mysql.Username) > 255 || strings.ContainsAny(mysql.Username, "\r\n\x00") || runeLength(mysql.Password) > 4096 || strings.ContainsRune(mysql.Password, 0) {
+	if mysql == nil || source.PostgreSQL != nil || source.Root != "" || len(source.Excludes) != 0 || mysql.Host == "" || runeLength(mysql.Host) > 255 || strings.ContainsAny(mysql.Host, "\r\n\x00") || mysql.Port == 0 || mysql.Username == "" || runeLength(mysql.Username) > 255 || strings.ContainsAny(mysql.Username, "\r\n\x00") || runeLength(mysql.Password) > 4096 || strings.ContainsRune(mysql.Password, 0) {
 		return fmt.Errorf("MySQL source is invalid")
 	}
 	if !slices.Contains([]string{"selected", "all_accessible"}, mysql.SelectionMode) || len(mysql.Databases) > maximumMySQLDatabases || mysql.SelectionMode == "selected" && len(mysql.Databases) == 0 || mysql.SelectionMode == "all_accessible" && len(mysql.Databases) != 0 {
@@ -1012,6 +1057,25 @@ func validateMySQLSource(source JobSource) error {
 		if !validMySQLFlag(flag) {
 			return fmt.Errorf("MySQL dump options are invalid")
 		}
+	}
+	return nil
+}
+
+func validatePostgreSQLSource(source JobSource) error {
+	postgresql := source.PostgreSQL
+	if postgresql == nil || source.MySQL != nil || source.Root != "" || len(source.Excludes) != 0 || postgresql.Host == "" || runeLength(postgresql.Host) > 255 || strings.ContainsAny(postgresql.Host, "\r\n\x00") || postgresql.Port == 0 || postgresql.Username == "" || runeLength(postgresql.Username) > 255 || strings.ContainsAny(postgresql.Username, "\r\n\x00") || runeLength(postgresql.Password) > 4096 || strings.ContainsAny(postgresql.Password, "\r\n\x00") || postgresql.ConnectionDatabase == "" || runeLength(postgresql.ConnectionDatabase) > 63 || strings.ContainsAny(postgresql.ConnectionDatabase, "\r\n\x00") {
+		return fmt.Errorf("PostgreSQL source is invalid")
+	}
+	if !slices.Contains([]string{"selected", "all_accessible"}, postgresql.SelectionMode) || len(postgresql.Databases) > maximumPostgreSQLDatabases || postgresql.SelectionMode == "selected" && len(postgresql.Databases) == 0 || postgresql.SelectionMode == "all_accessible" && len(postgresql.Databases) != 0 {
+		return fmt.Errorf("PostgreSQL database selection is invalid")
+	}
+	seen := map[string]bool{}
+	for _, database := range postgresql.Databases {
+		lower := strings.ToLower(database)
+		if database == "" || runeLength(database) > 63 || strings.ContainsAny(database, "\r\n\x00") || seen[database] || lower == "template0" || lower == "template1" {
+			return fmt.Errorf("PostgreSQL database selection is invalid")
+		}
+		seen[database] = true
 	}
 	return nil
 }

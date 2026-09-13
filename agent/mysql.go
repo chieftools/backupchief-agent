@@ -62,8 +62,9 @@ func executeMySQLBackup(ctx context.Context, executor BackupExecutor, stateDirec
 	var retained bytes.Buffer
 	var total RunStatistics = RunStatistics{"files_new": uint64(0), "files_changed": uint64(0), "files_unmodified": uint64(0), "directories_new": uint64(0), "directories_changed": uint64(0), "directories_unmodified": uint64(0), "source_files": uint64(0), "source_bytes": uint64(0), "stored_bytes": uint64(0)}
 	failed := 0
+	anchorWritten := false
 	supportsColumnStatistics := mysqlDumpSupportsColumnStatistics(ctx, dumpBinary)
-	for index, database := range databases {
+	for _, database := range databases {
 		if ctx.Err() != nil {
 			result.Status, result.ResultCode, result.Summary = "cancelled", "cancelled", "The MySQL backup was cancelled."
 			break
@@ -83,7 +84,7 @@ func executeMySQLBackup(ctx context.Context, executor BackupExecutor, stateDirec
 		flags = append(flags, mysql.CustomFlags...)
 		flags = append(flags, "--databases", database)
 		tags := []string{"backupchief-job:" + job.ID, "backupchief-run:" + command.RunID, "backupchief-type:mysql", "backupchief-database:" + encoded}
-		if index == 0 {
+		if !anchorWritten {
 			tags = append(tags, "backupchief-run-anchor")
 		}
 		request := restic.Request{
@@ -106,7 +107,8 @@ func executeMySQLBackup(ctx context.Context, executor BackupExecutor, stateDirec
 		summary := summaries[len(summaries)-1]
 		result.SnapshotIDs = append(result.SnapshotIDs, summary.SnapshotID)
 		result.Artifacts = append(result.Artifacts, BackupArtifact{Database: database, Filename: filename, SnapshotID: summary.SnapshotID})
-		addMySQLStatistics(total, summary)
+		addDatabaseStatistics(total, summary)
+		anchorWritten = true
 	}
 
 	result.FinishedAt = protocolTimestamp(now())
@@ -242,7 +244,7 @@ func resticConnection(job Job) restic.Connection {
 	return restic.Connection{Driver: connection.Driver, Path: connection.Path, Endpoint: connection.Endpoint, Bucket: connection.Bucket, Prefix: connection.Prefix, Region: connection.Region, AccessKey: connection.AccessKey, SecretKey: connection.SecretKey}
 }
 
-func addMySQLStatistics(total RunStatistics, summary resticSummary) {
+func addDatabaseStatistics(total RunStatistics, summary resticSummary) {
 	values := map[string]uint64{"files_new": summary.FilesNew, "files_changed": summary.FilesChanged, "files_unmodified": summary.FilesUnmodified, "directories_new": summary.DirectoriesNew, "directories_changed": summary.DirectoriesChanged, "directories_unmodified": summary.DirectoriesUnmodified, "source_files": summary.SourceFiles, "source_bytes": summary.SourceBytes, "stored_bytes": summary.StoredBytes}
 	for key, value := range values {
 		total[key] = total[key].(uint64) + value

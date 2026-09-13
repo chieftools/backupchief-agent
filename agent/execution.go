@@ -48,6 +48,9 @@ func executeBackup(
 	if job.Type == JobTypeMySQL {
 		return executeMySQLBackup(ctx, executor, stateDirectory, serverID, generation, command, job, now)
 	}
+	if job.Type == JobTypePostgreSQL {
+		return executePostgreSQLBackup(ctx, executor, stateDirectory, serverID, generation, command, job, now)
+	}
 	startedAt := now()
 	base := CommandResult{
 		Generation:  generation,

@@ -49,6 +49,9 @@ func inspectSource(ctx context.Context, generation uint64, runID, stateDirectory
 		result.Failure = nil
 		return result
 	}
+	if payload.Type == "postgresql" {
+		return inspectPostgreSQLSource(ctx, result, source, stateDirectory)
+	}
 	if payload.Type != "mysql" || source.Selection == nil || source.Dump == nil {
 		result.Failure = inspectionFailure("source_validation", "The source type or required source fields are not supported by this agent.")
 		return result
@@ -126,6 +129,79 @@ func inspectSource(ctx context.Context, generation uint64, runID, stateDirectory
 	return result
 }
 
+func inspectPostgreSQLSource(ctx context.Context, result CommandResult, source sourceDocument, stateDirectory string) CommandResult {
+	if source.Selection == nil || source.Dump != nil {
+		result.Failure = inspectionFailure("source_validation", "The PostgreSQL source fields are incomplete.", source.Password)
+		return result
+	}
+	postgresql := PostgreSQLSource{
+		Host: source.Host, Port: source.Port, Username: source.Username, Password: source.Password,
+		ConnectionDatabase: source.ConnectionDatabase, SelectionMode: source.Selection.Mode, Databases: source.Selection.Databases,
+	}
+	if err := validatePostgreSQLSource(JobSource{PostgreSQL: &postgresql}); err != nil {
+		result.Summary = "The PostgreSQL source configuration is invalid."
+		result.Failure = inspectionFailure("source_validation", err.Error(), postgresql.Password)
+		return result
+	}
+	psqlBinary, psqlErr := resolveExternalTool("psql")
+	dumpBinary, dumpErr := resolveExternalTool("pg_dump")
+	if psqlErr != nil || dumpErr != nil {
+		result.ResultCode = "tool_unavailable"
+		result.Summary = "Executable psql and pg_dump client tools are required."
+		result.Tools = map[string]any{"psql": probeExternalTool("psql"), "pg_dump": probeExternalTool("pg_dump")}
+		result.Failure = inspectionFailure("tool_check", postgresqlToolResolutionDetail(psqlErr, dumpErr))
+		return result
+	}
+	passfile, cleanup, err := postgresqlPassfile(postgresql, postgresql.ConnectionDatabase, stateDirectory)
+	if err != nil {
+		result.Failure = inspectionFailure("credential_setup", fmt.Sprintf("prepare private PostgreSQL credentials: %v", err), postgresql.Password)
+		return result
+	}
+	discovered, err := discoverPostgreSQLDatabases(ctx, psqlBinary, postgresql, passfile)
+	cleanup()
+	if err != nil {
+		result.ResultCode = "source_authentication_failed"
+		result.Summary = "PostgreSQL rejected the connection or database discovery query."
+		result.Failure = inspectionFailure("database_discovery", err.Error(), postgresql.Password)
+		return result
+	}
+	targets, valid := selectedPostgreSQLDatabases(postgresql, discovered)
+	if !valid {
+		result.ResultCode = "database_selection_invalid"
+		result.Summary = "The selected PostgreSQL databases are not accessible."
+		result.Databases = discovered
+		result.Failure = inspectionFailure("database_selection", "The selection contains a database that was not returned as connectable, or no connectable databases were found.", postgresql.Password)
+		return result
+	}
+
+	testDatabase := targets[0]
+	passfile, cleanup, err = postgresqlPassfile(postgresql, testDatabase, stateDirectory)
+	if err != nil {
+		result.Failure = inspectionFailure("credential_setup", fmt.Sprintf("prepare private PostgreSQL credentials: %v", err), postgresql.Password)
+		return result
+	}
+	defer cleanup()
+	command := exec.CommandContext(ctx, dumpBinary, postgresqlDumpArguments(postgresql, testDatabase, passfile, true)...)
+	command.Env = []string{"PATH=/usr/bin:/bin:/usr/local/bin", "LANG=C"}
+	command.Stdout = &bytes.Buffer{}
+	var stderr inspectionOutput
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		result.ResultCode = "execution_failed"
+		result.Summary = "pg_dump could not produce a schema-only test dump."
+		result.Databases = discovered
+		result.Failure = inspectionFailure("dump_execution", commandFailure("pg_dump", err, stderr.String()).Error(), postgresql.Password)
+		return result
+	}
+	result.Status = "complete"
+	result.ResultCode = "success"
+	result.Summary = "PostgreSQL credentials and a schema-only dump were verified."
+	result.Databases = discovered
+	result.Tools = map[string]any{"psql": probeExternalTool("psql"), "pg_dump": probeExternalTool("pg_dump")}
+	result.Failure = nil
+	return result
+}
+
 func inspectionFailure(stage, detail string, secrets ...string) *SourceInspectionFailure {
 	for _, secret := range secrets {
 		if secret != "" {
@@ -157,6 +233,17 @@ func toolResolutionDetail(mysqlErr, dumpErr error) string {
 	}
 	if dumpErr != nil {
 		details = append(details, "mysqldump: "+dumpErr.Error())
+	}
+	return strings.Join(details, "; ")
+}
+
+func postgresqlToolResolutionDetail(psqlErr, dumpErr error) string {
+	details := []string{}
+	if psqlErr != nil {
+		details = append(details, "psql: "+psqlErr.Error())
+	}
+	if dumpErr != nil {
+		details = append(details, "pg_dump: "+dumpErr.Error())
 	}
 	return strings.Join(details, "; ")
 }

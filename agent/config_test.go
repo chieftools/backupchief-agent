@@ -45,6 +45,32 @@ func TestMySQLDatabaseSelectionAllowsOneThousandDatabases(t *testing.T) {
 	}
 }
 
+func TestPostgreSQLConfigurationRequiresProtocolRevisionAndRoundTrips(t *testing.T) {
+	body := postgresqlConfigBody(t, ProtocolRevision)
+	config, _, err := DecodeConfig(body, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Jobs) != 1 || config.Jobs[0].Type != JobTypePostgreSQL || config.Jobs[0].Source.PostgreSQL == nil || config.Jobs[0].Source.PostgreSQL.ConnectionDatabase != "postgres" {
+		t.Fatalf("PostgreSQL job: %+v", config.Jobs)
+	}
+	encoded, err := encodeConfig(config, strings.Repeat("b", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(encoded, []byte(`"type": "postgresql"`)) || !bytes.Contains(encoded, []byte(`"connection_database": "postgres"`)) {
+		t.Fatalf("encoded PostgreSQL configuration: %s", encoded)
+	}
+
+	legacy, _, err := DecodeConfig(postgresqlConfigBody(t, "1.1.0"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(legacy.Jobs) != 0 || len(legacy.Warnings) != 1 || !strings.Contains(legacy.Warnings[0], "requires protocol revision 1.2.0") {
+		t.Fatalf("legacy PostgreSQL configuration: jobs=%+v warnings=%q", legacy.Jobs, legacy.Warnings)
+	}
+}
+
 func TestDefaultPathsSeparateManagedIdentityAndConfigurations(t *testing.T) {
 	paths := DefaultPaths()
 
@@ -417,12 +443,34 @@ func validJobConfigBody() []byte {
 	return []byte(`{"$schema":"https://pkg.backup.chief.app/config.schema.json","metadata":{"protocol_revision":"1.1.0","generation":1,"revision":2,"schema_version":1,"issued_at":"2026-09-09T08:15:00.000000Z"},"host":{"name":"synthetic-host","id":"server_01k4p4f7m1r9d3t6v8w2x5y7za"},"destinations":{"storage_01k4p4f7m1r9d3t6v8w2x5y7zc":{"driver":"s3","endpoint":"https://objects.example.test","region":"auto","bucket":"bucket-synthetic","prefix":"backups","access_key":"synthetic-access-key","secret_key":"synthetic-secret-key"}},"jobs":{"job_01k4p4f7m1r9d3t6v8w2x5y7za":{"name":"Synthetic documents","type":"file","enabled":false,"source":{"root":"/srv/synthetic","one_file_system":true,"excludes":[]},"repository":{"id":"bfe1c8aaeb40359d011fdfd7028992b2cb01d1c147f5651a0fd41c30164f7c7b","destination":"storage_01k4p4f7m1r9d3t6v8w2x5y7zc","path":"documents/repository","password":"synthetic-service-password"},"schedule":"0 1 * * *","retention":{"last":12,"hourly":0,"daily":7,"weekly":4,"monthly":3,"yearly":0,"forget_schedule":"17 3 * * *","prune_schedule":"47 15 * * 0"},"integrity":{"metadata_schedule":"0 2 * * 0","data_schedule":"0 3 * * 0","data_parts":4},"safety":{"latest_complete":null,"has_unresolved_runs":false}}}}`)
 }
 
+func postgresqlConfigBody(t *testing.T, protocol string) []byte {
+	t.Helper()
+	var document map[string]any
+	if err := json.Unmarshal(validJobConfigBody(), &document); err != nil {
+		t.Fatal(err)
+	}
+	document["metadata"].(map[string]any)["protocol_revision"] = protocol
+	jobs := document["jobs"].(map[string]any)
+	job := jobs["job_01k4p4f7m1r9d3t6v8w2x5y7za"].(map[string]any)
+	job["type"] = "postgresql"
+	job["source"] = map[string]any{
+		"host": "postgresql.example.test", "port": 5432, "username": "synthetic_reader", "password": "synthetic-secret",
+		"connection_database": "postgres", "selection": map[string]any{"mode": "selected", "databases": []string{"synthetic_app"}},
+	}
+	body, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
 func validRealtimeConfigBody(t *testing.T) []byte {
 	t.Helper()
 	var document map[string]any
 	if err := json.Unmarshal(validJobConfigBody(), &document); err != nil {
 		t.Fatal(err)
 	}
+	document["metadata"].(map[string]any)["protocol_revision"] = ProtocolRevision
 	document["realtime"] = map[string]any{
 		"key":       "synthetic-app-key",
 		"host":      "realtime.example.test",

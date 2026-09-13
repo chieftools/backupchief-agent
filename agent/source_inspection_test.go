@@ -41,6 +41,31 @@ func TestSourceInspectionReportsCredentialWorkspaceFailure(t *testing.T) {
 	}
 }
 
+func TestSourceInspectionVerifiesPostgreSQLSelectionAndSchemaDump(t *testing.T) {
+	installPostgreSQLInspectionTools(t, successfulPostgreSQLTool, successfulPostgreSQLDumpTool)
+	stateDirectory := t.TempDir()
+
+	result := inspectSource(context.Background(), 1, "01k4p4k2n8d3r6t9v1w5x7yabc", stateDirectory, inspectionPostgreSQLPayload())
+
+	if result.Status != "complete" || result.ResultCode != "success" || result.Failure != nil || len(result.Databases) != 2 || result.Databases[0] != "postgres" || result.Databases[1] != "synthetic_app" {
+		t.Fatalf("result: %+v", result)
+	}
+	entries, err := os.ReadDir(stateDirectory)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("credential workspace was not cleaned up: %v %v", entries, err)
+	}
+}
+
+func TestSourceInspectionRejectsAnInaccessiblePostgreSQLSelection(t *testing.T) {
+	installPostgreSQLInspectionTools(t, successfulPostgreSQLTool, successfulPostgreSQLDumpTool)
+	payload := inspectionPostgreSQLPayload()
+	payload.Source["selection"] = map[string]any{"mode": "selected", "databases": []string{"missing_database"}}
+
+	result := inspectSource(context.Background(), 1, "01k4p4k2n8d3r6t9v1w5x7yabc", t.TempDir(), payload)
+
+	assertInspectionFailure(t, result, "database_selection_invalid", "database_selection")
+}
+
 func TestSourceInspectionReportsRedactedDatabaseDiscoveryFailure(t *testing.T) {
 	installInspectionTools(t, failingMySQLTool, successfulMySQLDumpTool)
 	payload := inspectionMySQLPayload()
@@ -121,11 +146,29 @@ func inspectionMySQLPayload() CommandPayload {
 	}
 }
 
+func inspectionPostgreSQLPayload() CommandPayload {
+	return CommandPayload{
+		Type: "postgresql",
+		Source: map[string]any{
+			"host": "postgresql.example.test", "port": 5432, "username": "synthetic_reader", "password": "synthetic-secret", "connection_database": "postgres",
+			"selection": map[string]any{"mode": "selected", "databases": []string{"synthetic_app"}},
+		},
+	}
+}
+
 func installInspectionTools(t *testing.T, mysql, mysqldump string) {
 	t.Helper()
 	directory := t.TempDir()
 	writeInspectionTool(t, directory, "mysql", mysql)
 	writeInspectionTool(t, directory, "mysqldump", mysqldump)
+	t.Setenv("PATH", directory)
+}
+
+func installPostgreSQLInspectionTools(t *testing.T, psql, pgDump string) {
+	t.Helper()
+	directory := t.TempDir()
+	writeInspectionTool(t, directory, "psql", psql)
+	writeInspectionTool(t, directory, "pg_dump", pgDump)
 	t.Setenv("PATH", directory)
 }
 
@@ -178,4 +221,19 @@ if [ "$1" = "--help" ]; then
 fi
 printf 'Dump denied for synthetic-secret\n' >&2
 exit 1
+`
+
+const successfulPostgreSQLTool = `#!/bin/sh
+if [ "$1" = "--version" ]; then
+    echo "psql synthetic-version"
+    exit 0
+fi
+printf '706f737467726573\n73796e7468657469635f617070\n'
+`
+
+const successfulPostgreSQLDumpTool = `#!/bin/sh
+if [ "$1" = "--version" ]; then
+    echo "pg_dump synthetic-version"
+fi
+exit 0
 `

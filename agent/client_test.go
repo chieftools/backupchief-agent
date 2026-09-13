@@ -81,6 +81,35 @@ func TestClientNegotiatesDownAfterRollbackAndBackUpAfterUpgrade(t *testing.T) {
 	}
 }
 
+func TestHeartbeatOmitsPostgreSQLCapabilitiesForProtocolEleven(t *testing.T) {
+	request := HeartbeatRequest{Capabilities: map[string]any{
+		"backup_types": map[string]any{
+			"file":       map[string]any{"available": true},
+			"mysql":      map[string]any{"available": true},
+			"postgresql": map[string]any{"available": true},
+		},
+		"tools": map[string]any{"mysql": map[string]any{}, "psql": map[string]any{}, "pg_dump": map[string]any{}},
+	}}
+	body, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewritten, err := requestBodyForProtocol("/heartbeat", body, "1.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(rewritten, &payload); err != nil {
+		t.Fatal(err)
+	}
+	capabilities := payload["capabilities"].(map[string]any)
+	backupTypes := capabilities["backup_types"].(map[string]any)
+	tools := capabilities["tools"].(map[string]any)
+	if backupTypes["mysql"] == nil || backupTypes["postgresql"] != nil || tools["psql"] != nil || tools["pg_dump"] != nil {
+		t.Fatalf("downgraded capabilities: %#v", capabilities)
+	}
+}
+
 func TestEnrollmentFallbackUsesTheServerRevisionInItsHeaderAndBody(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {

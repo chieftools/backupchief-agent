@@ -23,18 +23,26 @@ func probeCapabilities() map[string]any {
 		mysql := probeExternalTool("mysql")
 		mysqldump := probeExternalTool("mysqldump")
 		mysqlAvailable := mysql["available"] == true && mysqldump["available"] == true
+		psql := probeExternalTool("psql")
+		pgDump := probeExternalTool("pg_dump")
+		postgresqlAvailable := psql["available"] == true && pgDump["available"] == true
 		capabilities = map[string]any{
 			"backup_types": map[string]any{
 				"file": map[string]any{"available": true},
 				"mysql": map[string]any{
 					"available": mysqlAvailable,
-					"reason":    capabilityReason(mysqlAvailable),
+					"reason":    capabilityReason(mysqlAvailable, "mysql and mysqldump"),
 					"tools":     map[string]any{"mysql": mysql, "mysqldump": mysqldump},
+				},
+				"postgresql": map[string]any{
+					"available": postgresqlAvailable,
+					"reason":    capabilityReason(postgresqlAvailable, "psql and pg_dump"),
+					"tools":     map[string]any{"psql": psql, "pg_dump": pgDump},
 				},
 			},
 			"tools": map[string]any{
 				"restic": map[string]any{"available": true, "bundled": true, "version": restic.Version},
-				"mysql":  mysql, "mysqldump": mysqldump,
+				"mysql":  mysql, "mysqldump": mysqldump, "psql": psql, "pg_dump": pgDump,
 			},
 		}
 	})
@@ -80,9 +88,9 @@ func resolveExternalTool(name string) (string, error) {
 	return resolved, nil
 }
 
-func capabilityReason(available bool) string {
+func capabilityReason(available bool, tools string) string {
 	if available {
 		return ""
 	}
-	return "Install executable mysql and mysqldump client tools on the server."
+	return "Install executable " + tools + " client tools on the server."
 }
