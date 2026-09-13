@@ -294,6 +294,37 @@ func TestCommandReceiptReusesRunIdentityAndRejectsChangedReplay(t *testing.T) {
 	}
 }
 
+func TestNewCommandReceiptWakesDispatcher(t *testing.T) {
+	store := newAgentTestStore(t)
+	daemon := &daemon{
+		store: store, now: time.Now, journal: newCommandJournal(),
+		dispatchWake: make(chan struct{}, 1),
+	}
+	command := AgentCommand{
+		ID: "01k4p4f7m1r9d3t6v8w2x5y7ze", Generation: 1, Kind: "run_backup",
+		IssuedAt: "2026-07-08T09:10:11.000000Z", ExpiresAt: "2026-07-08T09:25:11.000000Z",
+		Payload: CommandPayload{JobID: "01k4p4f7m1r9d3t6v8w2x5y7zf", RequiredConfigRevision: 2},
+	}
+
+	if err := daemon.receiveCommand(command); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-daemon.dispatchWake:
+	default:
+		t.Fatal("new command did not wake dispatcher")
+	}
+
+	if err := daemon.receiveCommand(command); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-daemon.dispatchWake:
+		t.Fatal("unchanged command replay woke dispatcher")
+	default:
+	}
+}
+
 func TestCancelRunStopsTheActiveExecutionAndPersistsItsResult(t *testing.T) {
 	store := newAgentTestStore(t)
 	runID := "01k4p4f7m1r9d3t6v8w2x5y7zc"

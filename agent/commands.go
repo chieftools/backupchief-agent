@@ -92,6 +92,7 @@ func (daemon *daemon) receiveCommand(command AgentCommand) error {
 		delete(daemon.journal.Commands, command.ID)
 		return err
 	}
+	notifyLoop(daemon.dispatchWake)
 	return nil
 }
 

@@ -54,6 +54,7 @@ type daemon struct {
 	heartbeatWake  chan struct{}
 	configWake     chan struct{}
 	commandWake    chan struct{}
+	dispatchWake   chan struct{}
 
 	active             map[string]context.CancelFunc
 	activeRunKinds     map[string]string
@@ -154,6 +155,7 @@ func Run(ctx context.Context, options RunOptions) error {
 		heartbeatWake:      make(chan struct{}, 1),
 		configWake:         make(chan struct{}, 1),
 		commandWake:        make(chan struct{}, 1),
+		dispatchWake:       make(chan struct{}, 1),
 		lastScheduleMinute: options.Now().UTC().Truncate(time.Minute),
 	}
 	client.ObserveServerTime = runtime.observeServerTime
@@ -179,7 +181,7 @@ func Run(ctx context.Context, options RunOptions) error {
 		errorsChannel <- runAgentLoop(runContext, options.ScheduleEvery, 0, options.Jitter, runtime.scheduleBackups)
 	}()
 	go func() {
-		errorsChannel <- runAgentLoop(runContext, options.DispatchEvery, 0.20, options.Jitter, runtime.dispatchCommands)
+		errorsChannel <- runTriggeredAgentLoop(runContext, options.DispatchEvery, 0.20, options.Jitter, runtime.dispatchWake, runtime.dispatchCommands)
 	}()
 	go func() {
 		errorsChannel <- runAgentLoop(runContext, options.ReporterEvery, 0.20, options.Jitter, runtime.reportJournal)
