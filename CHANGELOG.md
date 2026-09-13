@@ -4,6 +4,12 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.5.1]
+
+### Fixed
+
+- Fixed new retention runs skipping the Restic policy plan and reporting no snapshots to remove. Persisted maintenance plans now require a kind matching the operation before the agent resumes them.
+
 ## [0.5.0]
 
 ### Added
@@ -73,7 +79,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/chieftools/backupchief-agent/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/chieftools/backupchief-agent/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/chieftools/backupchief-agent/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/chieftools/backupchief-agent/compare/v0.4.0...v0.4.1
