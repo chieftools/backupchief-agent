@@ -377,6 +377,10 @@ func (daemon *daemon) runMaintenance(ctx context.Context, commandID, runID strin
 }
 
 func (daemon *daemon) finishOperation(commandID, runID string, job Job, result CommandResult, log []byte, truncated bool, dropped uint64) {
+	if daemon.client != nil && !protocolRevisionSupports(daemon.client.selectedProtocolRevision(), "1.2.0") {
+		result.SnapshotEvidence = nil
+		result.SnapshotEvidenceIDs = nil
+	}
 	logID, idErr := newULID(daemon.now())
 	if idErr == nil {
 		idErr = daemon.store.WriteRunLog(logID, log)
@@ -393,6 +397,7 @@ func (daemon *daemon) finishOperation(commandID, runID string, job Job, result C
 	}
 	journaled.State = "finished"
 	journaled.Result = &result
+	daemon.appendSnapshotEvidenceEvents(journaled, result)
 	journaled.Sequence++
 	if eventID, err := newULID(daemon.now()); err == nil {
 		journaled.Events = append(journaled.Events, daemon.eventEnvelope(
@@ -427,6 +432,28 @@ func (daemon *daemon) finishOperation(commandID, runID string, job Job, result C
 			cancel()
 		}
 		_ = daemon.store.SaveCommandJournal(daemon.journal)
+	}
+}
+
+func (daemon *daemon) appendSnapshotEvidenceEvents(command *JournalCommand, result CommandResult) {
+	if result.SnapshotEvidence == nil || len(result.SnapshotEvidenceIDs) == 0 {
+		return
+	}
+	for offset := 0; offset < len(result.SnapshotEvidenceIDs); offset += snapshotEvidenceChunkSize {
+		end := min(offset+snapshotEvidenceChunkSize, len(result.SnapshotEvidenceIDs))
+		command.Sequence++
+		eventID, err := newULID(daemon.now())
+		if err != nil {
+			return
+		}
+		command.Events = append(command.Events, daemon.eventEnvelope(
+			command, eventID, command.Sequence, result.SnapshotEvidence.ObservedAt, "snapshot_inventory_chunk",
+			map[string]any{
+				"scope":        result.SnapshotEvidence.Scope,
+				"chunk_index":  offset / snapshotEvidenceChunkSize,
+				"snapshot_ids": append([]string(nil), result.SnapshotEvidenceIDs[offset:end]...),
+			},
+		))
 	}
 }
 
@@ -533,7 +560,8 @@ func (daemon *daemon) flushCommand(ctx context.Context, commandID string) error 
 	daemon.mu.Unlock()
 
 	if len(events) > 0 {
-		response, err := daemon.client.SubmitEvents(ctx, EventRequest{Generation: daemon.bootstrap.Generation, Events: events})
+		batch := events[:min(len(events), maximumEventBatch)]
+		response, err := daemon.client.SubmitEvents(ctx, EventRequest{Generation: daemon.bootstrap.Generation, Events: batch})
 		if err != nil {
 			return err
 		}
@@ -543,14 +571,14 @@ func (daemon *daemon) flushCommand(ctx context.Context, commandID string) error 
 			if item.Status != "rejected" {
 				continue
 			}
-			if events[index].Kind == "run_finished" {
-				retained = append(retained, events[index])
+			if batch[index].Kind == "run_finished" || batch[index].Kind == "snapshot_inventory_chunk" {
+				retained = append(retained, batch[index])
 			}
 			rejection = fmt.Errorf("event %s was rejected: %s", item.ID, item.Code)
 		}
 		daemon.mu.Lock()
 		if current := daemon.journal.Commands[commandID]; current != nil {
-			current.Events = append(retained, current.Events[len(events):]...)
+			current.Events = append(retained, current.Events[len(batch):]...)
 			if rejection != nil {
 				daemon.state.SpoolGapDetected = true
 			}
@@ -568,6 +596,9 @@ func (daemon *daemon) flushCommand(ctx context.Context, commandID string) error 
 		daemon.mu.Unlock()
 		if rejection != nil {
 			return rejection
+		}
+		if len(events) > len(batch) {
+			return nil
 		}
 	}
 
@@ -731,12 +762,17 @@ func (daemon *daemon) reconcileOne(ctx context.Context, commandID string) error 
 	} else {
 		result = daemon.reconciledMaintenance(ctx, journaled, *job)
 	}
+	if daemon.client != nil && !protocolRevisionSupports(daemon.client.selectedProtocolRevision(), "1.2.0") {
+		result.SnapshotEvidence = nil
+		result.SnapshotEvidenceIDs = nil
+	}
 	result.RepositoryBytes = measureRepositoryBytes(ctx, daemon.executor, *job)
 
 	daemon.mu.Lock()
 	if current := daemon.journal.Commands[commandID]; current != nil && current.State == "running" {
 		current.State = "finished"
 		current.Result = &result
+		daemon.appendSnapshotEvidenceEvents(current, result)
 		current.Sequence++
 		if eventID, idErr := newULID(daemon.now()); idErr == nil {
 			current.Events = append(current.Events, daemon.eventEnvelope(
@@ -775,8 +811,10 @@ func (daemon *daemon) reconciledMaintenance(ctx context.Context, command *Journa
 	inventoryResult := daemon.executor.Run(ctx, request)
 	inventory, ok := parseSnapshotInventory(inventoryResult)
 	if !ok {
+		attachSnapshotEvidence(&result, "candidates", command.MaintenancePlan.CandidateSnapshotIDs, daemon.now())
 		return result
 	}
+	attachSnapshotEvidence(&result, "repository", snapshotIDs(inventory), daemon.now())
 	remaining := 0
 	for _, snapshotID := range command.MaintenancePlan.CandidateSnapshotIDs {
 		if inventory[snapshotID] {

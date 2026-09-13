@@ -13,15 +13,17 @@ import (
 )
 
 const (
-	ProtocolRevision     = "1.1.0"
-	ProtocolHeader       = "BackupChief-Protocol-Revision"
-	LatestProtocolHeader = "BackupChief-Latest-Protocol-Revision"
-	DefaultEndpoint      = "https://backup.chief.app/agent/v1"
-	SpoolBytesLimit      = 268435456
-	maximumConfig        = 1 << 20
-	maximumCommands      = 512 << 10
-	maximumRunLog        = 8 << 20
-	maximumLogChunk      = 256 << 10
+	ProtocolRevision          = "1.2.0"
+	ProtocolHeader            = "BackupChief-Protocol-Revision"
+	LatestProtocolHeader      = "BackupChief-Latest-Protocol-Revision"
+	DefaultEndpoint           = "https://backup.chief.app/agent/v1"
+	SpoolBytesLimit           = 268435456
+	maximumConfig             = 1 << 20
+	maximumCommands           = 512 << 10
+	maximumRunLog             = 8 << 20
+	maximumLogChunk           = 256 << 10
+	maximumEventBatch         = 30
+	snapshotEvidenceChunkSize = 400
 )
 
 var (
@@ -191,22 +193,32 @@ type CommandAcknowledgement struct {
 
 type RunStatistics map[string]any
 
+type SnapshotEvidence struct {
+	Scope         string `json:"scope"`
+	ObservedAt    string `json:"observed_at"`
+	SnapshotCount int    `json:"snapshot_count"`
+	ChunkCount    int    `json:"chunk_count"`
+	SHA256        string `json:"sha256"`
+}
+
 type CommandResult struct {
-	Generation      uint64           `json:"generation"`
-	RunID           string           `json:"run_id"`
-	JobID           string           `json:"job_id,omitempty"`
-	RunKind         string           `json:"run_kind,omitempty"`
-	Status          string           `json:"status"`
-	ResultCode      string           `json:"result_code"`
-	StartedAt       string           `json:"started_at,omitempty"`
-	FinishedAt      string           `json:"finished_at,omitempty"`
-	SnapshotIDs     []string         `json:"snapshot_ids"`
-	Statistics      *RunStatistics   `json:"statistics,omitempty"`
-	Summary         string           `json:"summary,omitempty"`
-	RepositoryBytes *uint64          `json:"repository_bytes,omitempty"`
-	Artifacts       []BackupArtifact `json:"artifacts,omitempty"`
-	Databases       []string         `json:"databases,omitempty"`
-	Tools           map[string]any   `json:"tools,omitempty"`
+	Generation          uint64            `json:"generation"`
+	RunID               string            `json:"run_id"`
+	JobID               string            `json:"job_id,omitempty"`
+	RunKind             string            `json:"run_kind,omitempty"`
+	Status              string            `json:"status"`
+	ResultCode          string            `json:"result_code"`
+	StartedAt           string            `json:"started_at,omitempty"`
+	FinishedAt          string            `json:"finished_at,omitempty"`
+	SnapshotIDs         []string          `json:"snapshot_ids"`
+	Statistics          *RunStatistics    `json:"statistics,omitempty"`
+	Summary             string            `json:"summary,omitempty"`
+	RepositoryBytes     *uint64           `json:"repository_bytes,omitempty"`
+	Artifacts           []BackupArtifact  `json:"artifacts,omitempty"`
+	Databases           []string          `json:"databases,omitempty"`
+	Tools               map[string]any    `json:"tools,omitempty"`
+	SnapshotEvidence    *SnapshotEvidence `json:"snapshot_evidence,omitempty"`
+	SnapshotEvidenceIDs []string          `json:"-"`
 }
 
 type sourceInspectionResult struct {

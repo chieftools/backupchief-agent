@@ -599,7 +599,7 @@ func validateCommand(command AgentCommand, expectedGeneration uint64) error {
 			return fmt.Errorf("backup command payload is invalid")
 		}
 	case "run_maintenance":
-		if !ulidPattern.MatchString(command.Payload.JobID) || command.Payload.RequiredConfigRevision == 0 || command.Payload.RunID != "" || !contains([]string{"forget", "prune", "check_metadata", "check_data"}, command.Payload.Maintenance) {
+		if !ulidPattern.MatchString(command.Payload.JobID) || command.Payload.RequiredConfigRevision == 0 || command.Payload.RunID != "" || !contains([]string{"forget", "prune", "check_metadata", "check_data", "snapshot_inventory"}, command.Payload.Maintenance) {
 			return fmt.Errorf("maintenance command payload is invalid")
 		}
 	case "cancel_run":

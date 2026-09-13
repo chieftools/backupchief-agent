@@ -143,7 +143,7 @@ func prepareRetiredGeneration(store *FileStore, bootstrap Bootstrap, now time.Ti
 		}
 		terminalEvents := command.Events[:0]
 		for _, event := range command.Events {
-			if event.Kind == "run_finished" {
+			if event.Kind == "snapshot_inventory_chunk" || event.Kind == "run_finished" {
 				terminalEvents = append(terminalEvents, event)
 			}
 		}
@@ -242,7 +242,8 @@ func (daemon *daemon) flushRetiredCommand(ctx context.Context, client *Client, g
 	daemon.mu.Unlock()
 
 	if len(events) > 0 {
-		response, err := client.SubmitEvents(ctx, EventRequest{Generation: generation, Events: events})
+		batch := events[:min(len(events), maximumEventBatch)]
+		response, err := client.SubmitEvents(ctx, EventRequest{Generation: generation, Events: batch})
 		if err != nil {
 			return err
 		}
@@ -253,12 +254,15 @@ func (daemon *daemon) flushRetiredCommand(ctx context.Context, client *Client, g
 		}
 		daemon.mu.Lock()
 		if current := daemon.journal.Commands[commandID]; current != nil {
-			current.Events = current.Events[len(events):]
+			current.Events = current.Events[len(batch):]
 			err = daemon.store.SaveCommandJournal(daemon.journal)
 		}
 		daemon.mu.Unlock()
 		if err != nil {
 			return err
+		}
+		if len(events) > len(batch) {
+			return nil
 		}
 	}
 

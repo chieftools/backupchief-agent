@@ -75,6 +75,33 @@ func TestForgetPersistsAProtectedFixedSnapshotPlanBeforeRemoval(t *testing.T) {
 	if !reflect.DeepEqual(*result.Statistics, wantStatistics) {
 		t.Fatalf("statistics: %+v", *result.Statistics)
 	}
+	if result.SnapshotEvidence == nil || result.SnapshotEvidence.Scope != "repository" || !reflect.DeepEqual(result.SnapshotEvidenceIDs, []string{protected}) {
+		t.Fatalf("snapshot evidence: %+v %v", result.SnapshotEvidence, result.SnapshotEvidenceIDs)
+	}
+}
+
+func TestSnapshotInventoryReportsTheExactRepositoryState(t *testing.T) {
+	first := strings.Repeat("4", 64)
+	second := strings.Repeat("5", 64)
+	executor := &scriptedMaintenanceExecutor{results: []restic.Result{{
+		ExitCode: 0, Outcome: "complete", Output: `[{"id":"` + second + `"},{"id":"` + first + `"}]`,
+	}}}
+	job := maintenanceExecutionJob(t)
+	result, _, _, _ := executeMaintenance(
+		context.Background(), executor, 1, maintenanceJournalCommand("snapshot_inventory", job.ID), job,
+		MaintenancePlan{Kind: "snapshot_inventory"}, func(MaintenancePlan) error { return nil },
+		func() time.Time { return time.Date(2026, 9, 12, 9, 0, 0, 0, time.UTC) },
+	)
+
+	if result.Status != "complete" || result.ResultCode != "success" || result.SnapshotEvidence == nil {
+		t.Fatalf("inventory result: %+v", result)
+	}
+	if result.SnapshotEvidence.Scope != "repository" || result.SnapshotEvidence.SnapshotCount != 2 || result.SnapshotEvidence.ChunkCount != 1 {
+		t.Fatalf("inventory manifest: %+v", result.SnapshotEvidence)
+	}
+	if !reflect.DeepEqual(result.SnapshotEvidenceIDs, []string{first, second}) || executor.requests[0].Operation != "snapshots" {
+		t.Fatalf("inventory ids=%v requests=%+v", result.SnapshotEvidenceIDs, executor.requests)
+	}
 }
 
 func TestForgetResumesThePersistedFixedPlanWithoutRecomputingPolicy(t *testing.T) {
@@ -211,6 +238,14 @@ func TestMaintenanceRuntimeClearsOnlyAfterCentralConfirmationAndRotatesSuccessfu
 	if runtime.state.Maintenance[job.Repository.ID].NextDataPart != 2 {
 		t.Fatalf("data rotation: %+v", runtime.state.Maintenance[job.Repository.ID])
 	}
+	runtime.state.Maintenance[job.Repository.ID] = MaintenanceRuntime{Unresolved: true}
+	runtime.recordOutcomeLocked(job, CommandResult{
+		RunKind: "snapshot_inventory", Status: "complete", ResultCode: "success",
+		SnapshotEvidence: &SnapshotEvidence{Scope: "repository"},
+	})
+	if runtime.state.Maintenance[job.Repository.ID].Unresolved {
+		t.Fatal("a verified full inventory did not clear local repository uncertainty")
+	}
 }
 
 func TestInterruptedMaintenanceRelistsFixedForgetPlansAndLeavesOtherOutcomesUnresolved(t *testing.T) {
@@ -310,7 +345,7 @@ func TestScheduledMaintenanceCompletesOfflineAndReplaysAfterRestart(t *testing.T
 	if err != nil || len(journal.Commands) != 0 {
 		t.Fatalf("replayed journal: %+v %v", journal, err)
 	}
-	if len(received) != 2 || received[0].RunKind != "forget" || received[1].RunKind != "forget" || received[1].Kind != "run_finished" {
+	if len(received) != 3 || received[0].RunKind != "forget" || received[1].Kind != "snapshot_inventory_chunk" || received[2].Kind != "run_finished" {
 		t.Fatalf("replayed events: %+v", received)
 	}
 }

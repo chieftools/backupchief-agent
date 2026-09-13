@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -96,7 +97,22 @@ func executeMaintenance(
 			result.Summary = "Retention was skipped because no complete recovery point is available."
 			return finish(result)
 		}
-		return executeForget(runContext, run, request, result, job, proof, plan, persistPlan, finish)
+		return executeForget(runContext, run, request, result, job, proof, plan, persistPlan, finish, now)
+	case "snapshot_inventory":
+		request.Operation = "snapshots"
+		response := run(request)
+		inventory, ok := parseSnapshotInventory(response)
+		if !ok {
+			result = maintenanceResult(result, response, runContext, "Snapshot inventory completed.")
+			return finish(result)
+		}
+		attachSnapshotEvidence(&result, "repository", snapshotIDs(inventory), now())
+		statistics := RunStatistics{"snapshots_reported": len(inventory)}
+		result.Status = "complete"
+		result.ResultCode = "success"
+		result.Statistics = &statistics
+		result.Summary = "Snapshot inventory verified."
+		return finish(result)
 	case "prune":
 		if job.Retention.HasUnresolvedRuns {
 			result.Status = "skipped"
@@ -158,6 +174,7 @@ func executeForget(
 	plan MaintenancePlan,
 	persistPlan func(MaintenancePlan) error,
 	finish func(CommandResult) (CommandResult, []byte, bool, uint64),
+	now func() time.Time,
 ) (CommandResult, []byte, bool, uint64) {
 	request.Operation = "snapshots"
 	inventoryResult := run(request)
@@ -166,9 +183,11 @@ func executeForget(
 		result = maintenanceResult(result, inventoryResult, ctx, "Snapshot inventory completed.")
 		return finish(result)
 	}
+	inventoryObservedAt := now()
 	protected := stringSet(proof.SnapshotIDs)
 	for snapshotID := range protected {
 		if _, exists := inventory[snapshotID]; !exists {
+			attachSnapshotEvidence(&result, "repository", snapshotIDs(inventory), inventoryObservedAt)
 			result.Status = "skipped"
 			result.ResultCode = "recovery_point_unavailable"
 			result.Summary = "Retention was skipped because the latest complete recovery point is missing."
@@ -220,6 +239,7 @@ func executeForget(
 	}
 
 	if len(candidateIDs) == 0 {
+		attachSnapshotEvidence(&result, "repository", snapshotIDs(inventory), inventoryObservedAt)
 		result.Status = "complete"
 		result.ResultCode = "success"
 		result.Statistics = maintenanceStatistics(len(inventory), 0, 0, len(protected))
@@ -251,6 +271,7 @@ func executeForget(
 	afterResult := run(request)
 	after, listed := parseSnapshotInventory(afterResult)
 	if !listed {
+		attachSnapshotEvidence(&result, "candidates", candidateIDs, now())
 		result.Status = "unresolved"
 		result.ResultCode = "outcome_unresolved"
 		result.Summary = "Retention changed repository metadata but its final snapshot state could not be verified."
@@ -263,6 +284,7 @@ func executeForget(
 		}
 	}
 	removed := len(candidateIDs) - remaining
+	attachSnapshotEvidence(&result, "repository", snapshotIDs(after), now())
 	result.Statistics = maintenanceStatistics(considered, len(candidateIDs), remaining, len(protected))
 	if remaining == 0 {
 		result.Status = "complete"
@@ -285,6 +307,30 @@ func executeForget(
 	result.ResultCode = "execution_failed"
 	result.Summary = "Retention did not remove its selected snapshots."
 	return finish(result)
+}
+
+func snapshotIDs(inventory map[string]bool) []string {
+	result := make([]string, 0, len(inventory))
+	for snapshotID := range inventory {
+		result = append(result, snapshotID)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func attachSnapshotEvidence(result *CommandResult, scope string, snapshotIDs []string, observedAt time.Time) {
+	ids := append([]string(nil), snapshotIDs...)
+	sort.Strings(ids)
+	digestInput := strings.Join(ids, "\n")
+	if len(ids) > 0 {
+		digestInput += "\n"
+	}
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(digestInput)))
+	result.SnapshotEvidence = &SnapshotEvidence{
+		Scope: scope, ObservedAt: protocolTimestamp(observedAt), SnapshotCount: len(ids),
+		ChunkCount: (len(ids) + snapshotEvidenceChunkSize - 1) / snapshotEvidenceChunkSize, SHA256: digest,
+	}
+	result.SnapshotEvidenceIDs = ids
 }
 
 func snapshotRecords(result restic.Result) []repositorySnapshot {
@@ -343,7 +389,7 @@ func maintenanceTimeout(kind string) time.Duration {
 		return 30 * time.Minute
 	case "prune":
 		return 6 * time.Hour
-	case "check_metadata":
+	case "check_metadata", "snapshot_inventory":
 		return time.Hour
 	default:
 		return 12 * time.Hour

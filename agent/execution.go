@@ -229,6 +229,9 @@ func terminalEventPayload(result CommandResult) map[string]any {
 	if len(result.Artifacts) > 0 {
 		payload["artifacts"] = result.Artifacts
 	}
+	if result.SnapshotEvidence != nil {
+		payload["snapshot_evidence"] = result.SnapshotEvidence
+	}
 	return payload
 }
 

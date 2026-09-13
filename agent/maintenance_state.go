@@ -66,6 +66,11 @@ func (daemon *daemon) recordOutcomeLocked(job Job, result CommandResult) {
 		runtimeState.UnresolvedConfirmed = false
 		runtimeState.UnresolvedAtRevision = daemon.metadata.Revision
 	}
+	if result.RunKind == "snapshot_inventory" && result.Status == "complete" && result.ResultCode == "success" && result.SnapshotEvidence != nil && result.SnapshotEvidence.Scope == "repository" {
+		runtimeState.Unresolved = false
+		runtimeState.UnresolvedConfirmed = false
+		runtimeState.UnresolvedAtRevision = 0
+	}
 	if result.RunKind == "check_data" && result.Status == "complete" && result.ResultCode == "success" {
 		parts := job.Integrity.DataParts
 		part := uint64(1)
