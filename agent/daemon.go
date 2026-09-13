@@ -283,21 +283,21 @@ func runStandalone(ctx context.Context, options RunOptions) error {
 					continue
 				}
 				if due {
-					go runStandaloneBackup(ctx, executor, config.Host.Name, job, options.Now)
+					go runStandaloneBackup(ctx, executor, options.Store.stateDirectory(), config.Host.Name, job, options.Now)
 				}
 			}
 		}
 	}
 }
 
-func runStandaloneBackup(ctx context.Context, executor BackupExecutor, host string, job Job, now func() time.Time) {
+func runStandaloneBackup(ctx context.Context, executor BackupExecutor, stateDirectory, host string, job Job, now func() time.Time) {
 	runID, err := newULID(now())
 	if err != nil {
 		log.Printf("backupchief: cannot create run id for job %s: %v", job.Key, err)
 		return
 	}
 	command := &JournalCommand{RunID: runID}
-	result, _, _, _ := executeBackup(ctx, executor, host, 0, command, job, now)
+	result, _, _, _ := executeBackup(ctx, executor, stateDirectory, host, 0, command, job, now)
 	log.Printf("backupchief: job %s finished %s/%s: %s", job.Key, result.Status, result.ResultCode, result.Summary)
 }
 

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -27,7 +28,7 @@ var mysqlSystemDatabases = map[string]bool{
 
 var portableMySQLFilenamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
-func executeMySQLBackup(ctx context.Context, executor BackupExecutor, serverID string, generation uint64, command *JournalCommand, job Job, now func() time.Time) (CommandResult, []byte, bool, uint64) {
+func executeMySQLBackup(ctx context.Context, executor BackupExecutor, stateDirectory, serverID string, generation uint64, command *JournalCommand, job Job, now func() time.Time) (CommandResult, []byte, bool, uint64) {
 	startedAt := now()
 	result := CommandResult{Generation: generation, RunID: command.RunID, JobID: job.ID, RunKind: "backup", StartedAt: protocolTimestamp(startedAt), SnapshotIDs: []string{}, Artifacts: []BackupArtifact{}}
 	mysql := job.Source.MySQL
@@ -41,14 +42,14 @@ func executeMySQLBackup(ctx context.Context, executor BackupExecutor, serverID s
 		return failedMySQLResult(result, "tool_unavailable", "The mysql and mysqldump tools are required on this server.", now)
 	}
 
-	optionFile, cleanup, err := mysqlOptionFile(*mysql)
-	if err != nil {
-		return failedMySQLResult(result, "execution_failed", "Could not prepare private MySQL credentials.", now)
-	}
-	defer cleanup()
-
 	databases := append([]string{}, mysql.Databases...)
 	if mysql.SelectionMode == "all_accessible" {
+		optionFile, cleanup, err := mysqlOptionFile(*mysql, stateDirectory)
+		if err != nil {
+			return failedMySQLResult(result, "execution_failed", "Could not prepare private MySQL credentials.", now)
+		}
+		defer cleanup()
+
 		databases, err = discoverMySQLDatabases(ctx, mysqlBinary, optionFile)
 		if err != nil {
 			return failedMySQLResult(result, "source_authentication_failed", "Could not discover accessible MySQL databases.", now)
@@ -152,8 +153,8 @@ func mysqlOptionContents(source MySQLSource) string {
 	return "[client]\nhost=\"" + escape(source.Host) + "\"\nport=" + strconv.Itoa(int(source.Port)) + "\nuser=\"" + escape(source.Username) + "\"\npassword=\"" + escape(source.Password) + "\"\nprotocol=tcp\n"
 }
 
-func mysqlOptionFile(source MySQLSource) (string, func(), error) {
-	directory, err := os.MkdirTemp("", "backupchief-mysql-")
+func mysqlOptionFile(source MySQLSource, stateDirectory string) (string, func(), error) {
+	directory, err := os.MkdirTemp(stateDirectory, "mysql-")
 	if err != nil {
 		return "", func() {}, err
 	}
@@ -161,7 +162,7 @@ func mysqlOptionFile(source MySQLSource) (string, func(), error) {
 		_ = os.RemoveAll(directory)
 		return "", func() {}, err
 	}
-	path := directory + "/client.cnf"
+	path := filepath.Join(directory, "client.cnf")
 	if err = os.WriteFile(path, []byte(mysqlOptionContents(source)), 0600); err != nil {
 		_ = os.RemoveAll(directory)
 		return "", func() {}, err
@@ -173,12 +174,15 @@ func discoverMySQLDatabases(ctx context.Context, binary, optionFile string) ([]s
 	query := "SELECT HEX(SCHEMA_NAME) FROM INFORMATION_SCHEMA.SCHEMATA ORDER BY SCHEMA_NAME"
 	command := exec.CommandContext(ctx, binary, "--defaults-extra-file="+optionFile, "--batch", "--skip-column-names", "--execute="+query)
 	command.Env = []string{"PATH=/usr/bin:/bin:/usr/local/bin:/usr/local/mysql/bin", "LANG=C"}
-	output, err := command.Output()
-	if err != nil {
-		return nil, err
+	var output bytes.Buffer
+	var stderr inspectionOutput
+	command.Stdout = &output
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		return nil, commandFailure("mysql", err, stderr.String())
 	}
 	databases := []string{}
-	scanner := bufio.NewScanner(bytes.NewReader(output))
+	scanner := bufio.NewScanner(bytes.NewReader(output.Bytes()))
 	for scanner.Scan() {
 		decoded, decodeErr := hex.DecodeString(strings.TrimSpace(scanner.Text()))
 		if decodeErr != nil {
@@ -194,6 +198,36 @@ func discoverMySQLDatabases(ctx context.Context, binary, optionFile string) ([]s
 	}
 	sort.Strings(databases)
 	return databases, nil
+}
+
+type inspectionOutput struct {
+	value []byte
+}
+
+func (output *inspectionOutput) Write(value []byte) (int, error) {
+	const maximum = 8 << 10
+
+	remaining := maximum - len(output.value)
+	if remaining > 0 {
+		if len(value) < remaining {
+			remaining = len(value)
+		}
+		output.value = append(output.value, value[:remaining]...)
+	}
+
+	return len(value), nil
+}
+
+func (output *inspectionOutput) String() string {
+	return string(output.value)
+}
+
+func commandFailure(tool string, err error, stderr string) error {
+	if detail := strings.TrimSpace(stderr); detail != "" {
+		return fmt.Errorf("%s: %s", tool, detail)
+	}
+
+	return fmt.Errorf("%s: %w", tool, err)
 }
 
 func mysqlDumpSupportsColumnStatistics(ctx context.Context, binary string) bool {

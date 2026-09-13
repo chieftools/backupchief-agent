@@ -38,6 +38,7 @@ type resticRepositoryStats struct {
 func executeBackup(
 	ctx context.Context,
 	executor BackupExecutor,
+	stateDirectory string,
 	serverID string,
 	generation uint64,
 	command *JournalCommand,
@@ -45,7 +46,7 @@ func executeBackup(
 	now func() time.Time,
 ) (CommandResult, []byte, bool, uint64) {
 	if job.Type == JobTypeMySQL {
-		return executeMySQLBackup(ctx, executor, serverID, generation, command, job, now)
+		return executeMySQLBackup(ctx, executor, stateDirectory, serverID, generation, command, job, now)
 	}
 	startedAt := now()
 	base := CommandResult{

@@ -152,7 +152,10 @@ func (daemon *daemon) advanceCommands(ctx context.Context) error {
 			continue
 		}
 		if command.Kind == "inspect_source" && state == "received" {
-			result := inspectSource(ctx, daemon.bootstrap.Generation, runID, command.Payload)
+			result := inspectSource(ctx, daemon.bootstrap.Generation, runID, daemon.store.stateDirectory(), command.Payload)
+			if result.Status == "failed" {
+				logInspectionFailure(runID, result.Failure)
+			}
 			daemon.mu.Lock()
 			if current := daemon.journal.Commands[id]; current != nil {
 				current.State = "finished"
@@ -346,7 +349,7 @@ func (daemon *daemon) startBackup(ctx context.Context, commandID string, job Job
 func (daemon *daemon) runBackup(ctx context.Context, commandID, runID string, job Job) {
 	defer daemon.activeWG.Done()
 	result, log, truncated, dropped := executeBackup(
-		ctx, daemon.executor, daemon.bootstrap.ServerID, daemon.bootstrap.Generation,
+		ctx, daemon.executor, daemon.store.stateDirectory(), daemon.bootstrap.ServerID, daemon.bootstrap.Generation,
 		daemon.journalCommand(commandID), job, daemon.now,
 	)
 	if ctx.Err() == nil {

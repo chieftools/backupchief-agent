@@ -202,33 +202,40 @@ type SnapshotEvidence struct {
 }
 
 type CommandResult struct {
-	Generation          uint64            `json:"generation"`
-	RunID               string            `json:"run_id"`
-	JobID               string            `json:"job_id,omitempty"`
-	RunKind             string            `json:"run_kind,omitempty"`
-	Status              string            `json:"status"`
-	ResultCode          string            `json:"result_code"`
-	StartedAt           string            `json:"started_at,omitempty"`
-	FinishedAt          string            `json:"finished_at,omitempty"`
-	SnapshotIDs         []string          `json:"snapshot_ids"`
-	Statistics          *RunStatistics    `json:"statistics,omitempty"`
-	Summary             string            `json:"summary,omitempty"`
-	RepositoryBytes     *uint64           `json:"repository_bytes,omitempty"`
-	Artifacts           []BackupArtifact  `json:"artifacts,omitempty"`
-	Databases           []string          `json:"databases,omitempty"`
-	Tools               map[string]any    `json:"tools,omitempty"`
-	SnapshotEvidence    *SnapshotEvidence `json:"snapshot_evidence,omitempty"`
-	SnapshotEvidenceIDs []string          `json:"-"`
+	Generation          uint64                   `json:"generation"`
+	RunID               string                   `json:"run_id"`
+	JobID               string                   `json:"job_id,omitempty"`
+	RunKind             string                   `json:"run_kind,omitempty"`
+	Status              string                   `json:"status"`
+	ResultCode          string                   `json:"result_code"`
+	StartedAt           string                   `json:"started_at,omitempty"`
+	FinishedAt          string                   `json:"finished_at,omitempty"`
+	SnapshotIDs         []string                 `json:"snapshot_ids"`
+	Statistics          *RunStatistics           `json:"statistics,omitempty"`
+	Summary             string                   `json:"summary,omitempty"`
+	RepositoryBytes     *uint64                  `json:"repository_bytes,omitempty"`
+	Artifacts           []BackupArtifact         `json:"artifacts,omitempty"`
+	Databases           []string                 `json:"databases,omitempty"`
+	Tools               map[string]any           `json:"tools,omitempty"`
+	Failure             *SourceInspectionFailure `json:"failure,omitempty"`
+	SnapshotEvidence    *SnapshotEvidence        `json:"snapshot_evidence,omitempty"`
+	SnapshotEvidenceIDs []string                 `json:"-"`
+}
+
+type SourceInspectionFailure struct {
+	Stage  string `json:"stage"`
+	Detail string `json:"detail"`
 }
 
 type sourceInspectionResult struct {
-	Generation uint64         `json:"generation"`
-	RunID      string         `json:"run_id"`
-	Status     string         `json:"status"`
-	ResultCode string         `json:"result_code"`
-	Summary    string         `json:"summary"`
-	Databases  []string       `json:"databases,omitempty"`
-	Tools      map[string]any `json:"tools,omitempty"`
+	Generation uint64                   `json:"generation"`
+	RunID      string                   `json:"run_id"`
+	Status     string                   `json:"status"`
+	ResultCode string                   `json:"result_code"`
+	Summary    string                   `json:"summary"`
+	Databases  []string                 `json:"databases,omitempty"`
+	Tools      map[string]any           `json:"tools,omitempty"`
+	Failure    *SourceInspectionFailure `json:"failure,omitempty"`
 }
 
 type BackupArtifact struct {

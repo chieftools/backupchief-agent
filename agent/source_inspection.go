@@ -4,24 +4,31 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"log"
 	"os"
 	"os/exec"
+	"strings"
+	"unicode"
 )
 
-func inspectSource(ctx context.Context, generation uint64, runID string, payload CommandPayload) CommandResult {
+func inspectSource(ctx context.Context, generation uint64, runID, stateDirectory string, payload CommandPayload) CommandResult {
 	result := CommandResult{
 		Generation: generation,
 		RunID:      runID,
 		Status:     "failed",
 		ResultCode: "execution_failed",
 		Summary:    "The source inspection failed.",
+		Failure:    inspectionFailure("unknown", "The inspection ended before a more specific cause was recorded."),
 	}
 	encoded, err := json.Marshal(payload.Source)
 	if err != nil {
+		result.Failure = inspectionFailure("source_validation", fmt.Sprintf("encode source payload: %v", err))
 		return result
 	}
 	var source sourceDocument
 	if err := json.Unmarshal(encoded, &source); err != nil {
+		result.Failure = inspectionFailure("source_validation", fmt.Sprintf("decode source payload: %v", err))
 		return result
 	}
 	if payload.Type == "file" {
@@ -29,14 +36,21 @@ func inspectSource(ctx context.Context, generation uint64, runID string, payload
 		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			result.ResultCode = "invalid_root"
 			result.Summary = "The source root is missing, inaccessible, not a directory, or a symlink."
+			detail := fmt.Sprintf("inspect source root %q: it is not a directory or is a symlink", source.Root)
+			if err != nil {
+				detail = fmt.Sprintf("inspect source root %q: %v", source.Root, err)
+			}
+			result.Failure = inspectionFailure("source_access", detail)
 			return result
 		}
 		result.Status = "complete"
 		result.ResultCode = "success"
 		result.Summary = "The source directory is available."
+		result.Failure = nil
 		return result
 	}
 	if payload.Type != "mysql" || source.Selection == nil || source.Dump == nil {
+		result.Failure = inspectionFailure("source_validation", "The source type or required source fields are not supported by this agent.")
 		return result
 	}
 	mysql := MySQLSource{
@@ -47,6 +61,7 @@ func inspectSource(ctx context.Context, generation uint64, runID string, payload
 	}
 	if err := validateMySQLSource(JobSource{MySQL: &mysql}); err != nil {
 		result.Summary = "The MySQL source configuration is invalid."
+		result.Failure = inspectionFailure("source_validation", err.Error(), mysql.Password)
 		return result
 	}
 	mysqlBinary, mysqlErr := resolveExternalTool("mysql")
@@ -55,10 +70,12 @@ func inspectSource(ctx context.Context, generation uint64, runID string, payload
 		result.ResultCode = "tool_unavailable"
 		result.Summary = "Executable mysql and mysqldump client tools are required."
 		result.Tools = map[string]any{"mysql": probeExternalTool("mysql"), "mysqldump": probeExternalTool("mysqldump")}
+		result.Failure = inspectionFailure("tool_check", toolResolutionDetail(mysqlErr, dumpErr))
 		return result
 	}
-	optionFile, cleanup, err := mysqlOptionFile(mysql)
+	optionFile, cleanup, err := mysqlOptionFile(mysql, stateDirectory)
 	if err != nil {
+		result.Failure = inspectionFailure("credential_setup", fmt.Sprintf("prepare private MySQL credentials: %v", err), mysql.Password)
 		return result
 	}
 	defer cleanup()
@@ -66,6 +83,7 @@ func inspectSource(ctx context.Context, generation uint64, runID string, payload
 	if err != nil {
 		result.ResultCode = "source_authentication_failed"
 		result.Summary = "MySQL rejected the connection or database discovery query."
+		result.Failure = inspectionFailure("database_discovery", err.Error(), mysql.Password)
 		return result
 	}
 	testDatabase := ""
@@ -78,6 +96,7 @@ func inspectSource(ctx context.Context, generation uint64, runID string, payload
 		result.ResultCode = "source_authentication_failed"
 		result.Summary = "No accessible databases were discovered."
 		result.Databases = discovered
+		result.Failure = inspectionFailure("database_discovery", "MySQL returned no accessible non-system databases.", mysql.Password)
 		return result
 	}
 	arguments := []string{"--defaults-extra-file=" + optionFile, "--no-data", "--single-transaction", "--quick", "--skip-lock-tables", "--no-tablespaces"}
@@ -89,10 +108,13 @@ func inspectSource(ctx context.Context, generation uint64, runID string, payload
 	command := exec.CommandContext(ctx, dumpBinary, arguments...)
 	command.Env = []string{"PATH=/usr/bin:/bin:/usr/local/bin:/usr/local/mysql/bin", "LANG=C"}
 	command.Stdout = &bytes.Buffer{}
+	var stderr inspectionOutput
+	command.Stderr = &stderr
 	if err := command.Run(); err != nil {
 		result.ResultCode = "source_authentication_failed"
 		result.Summary = "mysqldump could not produce a schema-only test dump."
 		result.Databases = discovered
+		result.Failure = inspectionFailure("dump_test", commandFailure("mysqldump", err, stderr.String()).Error(), mysql.Password)
 		return result
 	}
 	result.Status = "complete"
@@ -100,5 +122,47 @@ func inspectSource(ctx context.Context, generation uint64, runID string, payload
 	result.Summary = "MySQL credentials and a schema-only dump were verified."
 	result.Databases = discovered
 	result.Tools = map[string]any{"mysql": probeExternalTool("mysql"), "mysqldump": probeExternalTool("mysqldump")}
+	result.Failure = nil
 	return result
+}
+
+func inspectionFailure(stage, detail string, secrets ...string) *SourceInspectionFailure {
+	for _, secret := range secrets {
+		if secret != "" {
+			detail = strings.ReplaceAll(detail, secret, "[redacted]")
+		}
+	}
+	detail = strings.Map(func(value rune) rune {
+		if unicode.IsControl(value) {
+			return ' '
+		}
+		return value
+	}, detail)
+	detail = strings.Join(strings.Fields(detail), " ")
+	if detail == "" {
+		detail = "No technical detail was returned."
+	}
+	runes := []rune(detail)
+	if len(runes) > 1000 {
+		detail = string(runes[:1000])
+	}
+
+	return &SourceInspectionFailure{Stage: stage, Detail: detail}
+}
+
+func toolResolutionDetail(mysqlErr, dumpErr error) string {
+	details := []string{}
+	if mysqlErr != nil {
+		details = append(details, "mysql: "+mysqlErr.Error())
+	}
+	if dumpErr != nil {
+		details = append(details, "mysqldump: "+dumpErr.Error())
+	}
+	return strings.Join(details, "; ")
+}
+
+func logInspectionFailure(runID string, failure *SourceInspectionFailure) {
+	if failure != nil {
+		log.Printf("backupchief: source inspection %s failed at %s: %s", runID, failure.Stage, failure.Detail)
+	}
 }

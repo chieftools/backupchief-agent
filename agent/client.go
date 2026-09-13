@@ -327,6 +327,15 @@ func (client *Client) SubmitResult(ctx context.Context, commandID string, result
 }
 
 func (client *Client) SubmitInspectionResult(ctx context.Context, commandID string, result CommandResult) error {
+	failure := result.Failure
+	if result.Status != "failed" || !protocolRevisionSupports(client.selectedProtocolRevision(), "1.2.0") {
+		failure = nil
+	} else if failure == nil {
+		failure = &SourceInspectionFailure{
+			Stage:  "unknown",
+			Detail: "This inspection completed before detailed failure reporting was available.",
+		}
+	}
 	return client.postJSON(ctx, "/commands/"+commandID+"/result", sourceInspectionResult{
 		Generation: result.Generation,
 		RunID:      result.RunID,
@@ -335,6 +344,7 @@ func (client *Client) SubmitInspectionResult(ctx context.Context, commandID stri
 		Summary:    result.Summary,
 		Databases:  result.Databases,
 		Tools:      result.Tools,
+		Failure:    failure,
 	})
 }
 

@@ -130,7 +130,7 @@ func TestInspectionResultUsesItsDedicatedWireShape(t *testing.T) {
 		if payload["status"] != "complete" || payload["summary"] != "Synthetic source verified." {
 			t.Fatalf("inspection payload: %#v", payload)
 		}
-		for _, unexpected := range []string{"job_id", "run_kind", "started_at", "finished_at", "snapshot_ids", "statistics", "artifacts"} {
+		for _, unexpected := range []string{"job_id", "run_kind", "started_at", "finished_at", "snapshot_ids", "statistics", "artifacts", "failure"} {
 			if _, exists := payload[unexpected]; exists {
 				t.Fatalf("inspection payload contains %s: %#v", unexpected, payload)
 			}
@@ -150,6 +150,57 @@ func TestInspectionResultUsesItsDedicatedWireShape(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestInspectionFailureUsesTheNegotiatedWireShape(t *testing.T) {
+	tests := []struct {
+		name          string
+		revision      string
+		failure       *SourceInspectionFailure
+		wantStage     string
+		wantNoFailure bool
+	}{
+		{name: "protocol 1.2", revision: "1.2.0", failure: &SourceInspectionFailure{Stage: "dump_test", Detail: "Synthetic dump failure."}, wantStage: "dump_test"},
+		{name: "protocol 1.1", revision: "1.1.0", failure: &SourceInspectionFailure{Stage: "dump_test", Detail: "Synthetic dump failure."}, wantNoFailure: true},
+		{name: "upgraded journal", revision: "1.2.0", wantStage: "unknown"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			commandID := "01k4p4f7m1r9d3t6v8w2x5y7za"
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				response.Header().Set(ProtocolHeader, test.revision)
+				var payload map[string]any
+				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+					t.Fatal(err)
+				}
+				failure, exists := payload["failure"].(map[string]any)
+				if test.wantNoFailure {
+					if exists {
+						t.Fatalf("legacy payload contains failure: %#v", payload)
+					}
+				} else if !exists || failure["stage"] != test.wantStage || failure["detail"] == "" {
+					t.Fatalf("failure payload: %#v", payload)
+				}
+				response.WriteHeader(http.StatusNoContent)
+			}))
+			defer server.Close()
+			client := NewClient(server.URL, testBootstrap().Credential, "1.2.3-test", server.Client())
+			client.selectProtocolRevision(test.revision)
+
+			err := client.SubmitInspectionResult(context.Background(), commandID, CommandResult{
+				Generation: 1,
+				RunID:      "01k4p4k2n8d3r6t9v1w5x7yabc",
+				Status:     "failed",
+				ResultCode: "source_authentication_failed",
+				Summary:    "Synthetic source check failed.",
+				Failure:    test.failure,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

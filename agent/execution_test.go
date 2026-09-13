@@ -52,7 +52,7 @@ func TestExecuteBackupPassesLiteralSelectionAndParsesSummary(t *testing.T) {
 	job := executionJob(root)
 	now := time.Date(2026, 7, 8, 9, 10, 11, 0, time.UTC)
 
-	result, _, _, _ := executeBackup(context.Background(), executor, "01k4p4f7m1r9d3t6v8w2x5y7ze", 1, command, job, func() time.Time { return now })
+	result, _, _, _ := executeBackup(context.Background(), executor, t.TempDir(), "01k4p4f7m1r9d3t6v8w2x5y7ze", 1, command, job, func() time.Time { return now })
 
 	if result.Status != "complete" || result.ResultCode != "success" || result.Statistics == nil || (*result.Statistics)["source_files"] != uint64(6) || (*result.Statistics)["stored_bytes"] != uint64(1024) || !reflect.DeepEqual(result.SnapshotIDs, []string{snapshotID}) {
 		t.Fatalf("result: %+v", result)
@@ -96,7 +96,7 @@ func TestExecuteMySQLBackupStreamsOneDatabaseIntoRestic(t *testing.T) {
 	job.Source = JobSource{MySQL: &MySQLSource{Host: "mysql.example.test", Port: 3306, Username: "synthetic_reader", Password: "synthetic-secret", SelectionMode: "selected", Databases: []string{"synthetic_app"}, CustomFlags: []string{"--hex-blob"}}}
 	now := func() time.Time { return time.Date(2026, 9, 13, 8, 30, 0, 0, time.UTC) }
 
-	result, _, _, _ := executeBackup(context.Background(), executor, "01k4p4f7m1r9d3t6v8w2x5y7ze", 1, command, job, now)
+	result, _, _, _ := executeBackup(context.Background(), executor, t.TempDir(), "01k4p4f7m1r9d3t6v8w2x5y7ze", 1, command, job, now)
 
 	if result.Status != "complete" || result.ResultCode != "success" || len(result.Artifacts) != 1 || result.Artifacts[0].Database != "synthetic_app" || result.Artifacts[0].Filename != "synthetic_app.sql" || result.Artifacts[0].SnapshotID != snapshotID {
 		t.Fatalf("result: %+v", result)
@@ -151,7 +151,7 @@ func TestExecuteBackupClassifiesEmptyPartialAndInvalidRoots(t *testing.T) {
 				Outcome:  "complete",
 				Output:   `{"message_type":"summary","total_files_processed":` + string(rune('0'+test.files)) + `,"snapshot_id":"` + snapshotID + `"}`,
 			}}
-			result, _, _, _ := executeBackup(context.Background(), executor, command.RunID, 1, command, executionJob(root), now)
+			result, _, _, _ := executeBackup(context.Background(), executor, t.TempDir(), command.RunID, 1, command, executionJob(root), now)
 			if result.Status != test.wantStatus || result.ResultCode != test.wantCode {
 				t.Fatalf("result: %+v", result)
 			}
@@ -160,7 +160,7 @@ func TestExecuteBackupClassifiesEmptyPartialAndInvalidRoots(t *testing.T) {
 
 	missing := filepath.Join(t.TempDir(), "missing")
 	executor := &recordingExecutor{}
-	result, _, _, _ := executeBackup(context.Background(), executor, command.RunID, 1, command, executionJob(missing), now)
+	result, _, _, _ := executeBackup(context.Background(), executor, t.TempDir(), command.RunID, 1, command, executionJob(missing), now)
 	if result.ResultCode != "invalid_root" || len(executor.requests) != 0 {
 		t.Fatalf("missing root: %+v requests=%d", result, len(executor.requests))
 	}
@@ -170,7 +170,7 @@ func TestExecuteBackupClassifiesEmptyPartialAndInvalidRoots(t *testing.T) {
 	if err := os.Symlink(target, symlink); err != nil {
 		t.Fatal(err)
 	}
-	result, _, _, _ = executeBackup(context.Background(), executor, command.RunID, 1, command, executionJob(symlink), now)
+	result, _, _, _ = executeBackup(context.Background(), executor, t.TempDir(), command.RunID, 1, command, executionJob(symlink), now)
 	if result.ResultCode != "invalid_root" || len(executor.requests) != 0 {
 		t.Fatalf("symlink root: %+v requests=%d", result, len(executor.requests))
 	}
