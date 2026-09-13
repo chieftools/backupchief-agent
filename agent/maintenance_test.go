@@ -80,6 +80,68 @@ func TestForgetPersistsAProtectedFixedSnapshotPlanBeforeRemoval(t *testing.T) {
 	}
 }
 
+func TestCombinedRetentionRunsPruneWhenDueAndRecordsItsCompletion(t *testing.T) {
+	remove := strings.Repeat("8", 64)
+	protected := strings.Repeat("9", 64)
+	executor := &scriptedMaintenanceExecutor{results: []restic.Result{
+		{ExitCode: 0, Outcome: "complete", Output: `[{"id":"` + remove + `"},{"id":"` + protected + `"}]`},
+		{ExitCode: 0, Outcome: "complete", Output: `[{"remove":[{"id":"` + remove + `"}]}]`},
+		{ExitCode: 0, Outcome: "complete"},
+		{ExitCode: 0, Outcome: "complete", Output: `[{"id":"` + protected + `"}]`},
+		{ExitCode: 0, Outcome: "complete"},
+	}}
+	job := maintenanceExecutionJob(t)
+	job.Maintenance = JobMaintenance{Strategy: "after_scheduled_backup", MaxDeferralSeconds: 86400, PruneIntervalSeconds: 604800}
+	job.Retention.Daily = 1
+	job.Retention.LatestComplete = &CompleteSnapshotProof{
+		RunID: "01k4p4f7m1r9d3t6v8w2x5y7zd", FinishedAt: "2026-09-10T08:00:00.000000Z", SnapshotIDs: []string{protected},
+	}
+	plan := MaintenancePlan{Kind: "forget", CombinedRetention: true, PruneAfterForget: true}
+	persisted := plan
+
+	result, _, _, _ := executeMaintenance(
+		context.Background(), executor, 1, maintenanceJournalCommand("forget", job.ID), job, &plan,
+		func(updated MaintenancePlan) error { persisted = updated; return nil },
+		func() time.Time { return time.Date(2026, 9, 11, 8, 0, 0, 0, time.UTC) },
+	)
+
+	if result.Status != "complete" || result.ResultCode != "success" || !result.PruneCompleted || result.Statistics == nil {
+		t.Fatalf("combined retention result: %+v", result)
+	}
+	if (*result.Statistics)["prune_status"] != "complete" || !persisted.ForgetPlanned || !persisted.PruneStarted || !persisted.PruneCompleted {
+		t.Fatalf("combined retention state: statistics=%+v plan=%+v", *result.Statistics, persisted)
+	}
+	if len(executor.requests) != 5 || executor.requests[4].Operation != "prune" {
+		t.Fatalf("combined retention requests: %+v", executor.requests)
+	}
+}
+
+func TestCombinedRetentionLeavesPruneDueAfterAPhaseFailure(t *testing.T) {
+	protected := strings.Repeat("7", 64)
+	executor := &scriptedMaintenanceExecutor{results: []restic.Result{
+		{ExitCode: 0, Outcome: "complete", Output: `[{"id":"` + protected + `"}]`},
+		{ExitCode: 0, Outcome: "complete", Output: `[]`},
+		{ExitCode: 11, Outcome: "locked"},
+		{ExitCode: 11, Outcome: "locked"},
+	}}
+	job := maintenanceExecutionJob(t)
+	job.Maintenance = JobMaintenance{Strategy: "after_scheduled_backup", MaxDeferralSeconds: 86400, PruneIntervalSeconds: 604800}
+	job.Retention.Daily = 1
+	job.Retention.LatestComplete = &CompleteSnapshotProof{
+		RunID: "01k4p4f7m1r9d3t6v8w2x5y7ze", FinishedAt: "2026-09-10T08:00:00.000000Z", SnapshotIDs: []string{protected},
+	}
+	plan := MaintenancePlan{Kind: "forget", CombinedRetention: true, PruneAfterForget: true}
+
+	result, _, _, _ := executeMaintenance(
+		context.Background(), executor, 1, maintenanceJournalCommand("forget", job.ID), job, &plan,
+		func(MaintenancePlan) error { return nil }, time.Now,
+	)
+
+	if result.Status != "failed" || result.ResultCode != "repository_locked" || result.PruneCompleted || result.Statistics == nil || (*result.Statistics)["prune_status"] != "failed" {
+		t.Fatalf("failed prune phase result: %+v", result)
+	}
+}
+
 func TestSnapshotInventoryReportsTheExactRepositoryState(t *testing.T) {
 	first := strings.Repeat("4", 64)
 	second := strings.Repeat("5", 64)
@@ -298,6 +360,58 @@ func TestMaintenanceRuntimeClearsOnlyAfterCentralConfirmationAndRotatesSuccessfu
 	})
 	if runtime.state.Maintenance[job.Repository.ID].Unresolved {
 		t.Fatal("a verified full inventory did not clear local repository uncertainty")
+	}
+}
+
+func TestCombinedRetentionPersistsTheWeeklyPruneCadence(t *testing.T) {
+	store := newAgentTestStore(t)
+	job := maintenanceExecutionJob(t)
+	job.Maintenance = JobMaintenance{Strategy: "after_scheduled_backup", MaxDeferralSeconds: 86400, PruneIntervalSeconds: 604800}
+	now := time.Date(2026, 9, 14, 3, 0, 0, 0, time.UTC)
+	runtime := &daemon{
+		store: store,
+		now:   func() time.Time { return now },
+		state: RuntimeState{Maintenance: map[string]MaintenanceRuntime{}},
+	}
+
+	_, firstPlan := runtime.prepareMaintenanceLocked(job, maintenanceJournalCommand("forget", job.ID))
+	if firstPlan == nil || !firstPlan.CombinedRetention || !firstPlan.PruneAfterForget {
+		t.Fatalf("initial combined retention plan: %+v", firstPlan)
+	}
+	runtime.recordOutcomeLocked(job, CommandResult{
+		RunKind: "forget", Status: "complete", ResultCode: "success", FinishedAt: protocolTimestamp(now), PruneCompleted: true,
+	})
+
+	now = now.Add(6 * 24 * time.Hour)
+	_, beforeInterval := runtime.prepareMaintenanceLocked(job, maintenanceJournalCommand("forget", job.ID))
+	if beforeInterval == nil || beforeInterval.PruneAfterForget {
+		t.Fatalf("prune became due before its interval: %+v", beforeInterval)
+	}
+
+	now = now.Add(24 * time.Hour)
+	_, atInterval := runtime.prepareMaintenanceLocked(job, maintenanceJournalCommand("forget", job.ID))
+	if atInterval == nil || !atInterval.PruneAfterForget {
+		t.Fatalf("prune was not due at its interval: %+v", atInterval)
+	}
+}
+
+func TestDisablingAJobCancelsItsQueuedCatchUpBackup(t *testing.T) {
+	job := maintenanceExecutionJob(t)
+	commandID := "01k4p4f7m1r9d3t6v8w2x5y7za"
+	runtime := &daemon{
+		state: RuntimeState{Maintenance: map[string]MaintenanceRuntime{}},
+		journal: CommandJournal{Commands: map[string]*JournalCommand{
+			commandID: {
+				Command: AgentCommand{Payload: CommandPayload{JobID: job.ID}},
+				RunKind: "backup", State: "received", CatchUpBackup: true,
+			},
+		}},
+	}
+
+	_, queued := runtime.acceptMaintenanceConfigLocked(Config{Jobs: []Job{}})
+
+	if !reflect.DeepEqual(queued, []string{commandID}) {
+		t.Fatalf("queued cancellations: %v", queued)
 	}
 }
 

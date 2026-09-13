@@ -79,7 +79,7 @@
       "additionalProperties": false,
       "required": ["protocol_revision", "generation", "revision", "schema_version", "issued_at"],
       "properties": {
-		"protocol_revision": { "const": "1.3.0" },
+		"protocol_revision": { "const": "1.4.0" },
         "generation": { "type": "integer", "minimum": 1 },
         "revision": { "type": "integer", "minimum": 1 },
         "schema_version": { "const": 1 },
@@ -156,6 +156,7 @@
         "source": { "$ref": "#/$defs/file_source" },
         "repository": { "$ref": "#/$defs/repository" },
         "schedule": { "$ref": "#/$defs/cron" },
+        "maintenance": { "$ref": "#/$defs/maintenance" },
         "retention": { "$ref": "#/$defs/retention" },
         "integrity": { "$ref": "#/$defs/integrity" },
         "safety": { "$ref": "#/$defs/safety" }
@@ -178,6 +179,7 @@
 		"name": { "type": "string", "minLength": 1, "maxLength": 255 }, "type": { "const": "mysql" },
 		"enabled": { "type": "boolean", "default": true }, "source": { "$ref": "#/$defs/mysql_source" },
 		"repository": { "$ref": "#/$defs/repository" }, "schedule": { "$ref": "#/$defs/cron" },
+		"maintenance": { "$ref": "#/$defs/maintenance" },
 		"retention": { "$ref": "#/$defs/retention" }, "integrity": { "$ref": "#/$defs/integrity" }, "safety": { "$ref": "#/$defs/safety" }
 	  }
 	},
@@ -198,6 +200,7 @@
 		"name": { "type": "string", "minLength": 1, "maxLength": 255 }, "type": { "const": "postgresql" },
 		"enabled": { "type": "boolean", "default": true }, "source": { "$ref": "#/$defs/postgresql_source" },
 		"repository": { "$ref": "#/$defs/repository" }, "schedule": { "$ref": "#/$defs/cron" },
+		"maintenance": { "$ref": "#/$defs/maintenance" },
 		"retention": { "$ref": "#/$defs/retention" }, "integrity": { "$ref": "#/$defs/integrity" }, "safety": { "$ref": "#/$defs/safety" }
 	  }
 	},
@@ -223,6 +226,16 @@
         "destination": { "$ref": "#/$defs/storage_key" },
         "path": { "type": "string", "minLength": 1, "maxLength": 1024 },
         "password": { "type": "string", "minLength": 1, "maxLength": 1024 }
+      }
+    },
+    "maintenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["strategy", "max_deferral_seconds", "prune_interval_seconds"],
+      "properties": {
+        "strategy": { "const": "after_scheduled_backup" },
+        "max_deferral_seconds": { "type": "integer", "minimum": 3600, "maximum": 604800 },
+        "prune_interval_seconds": { "type": "integer", "minimum": 86400, "maximum": 2678400 }
       }
     },
     "retention": {

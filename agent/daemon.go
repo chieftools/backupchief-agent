@@ -221,7 +221,7 @@ func (daemon *daemon) reloadLocalConfig(context.Context) error {
 	}
 	logConfigWarnings(config)
 	daemon.mu.Lock()
-	cancellations, queuedMaintenance := daemon.acceptMaintenanceConfigLocked(config)
+	cancellations, queuedOperations := daemon.acceptMaintenanceConfigLocked(config)
 	daemon.config = config
 	daemon.metadata = metadata
 	daemon.mu.Unlock()
@@ -230,8 +230,8 @@ func (daemon *daemon) reloadLocalConfig(context.Context) error {
 	for _, cancelRun := range cancellations {
 		cancelRun()
 	}
-	for _, commandID := range queuedMaintenance {
-		if err := daemon.finishWithoutExecution(commandID, "cancelled", "cancelled", "Maintenance was cancelled by the accepted job configuration."); err != nil {
+	for _, commandID := range queuedOperations {
+		if err := daemon.finishWithoutExecution(commandID, "cancelled", "cancelled", "The queued operation was cancelled by the accepted job configuration."); err != nil {
 			return err
 		}
 	}
@@ -348,7 +348,7 @@ func (daemon *daemon) refreshConfig(ctx context.Context) error {
 	}
 	logConfigWarnings(config)
 	daemon.mu.Lock()
-	cancellations, queuedMaintenance := daemon.acceptMaintenanceConfigLocked(config)
+	cancellations, queuedOperations := daemon.acceptMaintenanceConfigLocked(config)
 	daemon.metadata = metadata
 	daemon.config = config
 	daemon.etag = response.ETag
@@ -366,8 +366,8 @@ func (daemon *daemon) refreshConfig(ctx context.Context) error {
 	for _, cancelRun := range cancellations {
 		cancelRun()
 	}
-	for _, commandID := range queuedMaintenance {
-		if finishErr := daemon.finishWithoutExecution(commandID, "cancelled", "cancelled", "Maintenance was cancelled by the accepted job configuration."); finishErr != nil {
+	for _, commandID := range queuedOperations {
+		if finishErr := daemon.finishWithoutExecution(commandID, "cancelled", "cancelled", "The queued operation was cancelled by the accepted job configuration."); finishErr != nil {
 			return finishErr
 		}
 	}

@@ -25,6 +25,44 @@ type schedulerExecutor struct {
 	release  <-chan struct{}
 }
 
+type maintenanceGateExecutor struct {
+	mu                 sync.Mutex
+	maintenanceStarted chan struct{}
+	releaseMaintenance <-chan struct{}
+	maintenanceOnce    sync.Once
+	backups            int
+}
+
+func (executor *maintenanceGateExecutor) Run(ctx context.Context, request restic.Request) restic.Result {
+	if request.Operation == "stats" {
+		return restic.Result{ExitCode: 0, Outcome: "complete", Output: `{"total_size":4096}`}
+	}
+	if request.Operation == "check_metadata" {
+		executor.maintenanceOnce.Do(func() { close(executor.maintenanceStarted) })
+		select {
+		case <-executor.releaseMaintenance:
+			return restic.Result{ExitCode: 0, Outcome: "complete", Output: "{\"message_type\":\"summary\",\"num_errors\":0}\n"}
+		case <-ctx.Done():
+			return restic.Result{ExitCode: 1, Outcome: "cancelled"}
+		}
+	}
+	executor.mu.Lock()
+	executor.backups++
+	executor.mu.Unlock()
+	return restic.Result{
+		ExitCode: 0,
+		Outcome:  "complete",
+		Output: `{"message_type":"summary","files_new":1,"dirs_new":1,"total_files_processed":1,` +
+			`"total_bytes_processed":128,"data_added":40,"data_added_packed":32,"snapshot_id":"` + strings.Repeat("e", 64) + `"}`,
+	}
+}
+
+func (executor *maintenanceGateExecutor) backupCount() int {
+	executor.mu.Lock()
+	defer executor.mu.Unlock()
+	return executor.backups
+}
+
 func (executor *schedulerExecutor) Run(ctx context.Context, request restic.Request) restic.Result {
 	executor.mu.Lock()
 	executor.requests = append(executor.requests, request)
@@ -174,6 +212,140 @@ func TestSchedulerRecordsOverlapInsteadOfWaitingPastTheOccurrence(t *testing.T) 
 		t.Fatalf("overlap runs: %d", overlaps)
 	}
 	close(release)
+	waitForAllScheduledRuns(t, runtime, 3)
+}
+
+func TestScheduledMaintenanceWaitsForSuccessfulBackupsAndReleasesOneItemAtATime(t *testing.T) {
+	store := newAgentTestStore(t)
+	job := deferredSchedulerJob(t)
+	job.Schedule = JobSchedule{Kind: "cron", Expression: "0 2 * * *", Timezone: "UTC"}
+	job.Retention.ForgetCron = "30 3 * * *"
+	job.Integrity.MetadataCron = "0 1 * * *"
+	job.Integrity.DataCron = "0 1 * * *"
+	now := time.Date(2026, 9, 14, 0, 59, 0, 0, time.UTC)
+	executor := &schedulerExecutor{}
+	runtime := newSchedulerDaemon(t, store, schedulerConfig(job), &now, executor)
+
+	now = time.Date(2026, 9, 14, 1, 0, 0, 0, time.UTC)
+	if err := runtime.scheduleBackups(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if executor.count() != 0 {
+		t.Fatalf("maintenance ran before a backup: %d", executor.count())
+	}
+
+	now = time.Date(2026, 9, 14, 2, 0, 0, 0, time.UTC)
+	if err := runtime.scheduleBackups(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitForScheduledExecutions(t, executor, 2)
+
+	runtime.mu.Lock()
+	waitingDataCheck := false
+	for _, command := range runtime.journal.Commands {
+		if command.RunKind == "check_data" {
+			waitingDataCheck = command.State == "received" && command.WaitForBackup
+		}
+	}
+	runtime.mu.Unlock()
+	if !waitingDataCheck {
+		t.Fatal("a second maintenance item did not remain queued for the next backup")
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		runtime.mu.Lock()
+		idle := len(runtime.active) == 0
+		runtime.mu.Unlock()
+		if idle {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	now = time.Date(2026, 9, 15, 2, 0, 0, 0, time.UTC)
+	if err := runtime.scheduleBackups(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitForScheduledExecutions(t, executor, 4)
+	waitForAllScheduledRuns(t, runtime, 4)
+}
+
+func TestDeferredMaintenanceStartsAtItsMaximumDeferral(t *testing.T) {
+	store := newAgentTestStore(t)
+	job := deferredSchedulerJob(t)
+	job.Schedule = JobSchedule{Kind: "cron", Expression: "0 3 * * *", Timezone: "UTC"}
+	job.Maintenance.MaxDeferralSeconds = 3600
+	job.Retention.ForgetCron = "30 3 * * *"
+	job.Integrity.MetadataCron = "0 1 * * *"
+	job.Integrity.DataCron = "30 4 * * *"
+	now := time.Date(2026, 9, 14, 0, 59, 0, 0, time.UTC)
+	executor := &schedulerExecutor{}
+	runtime := newSchedulerDaemon(t, store, schedulerConfig(job), &now, executor)
+
+	now = time.Date(2026, 9, 14, 1, 0, 0, 0, time.UTC)
+	if err := runtime.scheduleBackups(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	now = time.Date(2026, 9, 14, 2, 0, 0, 0, time.UTC)
+	if err := runtime.scheduleBackups(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitForScheduledExecutions(t, executor, 1)
+	waitForAllScheduledRuns(t, runtime, 1)
+}
+
+func TestBackupOccurrencesDuringMaintenanceCoalesceIntoOneCatchUp(t *testing.T) {
+	store := newAgentTestStore(t)
+	job := deferredSchedulerJob(t)
+	job.Schedule = JobSchedule{Kind: "cron", Expression: "*/5 * * * *", Timezone: "UTC"}
+	job.Retention.ForgetCron = "30 3 * * *"
+	job.Integrity.MetadataCron = "0 1 * * *"
+	job.Integrity.DataCron = "30 4 * * *"
+	now := time.Date(2026, 9, 14, 0, 59, 0, 0, time.UTC)
+	release := make(chan struct{})
+	executor := &maintenanceGateExecutor{maintenanceStarted: make(chan struct{}), releaseMaintenance: release}
+	runtime := newSchedulerDaemon(t, store, schedulerConfig(job), &now, executor)
+
+	now = time.Date(2026, 9, 14, 1, 0, 0, 0, time.UTC)
+	if err := runtime.scheduleBackups(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-executor.maintenanceStarted:
+	case <-time.After(time.Second):
+		t.Fatal("maintenance did not start after the scheduled backup")
+	}
+
+	for _, minute := range []int{5, 10} {
+		now = time.Date(2026, 9, 14, 1, minute, 0, 0, time.UTC)
+		if err := runtime.scheduleBackups(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	runtime.mu.Lock()
+	catchUps := 0
+	catchUpScheduledFor := ""
+	for _, command := range runtime.journal.Commands {
+		if command.CatchUpBackup {
+			catchUps++
+			catchUpScheduledFor = command.ScheduledFor
+		}
+	}
+	commandCount := len(runtime.journal.Commands)
+	runtime.mu.Unlock()
+	if catchUps != 1 || commandCount != 3 || catchUpScheduledFor != "2026-09-14T01:05:00.000000Z" {
+		t.Fatalf("coalesced catch-up: count=%d commands=%d scheduled_for=%s", catchUps, commandCount, catchUpScheduledFor)
+	}
+
+	close(release)
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && executor.backupCount() != 2 {
+		time.Sleep(time.Millisecond)
+	}
+	if executor.backupCount() != 2 {
+		t.Fatalf("catch-up backups: %d", executor.backupCount())
+	}
 	waitForAllScheduledRuns(t, runtime, 3)
 }
 
@@ -502,6 +674,16 @@ func schedulerConfig(job Job) Config {
 		ProtocolRevision: ProtocolRevision, Generation: 1, Revision: 2, SchemaVersion: ConfigSchemaVersion,
 		IssuedAt: "2026-09-10T00:00:00.000000Z", Jobs: []Job{job},
 	}
+}
+
+func deferredSchedulerJob(t *testing.T) Job {
+	t.Helper()
+	job := executionJob(t.TempDir())
+	job.Repository.Location = job.Repository.Connection.Path
+	job.Maintenance = JobMaintenance{Strategy: "after_scheduled_backup", MaxDeferralSeconds: 86400, PruneIntervalSeconds: 604800}
+	job.Retention = JobRetention{KeepLatestComplete: true, ForgetCron: "30 3 * * *", PruneCron: "45 4 * * 0"}
+	job.Integrity = JobIntegrity{MetadataCron: "0 1 * * 0", DataMode: "auto", DataCron: "0 2 * * 0", DataParts: 4}
+	return job
 }
 
 func newSchedulerDaemon(t *testing.T, store *FileStore, config Config, now *time.Time, executor BackupExecutor) *daemon {

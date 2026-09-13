@@ -284,6 +284,9 @@ func TestDecodeConfigAcceptsCompleteJob(t *testing.T) {
 	if len(config.Jobs) != 1 || config.Jobs[0].Type != JobTypeFile || config.Jobs[0].Key != "job_01k4p4f7m1r9d3t6v8w2x5y7za" || config.Jobs[0].ID != "01k4p4f7m1r9d3t6v8w2x5y7za" || config.Jobs[0].Enabled || metadata.Revision != 2 || config.Realtime == nil || config.Realtime.Channel != "private-agent.server_01k4p4f7m1r9d3t6v8w2x5y7za.generation_1" {
 		t.Fatalf("unexpected config: %+v %+v", config, metadata)
 	}
+	if config.Jobs[0].Maintenance.Strategy != "after_scheduled_backup" || config.Jobs[0].Maintenance.MaxDeferralSeconds != 86400 || config.Jobs[0].Maintenance.PruneIntervalSeconds != 604800 {
+		t.Fatalf("unexpected maintenance policy: %+v", config.Jobs[0].Maintenance)
+	}
 }
 
 func TestDecodeConfigRejectsARealtimeChannelForAnotherGeneration(t *testing.T) {
@@ -471,6 +474,9 @@ func validRealtimeConfigBody(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	document["metadata"].(map[string]any)["protocol_revision"] = ProtocolRevision
+	document["jobs"].(map[string]any)["job_01k4p4f7m1r9d3t6v8w2x5y7za"].(map[string]any)["maintenance"] = map[string]any{
+		"strategy": "after_scheduled_backup", "max_deferral_seconds": 86400, "prune_interval_seconds": 604800,
+	}
 	document["realtime"] = map[string]any{
 		"key":       "synthetic-app-key",
 		"host":      "realtime.example.test",

@@ -20,6 +20,11 @@ type MaintenancePlan struct {
 	ProtectedSnapshotIDs []string `json:"protected_snapshot_ids,omitempty"`
 	DataSubsetPart       uint64   `json:"data_subset_part,omitempty"`
 	DataSubsetTotal      uint64   `json:"data_subset_total,omitempty"`
+	CombinedRetention    bool     `json:"combined_retention,omitempty"`
+	ForgetPlanned        bool     `json:"forget_planned,omitempty"`
+	PruneAfterForget     bool     `json:"prune_after_forget,omitempty"`
+	PruneStarted         bool     `json:"prune_started,omitempty"`
+	PruneCompleted       bool     `json:"prune_completed,omitempty"`
 }
 
 type repositorySnapshot struct {
@@ -56,7 +61,7 @@ func executeMaintenance(
 		SnapshotIDs: []string{},
 	}
 
-	timeout := maintenanceTimeout(command.RunKind)
+	timeout := maintenanceTimeout(command.RunKind, job)
 	runContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -216,10 +221,11 @@ func executeForget(
 	}
 
 	candidateIDs := make([]string, 0)
-	if plan != nil {
+	forgetPlanned := plan != nil && (plan.ForgetPlanned || len(plan.CandidateSnapshotIDs) > 0 || len(plan.ProtectedSnapshotIDs) > 0)
+	if forgetPlanned {
 		candidateIDs = append(candidateIDs, plan.CandidateSnapshotIDs...)
 	}
-	if plan == nil {
+	if !forgetPlanned {
 		policy := restic.Retention{
 			Last: job.Retention.Last, Hourly: job.Retention.Hourly, Daily: job.Retention.Daily,
 			Weekly: job.Retention.Weekly, Monthly: job.Retention.Monthly, Yearly: job.Retention.Yearly,
@@ -252,6 +258,11 @@ func executeForget(
 		persistedPlan := MaintenancePlan{
 			Kind: "forget", CandidateSnapshotIDs: candidateIDs,
 			ProtectedSnapshotIDs: append([]string(nil), proof.SnapshotIDs...),
+			ForgetPlanned:        true,
+		}
+		if plan != nil {
+			persistedPlan.CombinedRetention = plan.CombinedRetention
+			persistedPlan.PruneAfterForget = plan.PruneAfterForget
 		}
 		if err := persistPlan(persistedPlan); err != nil {
 			result.Status = "failed"
@@ -259,6 +270,7 @@ func executeForget(
 			result.Summary = "The retention plan could not be persisted before execution."
 			return finish(result)
 		}
+		plan = &persistedPlan
 	}
 
 	if len(candidateIDs) == 0 {
@@ -267,7 +279,7 @@ func executeForget(
 		result.ResultCode = "success"
 		result.Statistics = maintenanceStatistics(len(inventory), 0, 0, len(protected))
 		result.Summary = "Retention found no snapshots to remove."
-		return finish(result)
+		return finishRetention(ctx, run, request, result, plan, persistPlan, finish)
 	}
 	considered := len(inventory)
 	for _, snapshotID := range candidateIDs {
@@ -313,7 +325,7 @@ func executeForget(
 		result.Status = "complete"
 		result.ResultCode = "success"
 		result.Summary = maintenanceSummary("forget", removed)
-		return finish(result)
+		return finishRetention(ctx, run, request, result, plan, persistPlan, finish)
 	}
 	if removed > 0 {
 		result.Status = "partial"
@@ -330,6 +342,73 @@ func executeForget(
 	result.ResultCode = "execution_failed"
 	result.Summary = "Retention did not remove its selected snapshots."
 	return finish(result)
+}
+
+func finishRetention(
+	ctx context.Context,
+	run func(restic.Request) restic.Result,
+	request restic.Request,
+	result CommandResult,
+	plan *MaintenancePlan,
+	persistPlan func(MaintenancePlan) error,
+	finish func(CommandResult) (CommandResult, []byte, bool, uint64),
+) (CommandResult, []byte, bool, uint64) {
+	if plan == nil || !plan.CombinedRetention {
+		return finish(result)
+	}
+	if result.Statistics == nil {
+		statistics := RunStatistics{}
+		result.Statistics = &statistics
+	}
+	if !plan.PruneAfterForget {
+		(*result.Statistics)["prune_status"] = "not_due"
+		return finish(result)
+	}
+
+	updated := *plan
+	updated.PruneStarted = true
+	if err := persistPlan(updated); err != nil {
+		result.Status = "failed"
+		result.ResultCode = "execution_failed"
+		result.Summary = "Retention completed, but the prune phase could not be persisted before execution."
+		(*result.Statistics)["prune_status"] = "failed"
+		return finish(result)
+	}
+
+	request.Operation = "prune"
+	request.Retention = nil
+	request.SnapshotIDs = nil
+	request.Tags = nil
+	response := run(request)
+	if response.ExitCode != 0 {
+		result = maintenanceResult(result, response, ctx, "Repository prune completed.")
+		(*result.Statistics)["prune_status"] = pruneStatus(response, ctx)
+		result.Summary = "Retention completed, but repository prune did not complete."
+		return finish(result)
+	}
+
+	updated.PruneCompleted = true
+	if err := persistPlan(updated); err != nil {
+		result.Status = "unresolved"
+		result.ResultCode = "outcome_unresolved"
+		result.Summary = "Repository prune completed, but its durable completion marker could not be saved."
+		(*result.Statistics)["prune_status"] = "outcome_unresolved"
+		return finish(result)
+	}
+	result.PruneCompleted = true
+	(*result.Statistics)["prune_status"] = "complete"
+	result.Summary = "Retention and repository prune completed."
+	return finish(result)
+}
+
+func pruneStatus(response restic.Result, ctx context.Context) string {
+	if response.Outcome != "cancelled" {
+		return "failed"
+	}
+	if ctx.Err() == context.DeadlineExceeded {
+		return "timed_out"
+	}
+	return "cancelled"
 }
 
 func snapshotIDs(inventory map[string]bool) []string {
@@ -415,9 +494,12 @@ func maintenanceRequest(job Job) restic.Request {
 	}
 }
 
-func maintenanceTimeout(kind string) time.Duration {
+func maintenanceTimeout(kind string, job Job) time.Duration {
 	switch kind {
 	case "forget":
+		if job.Maintenance.Strategy == "after_scheduled_backup" {
+			return 6 * time.Hour
+		}
 		return 30 * time.Minute
 	case "prune":
 		return 6 * time.Hour

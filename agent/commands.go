@@ -172,6 +172,9 @@ func (daemon *daemon) advanceCommands(ctx context.Context) error {
 		if (!contains([]string{"run_backup", "run_maintenance"}, command.Kind) && !strings.HasPrefix(command.Kind, "scheduled_")) || state != "received" {
 			continue
 		}
+		if journaled.WaitForBackup {
+			continue
+		}
 
 		expiresAt, _ := time.Parse("2006-01-02T15:04:05.000000Z", command.ExpiresAt)
 		if (command.Kind == "run_backup" || command.Kind == "run_maintenance") && !daemon.now().Before(expiresAt) {
@@ -385,18 +388,21 @@ func (daemon *daemon) finishOperation(commandID, runID string, job Job, result C
 		result.SnapshotEvidence = nil
 		result.SnapshotEvidenceIDs = nil
 	}
+	if daemon.client != nil && !protocolRevisionSupports(daemon.client.selectedProtocolRevision(), "1.4.0") && result.Statistics != nil {
+		delete(*result.Statistics, "prune_status")
+	}
 	logID, idErr := newULID(daemon.now())
 	if idErr == nil {
 		idErr = daemon.store.WriteRunLog(logID, log)
 	}
 
 	daemon.mu.Lock()
-	defer daemon.mu.Unlock()
 	delete(daemon.active, runID)
 	delete(daemon.activeRunKinds, runID)
 	delete(daemon.repositories, job.Repository.ID)
 	journaled := daemon.journal.Commands[commandID]
 	if journaled == nil {
+		daemon.mu.Unlock()
 		return
 	}
 	journaled.State = "finished"
@@ -436,6 +442,16 @@ func (daemon *daemon) finishOperation(commandID, runID string, job Job, result C
 			cancel()
 		}
 		_ = daemon.store.SaveCommandJournal(daemon.journal)
+	}
+	releaseMaintenance := journaled.Trigger == "scheduled" && result.RunKind == "backup" && result.Status == "complete"
+	releaseCatchUp := result.RunKind != "backup"
+	jobID := journaled.Command.Payload.JobID
+	daemon.mu.Unlock()
+	if releaseMaintenance {
+		_ = daemon.startNextDeferredMaintenance(context.Background(), jobID, false)
+	}
+	if releaseCatchUp {
+		_ = daemon.startCatchUpBackup(context.Background(), jobID)
 	}
 }
 
@@ -770,6 +786,9 @@ func (daemon *daemon) reconcileOne(ctx context.Context, commandID string) error 
 		result.SnapshotEvidence = nil
 		result.SnapshotEvidenceIDs = nil
 	}
+	if daemon.client != nil && !protocolRevisionSupports(daemon.client.selectedProtocolRevision(), "1.4.0") && result.Statistics != nil {
+		delete(*result.Statistics, "prune_status")
+	}
 	result.RepositoryBytes = measureRepositoryBytes(ctx, daemon.executor, *job)
 
 	daemon.mu.Lock()
@@ -805,7 +824,8 @@ func (daemon *daemon) reconciledMaintenance(ctx context.Context, command *Journa
 		SnapshotIDs: []string{},
 		Summary:     "The interrupted maintenance outcome could not be proved and was not rerun.",
 	}
-	if command.RunKind != "forget" || command.MaintenancePlan == nil || len(command.MaintenancePlan.CandidateSnapshotIDs) == 0 {
+	if command.RunKind != "forget" || command.MaintenancePlan == nil ||
+		len(command.MaintenancePlan.CandidateSnapshotIDs) == 0 && !command.MaintenancePlan.ForgetPlanned {
 		return result
 	}
 	request := maintenanceRequest(job)
@@ -827,6 +847,21 @@ func (daemon *daemon) reconciledMaintenance(ctx context.Context, command *Journa
 	}
 	removed := len(command.MaintenancePlan.CandidateSnapshotIDs) - remaining
 	result.Statistics = maintenanceStatistics(len(inventory)+removed, len(command.MaintenancePlan.CandidateSnapshotIDs), remaining, len(command.MaintenancePlan.ProtectedSnapshotIDs))
+	if command.MaintenancePlan.CombinedRetention {
+		switch {
+		case command.MaintenancePlan.PruneCompleted:
+			(*result.Statistics)["prune_status"] = "complete"
+			result.PruneCompleted = true
+		case command.MaintenancePlan.PruneStarted:
+			(*result.Statistics)["prune_status"] = "outcome_unresolved"
+			result.Summary = "The interrupted repository prune outcome could not be proved."
+			return result
+		case command.MaintenancePlan.PruneAfterForget:
+			(*result.Statistics)["prune_status"] = "pending"
+		default:
+			(*result.Statistics)["prune_status"] = "not_due"
+		}
+	}
 	switch {
 	case remaining == 0:
 		result.Status = "complete"

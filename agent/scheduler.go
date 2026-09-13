@@ -57,6 +57,7 @@ type scheduledOperation struct {
 	RunKind    string
 	Expression string
 	Priority   int
+	Deferred   bool
 }
 
 func (daemon *daemon) scheduleBackups(ctx context.Context) error {
@@ -93,7 +94,7 @@ func (daemon *daemon) scheduleBackups(ctx context.Context) error {
 			Expression: job.Schedule.Expression,
 			Priority:   0,
 		})
-		for _, maintenance := range []scheduledOperation{
+		maintenanceOperations := []scheduledOperation{
 			{
 				Job:        job,
 				RunKind:    "forget",
@@ -118,7 +119,15 @@ func (daemon *daemon) scheduleBackups(ctx context.Context) error {
 				Expression: job.Integrity.DataCron,
 				Priority:   4,
 			},
-		} {
+		}
+		if job.Maintenance.Strategy == "after_scheduled_backup" {
+			maintenanceOperations = []scheduledOperation{
+				{Job: job, RunKind: "forget", Expression: job.Retention.ForgetCron, Priority: -3, Deferred: true},
+				{Job: job, RunKind: "check_metadata", Expression: job.Integrity.MetadataCron, Priority: -2, Deferred: true},
+				{Job: job, RunKind: "check_data", Expression: job.Integrity.DataCron, Priority: -1, Deferred: true},
+			}
+		}
+		for _, maintenance := range maintenanceOperations {
 			if maintenance.Expression != "" {
 				operations = append(operations, maintenance)
 			}
@@ -145,6 +154,18 @@ func (daemon *daemon) scheduleBackups(ctx context.Context) error {
 			return err
 		}
 		if exists {
+			continue
+		}
+		if operation.Deferred && daemon.hasQueuedScheduledOperation(operation.Job.ID, operation.RunKind, false) {
+			if err := daemon.store.recordSkippedOccurrence(operation.Job.ID, operation.RunKind, scheduledFor); err != nil {
+				return err
+			}
+			continue
+		}
+		if operation.RunKind == "backup" && daemon.hasQueuedScheduledOperation(operation.Job.ID, operation.RunKind, true) {
+			if err := daemon.store.recordSkippedOccurrence(operation.Job.ID, operation.RunKind, scheduledFor); err != nil {
+				return err
+			}
 			continue
 		}
 		if !daemon.store.canAcceptWork(criticalRunRecordEstimate) {
@@ -175,6 +196,10 @@ func (daemon *daemon) scheduleBackups(ctx context.Context) error {
 			Trigger: "scheduled", ScheduledFor: scheduledFor, JobSnapshot: snapshot,
 			ReceivedAt: protocolTimestamp(now), Acknowledged: true, State: "received", Events: []AgentEvent{},
 		}
+		if operation.Deferred {
+			journaled.WaitForBackup = true
+			journaled.MaxDeferralAt = protocolTimestamp(minute.Add(time.Duration(operation.Job.Maintenance.MaxDeferralSeconds) * time.Second))
+		}
 
 		overlap := busyRepositories[operation.Job.Repository.ID]
 		if operation.RunKind == "backup" {
@@ -182,7 +207,13 @@ func (daemon *daemon) scheduleBackups(ctx context.Context) error {
 		} else {
 			overlap = overlap || activeMaintenance >= 1
 		}
-		if overlap {
+		catchUp := operation.RunKind == "backup" && busyRepositories[operation.Job.Repository.ID] &&
+			operation.Job.Maintenance.Strategy == "after_scheduled_backup" && daemon.hasActiveMaintenance(operation.Job.ID)
+		if catchUp {
+			journaled.CatchUpBackup = true
+			overlap = false
+		}
+		if overlap && !operation.Deferred {
 			daemon.finishScheduledOverlap(journaled, now)
 		}
 		daemon.mu.Lock()
@@ -201,7 +232,7 @@ func (daemon *daemon) scheduleBackups(ctx context.Context) error {
 			}
 			return err
 		}
-		if overlap {
+		if overlap || operation.Deferred || catchUp {
 			continue
 		}
 		busyRepositories[operation.Job.Repository.ID] = true
@@ -214,7 +245,122 @@ func (daemon *daemon) scheduleBackups(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
+	return daemon.startNextDeferredMaintenance(ctx, "", true)
+}
+
+func (daemon *daemon) hasQueuedScheduledOperation(jobID, runKind string, catchUpOnly bool) bool {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	for _, command := range daemon.journal.Commands {
+		if command.State != "received" || command.Trigger != "scheduled" || command.Command.Payload.JobID != jobID || command.RunKind != runKind {
+			continue
+		}
+		if catchUpOnly && !command.CatchUpBackup {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func (daemon *daemon) hasActiveMaintenance(jobID string) bool {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	for _, command := range daemon.journal.Commands {
+		if command.State == "running" && command.RunKind != "backup" && command.Command.Payload.JobID == jobID {
+			return true
+		}
+	}
+	return false
+}
+
+func (daemon *daemon) startNextDeferredMaintenance(ctx context.Context, jobID string, expiredOnly bool) error {
+	daemon.mu.Lock()
+	now := daemon.now()
+	commandID := ""
+	priority := 100
+	scheduledFor := ""
+	for id, command := range daemon.journal.Commands {
+		if command.State != "received" || command.MaxDeferralAt == "" || jobID != "" && command.Command.Payload.JobID != jobID {
+			continue
+		}
+		if expiredOnly {
+			maxDeferralAt, err := time.Parse("2006-01-02T15:04:05.000000Z", command.MaxDeferralAt)
+			if err != nil || now.Before(maxDeferralAt) {
+				continue
+			}
+		}
+		candidatePriority := maintenancePriority(command.RunKind)
+		if commandID == "" || candidatePriority < priority || candidatePriority == priority && command.ScheduledFor < scheduledFor {
+			commandID = id
+			priority = candidatePriority
+			scheduledFor = command.ScheduledFor
+		}
+	}
+	if commandID == "" {
+		daemon.mu.Unlock()
+		return nil
+	}
+	command := daemon.journal.Commands[commandID]
+	wasWaiting := command.WaitForBackup
+	command.WaitForBackup = false
+	if err := daemon.store.SaveCommandJournal(daemon.journal); err != nil {
+		command.WaitForBackup = wasWaiting
+		daemon.mu.Unlock()
+		return err
+	}
+	daemon.mu.Unlock()
+
+	job, ready, err := daemon.jobForExecution(ctx, command)
+	if err != nil {
+		return err
+	}
+	if !ready {
+		return nil
+	}
+	if job == nil || !job.Enabled {
+		return daemon.finishWithoutExecution(commandID, "skipped", "config_unavailable", "The required job configuration is unavailable.")
+	}
+	return daemon.startOperation(ctx, commandID, *job)
+}
+
+func maintenancePriority(runKind string) int {
+	switch runKind {
+	case "snapshot_inventory":
+		return 0
+	case "forget":
+		return 1
+	case "check_metadata":
+		return 2
+	case "check_data":
+		return 3
+	default:
+		return 4
+	}
+}
+
+func (daemon *daemon) startCatchUpBackup(ctx context.Context, jobID string) error {
+	daemon.mu.Lock()
+	commandID := ""
+	var command *JournalCommand
+	for id, candidate := range daemon.journal.Commands {
+		if candidate.State == "received" && candidate.CatchUpBackup && candidate.Command.Payload.JobID == jobID && (command == nil || candidate.ScheduledFor < command.ScheduledFor) {
+			commandID = id
+			command = candidate
+		}
+	}
+	daemon.mu.Unlock()
+	if command == nil {
+		return nil
+	}
+	job, ready, err := daemon.jobForExecution(ctx, command)
+	if err != nil || !ready {
+		return err
+	}
+	if job == nil || !job.Enabled {
+		return daemon.finishWithoutExecution(commandID, "skipped", "config_unavailable", "The required job configuration is unavailable.")
+	}
+	return daemon.startOperation(ctx, commandID, *job)
 }
 
 func (daemon *daemon) finishScheduledOverlap(command *JournalCommand, now time.Time) {

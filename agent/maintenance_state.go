@@ -1,6 +1,9 @@
 package agent
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 func (daemon *daemon) activeCountsLocked() (int, int) {
 	backups := 0
@@ -32,6 +35,14 @@ func (daemon *daemon) prepareMaintenanceLocked(job Job, journaled *JournalComman
 	if journaled.MaintenancePlan != nil {
 		persisted := *journaled.MaintenancePlan
 		plan = &persisted
+	}
+	if journaled.RunKind == "forget" && job.Maintenance.Strategy == "after_scheduled_backup" && plan == nil {
+		pruneDue := true
+		if lastPrune, err := time.Parse("2006-01-02T15:04:05.000000Z", runtimeState.LastPruneCompletedAt); err == nil {
+			pruneDue = !daemon.now().Before(lastPrune.Add(time.Duration(job.Maintenance.PruneIntervalSeconds) * time.Second))
+		}
+		plan = &MaintenancePlan{Kind: "forget", CombinedRetention: true, PruneAfterForget: pruneDue}
+		journaled.MaintenancePlan = plan
 	}
 	if journaled.RunKind == "check_data" && plan == nil {
 		if runtimeState.DataParts != job.Integrity.DataParts {
@@ -81,6 +92,9 @@ func (daemon *daemon) recordOutcomeLocked(job Job, result CommandResult) {
 		}
 		runtimeState.DataParts = parts
 		runtimeState.NextDataPart = part%parts + 1
+	}
+	if result.RunKind == "forget" && result.PruneCompleted {
+		runtimeState.LastPruneCompletedAt = result.FinishedAt
 	}
 	daemon.state.Maintenance[job.Repository.ID] = runtimeState
 	_ = daemon.store.SaveRuntimeState(daemon.state)
@@ -142,7 +156,13 @@ func (daemon *daemon) acceptMaintenanceConfigLocked(config Config) ([]context.Ca
 	cancellations := make([]context.CancelFunc, 0)
 	queued := make([]string, 0)
 	for commandID, command := range daemon.journal.Commands {
-		if command.RunKind == "" || command.RunKind == "backup" || availableJobs[command.Command.Payload.JobID] {
+		if command.RunKind == "backup" {
+			if command.CatchUpBackup && command.State == "received" && !availableJobs[command.Command.Payload.JobID] {
+				queued = append(queued, commandID)
+			}
+			continue
+		}
+		if command.RunKind == "" || availableJobs[command.Command.Payload.JobID] {
 			continue
 		}
 		if command.State == "running" {

@@ -76,16 +76,23 @@ type Destination struct {
 }
 
 type Job struct {
-	Key        string
-	ID         string
-	Name       string
-	Type       JobType
-	Enabled    bool
-	Source     JobSource
-	Repository JobRepository
-	Schedule   JobSchedule
-	Retention  JobRetention
-	Integrity  JobIntegrity
+	Key         string
+	ID          string
+	Name        string
+	Type        JobType
+	Enabled     bool
+	Source      JobSource
+	Repository  JobRepository
+	Schedule    JobSchedule
+	Maintenance JobMaintenance
+	Retention   JobRetention
+	Integrity   JobIntegrity
+}
+
+type JobMaintenance struct {
+	Strategy             string
+	MaxDeferralSeconds   uint64
+	PruneIntervalSeconds uint64
 }
 
 type JobSource struct {
@@ -202,15 +209,22 @@ type destinationDocument struct {
 }
 
 type jobDocument struct {
-	Name       string             `json:"name,omitempty"`
-	Type       JobType            `json:"type"`
-	Enabled    *bool              `json:"enabled,omitempty"`
-	Source     sourceDocument     `json:"source"`
-	Repository repositoryDocument `json:"repository"`
-	Schedule   string             `json:"schedule"`
-	Retention  *retentionDocument `json:"retention,omitempty"`
-	Integrity  *integrityDocument `json:"integrity,omitempty"`
-	Safety     *repositorySafety  `json:"safety,omitempty"`
+	Name        string               `json:"name,omitempty"`
+	Type        JobType              `json:"type"`
+	Enabled     *bool                `json:"enabled,omitempty"`
+	Source      sourceDocument       `json:"source"`
+	Repository  repositoryDocument   `json:"repository"`
+	Schedule    string               `json:"schedule"`
+	Maintenance *maintenanceDocument `json:"maintenance,omitempty"`
+	Retention   *retentionDocument   `json:"retention,omitempty"`
+	Integrity   *integrityDocument   `json:"integrity,omitempty"`
+	Safety      *repositorySafety    `json:"safety,omitempty"`
+}
+
+type maintenanceDocument struct {
+	Strategy             string `json:"strategy"`
+	MaxDeferralSeconds   uint64 `json:"max_deferral_seconds"`
+	PruneIntervalSeconds uint64 `json:"prune_interval_seconds"`
 }
 
 type sourceDocument struct {
@@ -615,6 +629,13 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 		Retention: retention,
 		Integrity: integrity,
 	}
+	if raw.Maintenance != nil {
+		job.Maintenance = JobMaintenance{
+			Strategy:             raw.Maintenance.Strategy,
+			MaxDeferralSeconds:   raw.Maintenance.MaxDeferralSeconds,
+			PruneIntervalSeconds: raw.Maintenance.PruneIntervalSeconds,
+		}
+	}
 	if err := validateJob(job); err != nil {
 		return Job{}, err
 	}
@@ -908,6 +929,13 @@ func encodeConfig(config Config, managedDigest string) ([]byte, error) {
 				HasUnresolvedRuns: job.Retention.HasUnresolvedRuns,
 			},
 		}
+		if job.Maintenance.Strategy != "" {
+			documentJob.Maintenance = &maintenanceDocument{
+				Strategy:             job.Maintenance.Strategy,
+				MaxDeferralSeconds:   job.Maintenance.MaxDeferralSeconds,
+				PruneIntervalSeconds: job.Maintenance.PruneIntervalSeconds,
+			}
+		}
 		raw, err := json.Marshal(documentJob)
 		if err != nil {
 			return nil, fmt.Errorf("encode job %q: %w", jobKey, err)
@@ -999,6 +1027,9 @@ func validateJob(job Job) error {
 	}
 	if _, err := parseFixedUTCSchedule(job.Schedule.Expression); err != nil {
 		return fmt.Errorf("schedule is invalid: %w", err)
+	}
+	if job.Maintenance.Strategy != "" && (job.Maintenance.Strategy != "after_scheduled_backup" || job.Maintenance.MaxDeferralSeconds < 3600 || job.Maintenance.MaxDeferralSeconds > 604800 || job.Maintenance.PruneIntervalSeconds < 86400 || job.Maintenance.PruneIntervalSeconds > 2678400) {
+		return fmt.Errorf("maintenance policy is invalid")
 	}
 	retention := job.Retention
 	if retention.Last > 8760 || retention.Hourly > 8760 || retention.Daily > 3660 || retention.Weekly > 520 || retention.Monthly > 120 || retention.Yearly > 100 || !retention.KeepLatestComplete || retention.GroupBy != "" {

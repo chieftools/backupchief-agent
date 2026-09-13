@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	ProtocolRevision          = "1.3.0"
+	ProtocolRevision          = "1.4.0"
 	ProtocolHeader            = "BackupChief-Protocol-Revision"
 	LatestProtocolHeader      = "BackupChief-Latest-Protocol-Revision"
 	DefaultEndpoint           = "https://backup.chief.app/agent/v1"
@@ -115,6 +115,7 @@ type MaintenanceRuntime struct {
 	UnresolvedAtRevision uint64                 `json:"unresolved_at_revision,omitempty"`
 	DataParts            uint64                 `json:"data_parts,omitempty"`
 	NextDataPart         uint64                 `json:"next_data_part,omitempty"`
+	LastPruneCompletedAt string                 `json:"last_prune_completed_at,omitempty"`
 }
 
 type EnrollmentRequest struct {
@@ -220,6 +221,7 @@ type CommandResult struct {
 	Failure             *SourceInspectionFailure `json:"failure,omitempty"`
 	SnapshotEvidence    *SnapshotEvidence        `json:"snapshot_evidence,omitempty"`
 	SnapshotEvidenceIDs []string                 `json:"-"`
+	PruneCompleted      bool                     `json:"-"`
 }
 
 type SourceInspectionFailure struct {

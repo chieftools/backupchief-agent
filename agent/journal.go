@@ -40,6 +40,9 @@ type JournalCommand struct {
 	NextLogChunk    int              `json:"next_log_chunk,omitempty"`
 	LogCompleted    bool             `json:"log_completed,omitempty"`
 	MaintenancePlan *MaintenancePlan `json:"maintenance_plan,omitempty"`
+	WaitForBackup   bool             `json:"wait_for_backup,omitempty"`
+	MaxDeferralAt   string           `json:"max_deferral_at,omitempty"`
+	CatchUpBackup   bool             `json:"catch_up_backup,omitempty"`
 }
 
 func (store *FileStore) LoadCommandJournal() (CommandJournal, error) {
