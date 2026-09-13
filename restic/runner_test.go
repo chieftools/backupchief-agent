@@ -231,6 +231,81 @@ func TestRequestBoundaries(t *testing.T) {
 	if err != nil || !slices.Contains(args, "stats") || !slices.Contains(args, "raw-data") || !slices.Contains(args, "--json") {
 		t.Fatalf("stats arguments: %v %v", args, err)
 	}
+
+	request = testRequest(t)
+	request.Operation = "ls"
+	request.Snapshot = strings.Repeat("d", 64)
+	request.Path = "/srv/synthetic files"
+	args, _, err = request.arguments("password", "new-password", "cache", true)
+	if err != nil || !reflect.DeepEqual(args[len(args)-4:], []string{"ls", "--json", request.Snapshot, request.Path}) {
+		t.Fatalf("ls arguments: %v %v", args, err)
+	}
+
+	for _, path := range []string{"", "relative", "/srv/../private", "/srv//nested", "/srv/trailing/", "/srv\\windows"} {
+		request.Path = path
+		if _, _, err := request.arguments("password", "new-password", "cache", true); err == nil {
+			t.Fatalf("accepted unsafe snapshot path %q", path)
+		}
+	}
+}
+
+func TestDirectoryListingIsNonRecursive(t *testing.T) {
+	runner := testRunner(t)
+	request := testRequest(t)
+	requireComplete(t, runner, request)
+
+	root := filepath.Join(t.TempDir(), "synthetic tree")
+	for name, contents := range map[string]string{
+		"visible.txt":           "visible synthetic file",
+		"nested/child.txt":      "nested synthetic file",
+		"nested/deeper/end.txt": "deep synthetic file",
+	} {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	request.Operation = "backup"
+	request.Root = root
+	result := requireComplete(t, runner, request)
+
+	var snapshotID string
+	for _, line := range strings.Split(result.Output, "\n") {
+		var summary struct {
+			MessageType string `json:"message_type"`
+			SnapshotID  string `json:"snapshot_id"`
+		}
+		if json.Unmarshal([]byte(line), &summary) == nil && summary.MessageType == "summary" {
+			snapshotID = summary.SnapshotID
+		}
+	}
+
+	request.Operation = "ls"
+	request.Snapshot = snapshotID
+	request.Path = root
+	result = requireComplete(t, runner, request)
+
+	paths := []string{}
+	for _, line := range strings.Split(strings.TrimSpace(result.Output), "\n") {
+		var node struct {
+			StructType string `json:"struct_type"`
+			Path       string `json:"path"`
+		}
+		if json.Unmarshal([]byte(line), &node) == nil && node.StructType == "node" {
+			paths = append(paths, node.Path)
+		}
+	}
+
+	if !slices.Contains(paths, filepath.Join(root, "visible.txt")) || !slices.Contains(paths, filepath.Join(root, "nested")) {
+		t.Fatalf("directory children missing: %v", paths)
+	}
+	if slices.Contains(paths, filepath.Join(root, "nested", "child.txt")) {
+		t.Fatalf("directory listing was recursive: %v", paths)
+	}
 }
 
 func TestPartialBackup(t *testing.T) {
@@ -374,6 +449,19 @@ func TestCancellationAndOutputLimits(t *testing.T) {
 	}
 }
 
+func TestDirectoryListingUsesFourMegabyteOutputLimit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	command := exec.Command(os.Args[0], "-test.run=^TestProcessFixture$")
+	command.Env = append(os.Environ(), "BACKUPCHIEF_PROCESS_FIXTURE=browse-overflow")
+
+	result := runProcess(ctx, command, Request{Operation: "ls", Password: "synthetic-secret"})
+
+	if result.Outcome != "failed" || !result.Truncated || result.DroppedBytes == 0 || result.Output != "" || result.Diagnostic != "restic output exceeded its limit" {
+		t.Fatalf("unsafe directory listing overflow: %+v", result)
+	}
+}
+
 func TestProcessFixture(t *testing.T) {
 	switch os.Getenv("BACKUPCHIEF_PROCESS_FIXTURE") {
 	case "wait":
@@ -382,6 +470,12 @@ func TestProcessFixture(t *testing.T) {
 	case "overflow":
 		chunk := strings.Repeat("synthetic-secret", 4096)
 		for i := 0; i < 160; i++ {
+			_, _ = os.Stdout.WriteString(chunk)
+		}
+		os.Exit(0)
+	case "browse-overflow":
+		chunk := strings.Repeat("x", 1<<20)
+		for i := 0; i < 5; i++ {
 			_, _ = os.Stdout.WriteString(chunk)
 		}
 		os.Exit(0)

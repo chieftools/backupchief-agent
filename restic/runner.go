@@ -158,7 +158,11 @@ func runProcess(ctx context.Context, command *exec.Cmd, request Request) Result 
 
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	stdout := &boundedOutput{limit: 8 << 20, cancel: cancel}
+	outputLimit := 8 << 20
+	if request.Operation == "ls" {
+		outputLimit = 4 << 20
+	}
+	stdout := &boundedOutput{limit: outputLimit, cancel: cancel}
 	stderr := &boundedOutput{limit: 256 << 10, cancel: cancel}
 	if request.Operation == "backup" || request.Operation == "backup_stdin" {
 		stdout.cancel = nil

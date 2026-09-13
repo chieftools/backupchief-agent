@@ -45,6 +45,7 @@ type Request struct {
 	DataSubsetPart  int        `json:"data_subset_part,omitempty"`
 	DataSubsetTotal int        `json:"data_subset_total,omitempty"`
 	Target          string     `json:"target,omitempty"`
+	Path            string     `json:"path,omitempty"`
 	StdinFilename   string     `json:"stdin_filename,omitempty"`
 	StdinCommand    []string   `json:"stdin_command,omitempty"`
 	CommandConfig   string     `json:"command_config,omitempty"`
@@ -235,6 +236,12 @@ func (r Request) arguments(passwordFile, newPasswordFile, cache string, local bo
 			}
 			arguments = append(arguments, "--tag", tag)
 		}
+	case "ls":
+		if !snapshotPattern.MatchString(r.Snapshot) || !safeSnapshotPath(r.Path) {
+			return nil, nil, errors.New("directory listing requires a full snapshot ID and normalized absolute path")
+		}
+
+		arguments = append(arguments, "ls", "--json", r.Snapshot, r.Path)
 	case "stats":
 		arguments = append(arguments, "stats", "--mode", "raw-data", "--json")
 	case "check":
@@ -295,6 +302,24 @@ func (r Request) arguments(passwordFile, newPasswordFile, cache string, local bo
 
 func safeStdinFilename(value string) bool {
 	return value != "" && len(value) <= 255 && filepath.Base(value) == value && value != "." && value != ".." && !strings.ContainsAny(value, "/\\\x00\r\n")
+}
+
+func safeSnapshotPath(value string) bool {
+	if value == "" || !strings.HasPrefix(value, "/") || strings.ContainsAny(value, "\\\x00") {
+		return false
+	}
+
+	if value != "/" && (strings.HasSuffix(value, "/") || strings.Contains(value, "//")) {
+		return false
+	}
+
+	for _, part := range strings.Split(value, "/") {
+		if part == "." || part == ".." {
+			return false
+		}
+	}
+
+	return true
 }
 
 func retentionEmpty(retention Retention) bool {
