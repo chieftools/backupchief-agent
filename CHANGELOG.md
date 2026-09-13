@@ -4,6 +4,22 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.6.0]
+
+### Added
+
+- Added coordinated maintenance after scheduled backups. Retention and integrity checks can wait for the next successful backup, prune when its configured interval is due, and start a catch-up backup when maintenance overlaps the next schedule.
+- Added manual expiration of selected snapshots while preserving the latest complete recovery point and other snapshots protected by the control plane. Expiring a database snapshot removes the complete backup-run group.
+
+### Changed
+
+- Updated the agent protocol to 1.5 for coordinated maintenance, protected snapshots, and targeted retention commands.
+- Started newly received commands immediately instead of waiting for the next dispatch interval.
+
+### Fixed
+
+- Prevented maintenance failures from stale Restic locks by cleaning them up before maintenance and retrying cleanup when later operations encounter lock contention.
+
 ## [0.5.1]
 
 ### Fixed
@@ -79,7 +95,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/chieftools/backupchief-agent/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/chieftools/backupchief-agent/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/chieftools/backupchief-agent/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/chieftools/backupchief-agent/compare/v0.4.1...v0.4.2
