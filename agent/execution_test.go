@@ -130,6 +130,36 @@ func TestExecuteMySQLBackupStreamsOneDatabaseIntoRestic(t *testing.T) {
 	}
 }
 
+func TestMySQLBackupReportsBytesPerDatabaseSnapshot(t *testing.T) {
+	first, second := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	executor := &sequentialExecutor{results: []restic.Result{
+		{ExitCode: 0, Outcome: "complete", Output: `{"message_type":"summary","total_files_processed":1,"total_bytes_processed":21901679,"data_added_packed":165183,"snapshot_id":"` + first + `"}`},
+		{ExitCode: 0, Outcome: "complete", Output: `{"message_type":"summary","total_files_processed":1,"total_bytes_processed":4096,"data_added_packed":1024,"snapshot_id":"` + second + `"}`},
+	}}
+	command := &JournalCommand{RunID: "01k4p4f7m1r9d3t6v8w2x5y7zc"}
+	job := executionJob(t.TempDir())
+	job.Type = JobTypeMySQL
+	job.Source = JobSource{MySQL: &MySQLSource{Host: "mysql.example.test", Port: 3306, Username: "synthetic_reader", Password: "synthetic-secret", SelectionMode: "selected", Databases: []string{"synthetic_app", "synthetic_metrics"}}}
+	now := func() time.Time { return time.Date(2026, 9, 13, 8, 30, 0, 0, time.UTC) }
+
+	result, _, _, _ := executeBackup(context.Background(), executor, t.TempDir(), "01k4p4f7m1r9d3t6v8w2x5y7ze", 1, command, job, now)
+
+	if len(result.Artifacts) != 2 {
+		t.Fatalf("artifacts: %+v", result.Artifacts)
+	}
+	for index, want := range []struct{ source, stored uint64 }{{21901679, 165183}, {4096, 1024}} {
+		artifact := result.Artifacts[index]
+		if artifact.SourceBytes == nil || *artifact.SourceBytes != want.source || artifact.StoredBytes == nil || *artifact.StoredBytes != want.stored {
+			t.Fatalf("artifact %d bytes: %+v", index, artifact)
+		}
+	}
+
+	statistics := *result.Statistics
+	if statistics["source_bytes"].(uint64) != 21905775 || statistics["stored_bytes"].(uint64) != 166207 {
+		t.Fatalf("run statistics must stay the sum across snapshots: %+v", statistics)
+	}
+}
+
 func TestMySQLDumpFilenameFallsBackForNonPortableNames(t *testing.T) {
 	filename := mysqlDumpFilename("synthetic schema")
 

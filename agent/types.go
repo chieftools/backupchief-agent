@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	ProtocolRevision          = "1.2.0"
+	ProtocolRevision          = "1.3.0"
 	ProtocolHeader            = "BackupChief-Protocol-Revision"
 	LatestProtocolHeader      = "BackupChief-Latest-Protocol-Revision"
 	DefaultEndpoint           = "https://backup.chief.app/agent/v1"
@@ -239,9 +239,11 @@ type sourceInspectionResult struct {
 }
 
 type BackupArtifact struct {
-	Database   string `json:"database"`
-	Filename   string `json:"filename"`
-	SnapshotID string `json:"snapshot_id"`
+	Database    string  `json:"database"`
+	Filename    string  `json:"filename"`
+	SnapshotID  string  `json:"snapshot_id"`
+	SourceBytes *uint64 `json:"source_bytes,omitempty"`
+	StoredBytes *uint64 `json:"stored_bytes,omitempty"`
 }
 
 type EventRequest struct {

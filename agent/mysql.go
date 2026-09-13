@@ -106,7 +106,7 @@ func executeMySQLBackup(ctx context.Context, executor BackupExecutor, stateDirec
 		}
 		summary := summaries[len(summaries)-1]
 		result.SnapshotIDs = append(result.SnapshotIDs, summary.SnapshotID)
-		result.Artifacts = append(result.Artifacts, BackupArtifact{Database: database, Filename: filename, SnapshotID: summary.SnapshotID})
+		result.Artifacts = append(result.Artifacts, BackupArtifact{Database: database, Filename: filename, SnapshotID: summary.SnapshotID, SourceBytes: &summary.SourceBytes, StoredBytes: &summary.StoredBytes})
 		addDatabaseStatistics(total, summary)
 		anchorWritten = true
 	}

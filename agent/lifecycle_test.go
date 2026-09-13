@@ -29,7 +29,7 @@ func TestReenrollAdvancesGenerationAndRetiresOldWork(t *testing.T) {
 			}
 			newCredential = enrollment.Credential
 			response.WriteHeader(http.StatusCreated)
-			_, _ = io.WriteString(response, `{"protocol_revision":"1.2.0","server_id":"01k4p4f7m1r9d3t6v8w2x5y7za","generation":2,"enrolled_at":"2026-09-11T10:30:00.000000Z","config_revision":1}`)
+			_, _ = io.WriteString(response, `{"protocol_revision":"`+ProtocolRevision+`","server_id":"01k4p4f7m1r9d3t6v8w2x5y7za","generation":2,"enrolled_at":"2026-09-11T10:30:00.000000Z","config_revision":1}`)
 		case "/agent/v1/config":
 			if request.Header.Get("Authorization") != "Bearer "+newCredential {
 				t.Errorf("new config used the wrong credential")
@@ -115,7 +115,7 @@ func TestReenrollReplaysIdentityAfterResponseLoss(t *testing.T) {
 			requests = append(requests, enrollment)
 			credential = enrollment.Credential
 			response.WriteHeader(http.StatusCreated)
-			_, _ = io.WriteString(response, `{"protocol_revision":"1.2.0","server_id":"01k4p4f7m1r9d3t6v8w2x5y7za","generation":2,"enrolled_at":"2026-09-11T11:30:00.000000Z","config_revision":1}`)
+			_, _ = io.WriteString(response, `{"protocol_revision":"`+ProtocolRevision+`","server_id":"01k4p4f7m1r9d3t6v8w2x5y7za","generation":2,"enrolled_at":"2026-09-11T11:30:00.000000Z","config_revision":1}`)
 		case "/agent/v1/config":
 			if request.Header.Get("Authorization") != "Bearer "+credential {
 				t.Errorf("new config used the wrong credential")
@@ -212,7 +212,7 @@ func TestRetiredReporterUsesOnlyTerminalEndpoints(t *testing.T) {
 		paths = append(paths, request.URL.Path)
 		switch {
 		case request.URL.Path == "/agent/v1/events":
-			_, _ = io.WriteString(response, `{"protocol_revision":"1.2.0","results":[{"id":"01k4p4f7m1r9d3t6v8w2x5y7ze","status":"accepted"}]}`)
+			_, _ = io.WriteString(response, `{"protocol_revision":"`+ProtocolRevision+`","results":[{"id":"01k4p4f7m1r9d3t6v8w2x5y7ze","status":"accepted"}]}`)
 		case request.Method == http.MethodPut:
 			response.WriteHeader(http.StatusNoContent)
 		case request.URL.Path == "/agent/v1/runs/"+runID+"/logs/"+logID+"/complete":
@@ -284,7 +284,7 @@ func TestRetiredReporterDropsOnlyTheUnknownRun(t *testing.T) {
 			_, _ = io.WriteString(response, `{"type":"about:blank","title":"Gone","status":410,"code":"enrollment_revoked","detail":"The retired run is unknown."}`)
 			return
 		}
-		_, _ = io.WriteString(response, `{"protocol_revision":"1.2.0","results":[{"id":"01k4p4f7m1r9d3t6v8w2x5y7zg","status":"accepted"}]}`)
+		_, _ = io.WriteString(response, `{"protocol_revision":"`+ProtocolRevision+`","results":[{"id":"01k4p4f7m1r9d3t6v8w2x5y7zg","status":"accepted"}]}`)
 	}))
 	defer server.Close()
 	if err := store.saveRetiredEnrollments("", []retiredEnrollment{{

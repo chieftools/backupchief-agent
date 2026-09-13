@@ -338,6 +338,14 @@ func (client *Client) AcknowledgeCommand(ctx context.Context, commandID string, 
 }
 
 func (client *Client) SubmitResult(ctx context.Context, commandID string, result CommandResult) error {
+	if !protocolRevisionSupports(client.selectedProtocolRevision(), "1.3.0") && len(result.Artifacts) > 0 {
+		artifacts := make([]BackupArtifact, len(result.Artifacts))
+		for index, artifact := range result.Artifacts {
+			artifact.SourceBytes, artifact.StoredBytes = nil, nil
+			artifacts[index] = artifact
+		}
+		result.Artifacts = artifacts
+	}
 	return client.postJSON(ctx, "/commands/"+commandID+"/result", result)
 }
 

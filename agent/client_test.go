@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -185,6 +186,69 @@ func TestInspectionResultUsesItsDedicatedWireShape(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestArtifactBytesAreOmittedBelowTheIntroducingRevision(t *testing.T) {
+	tests := []struct {
+		name      string
+		revision  string
+		wantBytes bool
+	}{
+		{name: "protocol 1.3", revision: "1.3.0", wantBytes: true},
+		{name: "protocol 1.2", revision: "1.2.0"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				response.Header().Set(ProtocolHeader, test.revision)
+				var payload map[string]any
+				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+					t.Fatal(err)
+				}
+				artifacts, _ := payload["artifacts"].([]any)
+				if len(artifacts) != 1 {
+					t.Fatalf("artifacts: %#v", payload)
+				}
+				artifact, _ := artifacts[0].(map[string]any)
+				_, hasSource := artifact["source_bytes"]
+				_, hasStored := artifact["stored_bytes"]
+				if hasSource != test.wantBytes || hasStored != test.wantBytes {
+					t.Fatalf("artifact bytes present=%v/%v, want %v: %#v", hasSource, hasStored, test.wantBytes, artifact)
+				}
+				if artifact["snapshot_id"] == "" || artifact["database"] != "synthetic_app" {
+					t.Fatalf("artifact identity lost: %#v", artifact)
+				}
+				response.WriteHeader(http.StatusNoContent)
+			}))
+			defer server.Close()
+			client := NewClient(server.URL, testBootstrap().Credential, "1.2.3-test", server.Client())
+			client.selectProtocolRevision(test.revision)
+
+			source, stored := uint64(21901679), uint64(165183)
+			result := CommandResult{
+				Generation:  1,
+				RunID:       "01k4p4k2n8d3r6t9v1w5x7yabc",
+				Status:      "complete",
+				ResultCode:  "success",
+				SnapshotIDs: []string{strings.Repeat("a", 64)},
+				Artifacts: []BackupArtifact{{
+					Database:    "synthetic_app",
+					Filename:    "synthetic_app.sql",
+					SnapshotID:  strings.Repeat("a", 64),
+					SourceBytes: &source,
+					StoredBytes: &stored,
+				}},
+			}
+
+			if err := client.SubmitResult(context.Background(), "01k4p4f7m1r9d3t6v8w2x5y7za", result); err != nil {
+				t.Fatal(err)
+			}
+			if result.Artifacts[0].SourceBytes == nil || *result.Artifacts[0].SourceBytes != source {
+				t.Fatalf("caller's artifacts were mutated: %+v", result.Artifacts[0])
+			}
+		})
 	}
 }
 
