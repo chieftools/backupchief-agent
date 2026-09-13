@@ -4,6 +4,19 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.3.0]
+
+### Added
+
+- Added command-triggered repository snapshot inventories. Successful inventories report every snapshot and clear unresolved repository state.
+- Added snapshot evidence to retention results, including a count, checksum, observation time, and the complete set of snapshot IDs sent in bounded event batches.
+
+### Changed
+
+- Updated the agent protocol to 1.2 for snapshot evidence and structured source-inspection failures. The agent omits these fields when it negotiates an older 1.x revision.
+- Made source-inspection failures more useful by reporting the failed stage and sanitized technical detail to both the control plane and the agent log.
+- Kept temporary MySQL credential files inside the agent's private state directory and removed them after each inspection or backup.
+
 ## [0.2.0]
 
 ### Added
@@ -25,6 +38,7 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/chieftools/backupchief-agent/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/chieftools/backupchief-agent/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/chieftools/backupchief-agent/releases/tag/v0.1.0
