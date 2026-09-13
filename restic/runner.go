@@ -129,6 +129,14 @@ func (runner Runner) Run(ctx context.Context, request Request) Result {
 }
 
 func lockRepository(ctx context.Context, state string, connection Connection) (*os.File, error) {
+	return lockRepositoryMode(ctx, state, connection, false)
+}
+
+func lockRepositoryShared(ctx context.Context, state string, connection Connection) (*os.File, error) {
+	return lockRepositoryMode(ctx, state, connection, true)
+}
+
+func lockRepositoryMode(ctx context.Context, state string, connection Connection, shared bool) (*os.File, error) {
 	locks := filepath.Join(state, "repository-locks")
 	if err := privateDirectory(locks); err != nil {
 		return nil, err
@@ -143,11 +151,34 @@ func lockRepository(ctx context.Context, state string, connection Connection) (*
 	if err != nil {
 		return nil, err
 	}
-	if err := acquire(ctx, lock); err != nil {
+	if err := acquireRepository(ctx, lock, shared); err != nil {
 		_ = lock.Close()
 		return nil, err
 	}
 	return lock, nil
+}
+
+func acquireRepository(ctx context.Context, file *os.File, shared bool) error {
+	mode := syscall.LOCK_EX
+	if shared {
+		mode = syscall.LOCK_SH
+	}
+
+	for {
+		err := syscall.Flock(int(file.Fd()), mode|syscall.LOCK_NB)
+		if err == nil {
+			return nil
+		}
+		if err != syscall.EWOULDBLOCK {
+			return err
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
 }
 
 func runProcess(ctx context.Context, command *exec.Cmd, request Request) Result {

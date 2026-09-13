@@ -64,10 +64,7 @@ func newRepositoryCommand(configPath *string) *cobra.Command {
 }
 
 func runDirectRestic(command *cobra.Command, configPath string, request restic.Request) error {
-	state := "/var/lib/backupchief"
-	if configPath != agent.DefaultPaths().StandaloneConfig && configPath != agent.DefaultPaths().ManagedConfig {
-		state = filepath.Join(filepath.Dir(configPath), ".backupchief-state")
-	}
+	state := stateForConfig(configPath)
 	runner := restic.Runner{
 		State:      state,
 		AllowLocal: true,
@@ -89,6 +86,13 @@ func runDirectRestic(command *cobra.Command, configPath string, request restic.R
 		return operationError(1, "restic %s failed with exit code %d", request.Operation, result.ExitCode)
 	}
 	return nil
+}
+
+func stateForConfig(configPath string) string {
+	if configPath != agent.DefaultPaths().StandaloneConfig && configPath != agent.DefaultPaths().ManagedConfig {
+		return filepath.Join(filepath.Dir(configPath), ".backupchief-state")
+	}
+	return "/var/lib/backupchief"
 }
 
 func loadCommandConfiguration(configPath string) (agent.Config, agent.ConfigMetadata, error) {

@@ -30,6 +30,7 @@ func NewRootCommand(version string) *cobra.Command {
 	configPath := agent.DefaultPaths().StandaloneConfig
 	root.PersistentFlags().StringVar(&configPath, "config", configPath, "Standalone configuration file")
 	root.AddCommand(newResticCommand())
+	root.AddCommand(newResticExportCommand())
 
 	root.AddCommand(&cobra.Command{
 		Use:   "version",
@@ -45,6 +46,7 @@ func NewRootCommand(version string) *cobra.Command {
 	root.AddCommand(newRunCommand(version, &configPath))
 	root.AddCommand(newConfigCommand(version, &configPath))
 	root.AddCommand(newBackupCommand(version, &configPath))
+	root.AddCommand(newExportCommand(&configPath))
 	root.AddCommand(newRepositoryCommand(&configPath))
 	addDevelopmentCommands(root, version)
 
