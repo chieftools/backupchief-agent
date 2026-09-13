@@ -74,7 +74,7 @@ func TestRealRepositoryMaintenanceAcrossSnapshotBoundaries(t *testing.T) {
 	}
 	var durablePlan MaintenancePlan
 	result, _, _, _ := executeMaintenance(
-		context.Background(), runner, 1, maintenanceJournalCommand("forget", job.ID), job, MaintenancePlan{},
+		context.Background(), runner, 1, maintenanceJournalCommand("forget", job.ID), job, nil,
 		func(plan MaintenancePlan) error { durablePlan = plan; return nil }, time.Now,
 	)
 	if result.Status != "complete" || result.ResultCode != "success" {
@@ -97,7 +97,7 @@ func TestRealRepositoryMaintenanceAcrossSnapshotBoundaries(t *testing.T) {
 	for _, runKind := range []string{"prune", "check_metadata"} {
 		maintenanceResult, _, _, _ := executeMaintenance(
 			context.Background(), runner, 1, maintenanceJournalCommand(runKind, job.ID), job,
-			MaintenancePlan{Kind: runKind}, func(MaintenancePlan) error { return nil }, time.Now,
+			nil, func(MaintenancePlan) error { return nil }, time.Now,
 		)
 		if maintenanceResult.ResultCode != "success" {
 			t.Fatalf("%s: %+v", runKind, maintenanceResult)
@@ -106,7 +106,7 @@ func TestRealRepositoryMaintenanceAcrossSnapshotBoundaries(t *testing.T) {
 	for part := uint64(1); part <= 2; part++ {
 		check, _, _, _ := executeMaintenance(
 			context.Background(), runner, 1, maintenanceJournalCommand("check_data", job.ID), job,
-			MaintenancePlan{Kind: "check_data", DataSubsetPart: part, DataSubsetTotal: 2}, func(MaintenancePlan) error { return nil }, time.Now,
+			&MaintenancePlan{Kind: "check_data", DataSubsetPart: part, DataSubsetTotal: 2}, func(MaintenancePlan) error { return nil }, time.Now,
 		)
 		if check.ResultCode != "success" || check.Statistics == nil || (*check.Statistics)["data_subset_part"] != part {
 			t.Fatalf("data check part %d: %+v", part, check)
@@ -121,7 +121,7 @@ func TestRealRepositoryMaintenanceAcrossSnapshotBoundaries(t *testing.T) {
 	for part := uint64(1); part <= 2; part++ {
 		check, _, _, _ := executeMaintenance(
 			context.Background(), runner, 1, maintenanceJournalCommand("check_data", job.ID), job,
-			MaintenancePlan{Kind: "check_data", DataSubsetPart: part, DataSubsetTotal: 2}, func(MaintenancePlan) error { return nil }, time.Now,
+			&MaintenancePlan{Kind: "check_data", DataSubsetPart: part, DataSubsetTotal: 2}, func(MaintenancePlan) error { return nil }, time.Now,
 		)
 		corruptVisible = corruptVisible || check.ResultCode == "repository_corrupt"
 	}
@@ -133,7 +133,7 @@ func TestRealRepositoryMaintenanceAcrossSnapshotBoundaries(t *testing.T) {
 	missingJob.Repository.Connection.Path = filepath.Join(t.TempDir(), "missing repository")
 	missing, _, _, _ := executeMaintenance(
 		context.Background(), runner, 1, maintenanceJournalCommand("prune", job.ID), missingJob,
-		MaintenancePlan{Kind: "prune"}, func(MaintenancePlan) error { return nil }, time.Now,
+		nil, func(MaintenancePlan) error { return nil }, time.Now,
 	)
 	if missing.ResultCode != "repository_missing" {
 		t.Fatalf("missing repository: %+v", missing)

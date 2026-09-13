@@ -277,7 +277,7 @@ func (daemon *daemon) startOperation(ctx context.Context, commandID string, job 
 		return nil
 	}
 
-	plan := MaintenancePlan{}
+	var plan *MaintenancePlan
 	if journaled.RunKind != "backup" {
 		job, plan = daemon.prepareMaintenanceLocked(job, journaled)
 		if err := daemon.store.SaveRuntimeState(daemon.state); err != nil {
@@ -358,7 +358,7 @@ func (daemon *daemon) runBackup(ctx context.Context, commandID, runID string, jo
 	daemon.finishOperation(commandID, runID, job, result, log, truncated, dropped)
 }
 
-func (daemon *daemon) runMaintenance(ctx context.Context, commandID, runID string, job Job, plan MaintenancePlan) {
+func (daemon *daemon) runMaintenance(ctx context.Context, commandID, runID string, job Job, plan *MaintenancePlan) {
 	defer daemon.activeWG.Done()
 	persistPlan := func(updated MaintenancePlan) error {
 		daemon.mu.Lock()

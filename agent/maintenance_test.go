@@ -50,7 +50,7 @@ func TestForgetPersistsAProtectedFixedSnapshotPlanBeforeRemoval(t *testing.T) {
 	var persisted MaintenancePlan
 	persistedBeforeForget := false
 	result, _, _, _ := executeMaintenance(
-		context.Background(), executor, 1, command, job, MaintenancePlan{},
+		context.Background(), executor, 1, command, job, nil,
 		func(plan MaintenancePlan) error {
 			persisted = plan
 			persistedBeforeForget = len(executor.requests) == 2
@@ -89,7 +89,7 @@ func TestSnapshotInventoryReportsTheExactRepositoryState(t *testing.T) {
 	job := maintenanceExecutionJob(t)
 	result, _, _, _ := executeMaintenance(
 		context.Background(), executor, 1, maintenanceJournalCommand("snapshot_inventory", job.ID), job,
-		MaintenancePlan{Kind: "snapshot_inventory"}, func(MaintenancePlan) error { return nil },
+		nil, func(MaintenancePlan) error { return nil },
 		func() time.Time { return time.Date(2026, 9, 12, 9, 0, 0, 0, time.UTC) },
 	)
 
@@ -118,12 +118,35 @@ func TestForgetResumesThePersistedFixedPlanWithoutRecomputingPolicy(t *testing.T
 	}
 	plan := MaintenancePlan{Kind: "forget", CandidateSnapshotIDs: []string{remove}, ProtectedSnapshotIDs: []string{protected}}
 	result, _, _, _ := executeMaintenance(
-		context.Background(), executor, 1, maintenanceJournalCommand("forget", job.ID), job, plan,
+		context.Background(), executor, 1, maintenanceJournalCommand("forget", job.ID), job, &plan,
 		func(MaintenancePlan) error { t.Fatal("a resumed plan was persisted again"); return nil }, time.Now,
 	)
 
 	if result.ResultCode != "success" || len(executor.requests) != 3 || executor.requests[1].Operation != "forget" {
 		t.Fatalf("resumed result=%+v requests=%+v", result, executor.requests)
+	}
+}
+
+func TestMaintenanceRejectsPersistedPlansWithoutTheExpectedKind(t *testing.T) {
+	job := maintenanceExecutionJob(t)
+	for _, test := range []struct {
+		name string
+		plan MaintenancePlan
+	}{
+		{name: "missing kind", plan: MaintenancePlan{}},
+		{name: "different kind", plan: MaintenancePlan{Kind: "prune"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			executor := &scriptedMaintenanceExecutor{}
+			result, _, _, _ := executeMaintenance(
+				context.Background(), executor, 1, maintenanceJournalCommand("forget", job.ID), job, &test.plan,
+				func(MaintenancePlan) error { t.Fatal("an invalid plan was persisted"); return nil }, time.Now,
+			)
+
+			if result.Status != "failed" || result.ResultCode != "execution_failed" || len(executor.requests) != 0 {
+				t.Fatalf("result=%+v requests=%+v", result, executor.requests)
+			}
+		})
 	}
 }
 
@@ -151,7 +174,7 @@ func TestRetentionStopsBeforeMutationWithoutCentralSafetyProof(t *testing.T) {
 			job := maintenanceExecutionJob(t)
 			job.Retention = test.retention
 			result, _, _, _ := executeMaintenance(
-				context.Background(), executor, 1, maintenanceJournalCommand("forget", job.ID), job, MaintenancePlan{},
+				context.Background(), executor, 1, maintenanceJournalCommand("forget", job.ID), job, nil,
 				func(MaintenancePlan) error { t.Fatal("unsafe plan was persisted"); return nil }, time.Now,
 			)
 			if result.Status != "skipped" || result.ResultCode != test.wantCode {
@@ -173,7 +196,7 @@ func TestChecksReportDepthRotationAndRepositoryFailures(t *testing.T) {
 	}}}
 	metadata, _, _, _ := executeMaintenance(
 		context.Background(), metadataExecutor, 1, maintenanceJournalCommand("check_metadata", job.ID), job,
-		MaintenancePlan{Kind: "check_metadata"}, func(MaintenancePlan) error { return nil }, time.Now,
+		nil, func(MaintenancePlan) error { return nil }, time.Now,
 	)
 	if metadata.ResultCode != "success" || metadata.Statistics == nil || (*metadata.Statistics)["data_checked"] != false || metadataExecutor.requests[0].Operation != "check_metadata" {
 		t.Fatalf("metadata check: %+v requests=%+v", metadata, metadataExecutor.requests)
@@ -184,7 +207,7 @@ func TestChecksReportDepthRotationAndRepositoryFailures(t *testing.T) {
 	}}}
 	data, _, _, _ := executeMaintenance(
 		context.Background(), dataExecutor, 1, maintenanceJournalCommand("check_data", job.ID), job,
-		MaintenancePlan{Kind: "check_data", DataSubsetPart: 3, DataSubsetTotal: 7}, func(MaintenancePlan) error { return nil }, time.Now,
+		&MaintenancePlan{Kind: "check_data", DataSubsetPart: 3, DataSubsetTotal: 7}, func(MaintenancePlan) error { return nil }, time.Now,
 	)
 	if data.Status != "failed" || data.ResultCode != "repository_corrupt" || data.Statistics == nil || (*data.Statistics)["errors_found"] != uint64(2) {
 		t.Fatalf("data check: %+v", data)
@@ -197,7 +220,7 @@ func TestChecksReportDepthRotationAndRepositoryFailures(t *testing.T) {
 		executor := &scriptedMaintenanceExecutor{results: []restic.Result{{ExitCode: exitCode, Outcome: "failed"}}}
 		result, _, _, _ := executeMaintenance(
 			context.Background(), executor, 1, maintenanceJournalCommand("prune", job.ID), job,
-			MaintenancePlan{Kind: "prune"}, func(MaintenancePlan) error { return nil }, time.Now,
+			nil, func(MaintenancePlan) error { return nil }, time.Now,
 		)
 		if result.ResultCode != want {
 			t.Fatalf("exit %d: %+v", exitCode, result)
@@ -277,6 +300,7 @@ func TestInterruptedMaintenanceRelistsFixedForgetPlansAndLeavesOtherOutcomesUnre
 
 func TestScheduledMaintenanceCompletesOfflineAndReplaysAfterRestart(t *testing.T) {
 	store := newAgentTestStore(t)
+	candidate := strings.Repeat("5", 64)
 	protected := strings.Repeat("4", 64)
 	job := maintenanceExecutionJob(t)
 	job.Schedule = JobSchedule{Kind: "cron", Expression: "0 2 * * *", Timezone: "UTC"}
@@ -284,9 +308,13 @@ func TestScheduledMaintenanceCompletesOfflineAndReplaysAfterRestart(t *testing.T
 	job.Retention.LatestComplete = &CompleteSnapshotProof{
 		RunID: "01k4p4f7m1r9d3t6v8w2x5y7zh", FinishedAt: "2026-09-10T01:00:00.000000Z", SnapshotIDs: []string{protected},
 	}
-	executor := &scriptedMaintenanceExecutor{results: []restic.Result{{
-		ExitCode: 0, Outcome: "complete", Output: `[{"id":"` + protected + `"}]`,
-	}}}
+	job.Retention.Hourly = 4
+	executor := &scriptedMaintenanceExecutor{results: []restic.Result{
+		{ExitCode: 0, Outcome: "complete", Output: `[{"id":"` + candidate + `"},{"id":"` + protected + `"}]`},
+		{ExitCode: 0, Outcome: "complete", Output: `[{"remove":[{"id":"` + candidate + `"}]}]`},
+		{ExitCode: 0, Outcome: "complete"},
+		{ExitCode: 0, Outcome: "complete", Output: `[{"id":"` + protected + `"}]`},
+	}}
 	config := schedulerConfig(job)
 	now := time.Date(2026, 9, 11, 0, 59, 0, 0, time.UTC)
 	runtime := newSchedulerDaemon(t, store, config, &now, executor)
@@ -306,6 +334,9 @@ func TestScheduledMaintenanceCompletesOfflineAndReplaysAfterRestart(t *testing.T
 			break
 		}
 		time.Sleep(time.Millisecond)
+	}
+	if len(executor.requests) != 5 || executor.requests[0].Operation != "snapshots" || executor.requests[1].Operation != "forget_plan" || executor.requests[2].Operation != "forget" || executor.requests[3].Operation != "snapshots" || executor.requests[4].Operation != "stats" {
+		t.Fatalf("scheduled retention requests: %+v", executor.requests)
 	}
 
 	received := make([]AgentEvent, 0, 2)

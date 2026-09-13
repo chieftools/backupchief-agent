@@ -42,7 +42,7 @@ func executeMaintenance(
 	generation uint64,
 	command *JournalCommand,
 	job Job,
-	plan MaintenancePlan,
+	plan *MaintenancePlan,
 	persistPlan func(MaintenancePlan) error,
 	now func() time.Time,
 ) (CommandResult, []byte, bool, uint64) {
@@ -72,6 +72,12 @@ func executeMaintenance(
 			truncated = true
 		}
 		return result, append([]byte(nil), contents...), truncated, dropped
+	}
+	if plan != nil && (plan.Kind == "" || plan.Kind != command.RunKind) {
+		result.Status = "failed"
+		result.ResultCode = "execution_failed"
+		result.Summary = "The persisted maintenance plan does not match this operation."
+		return finish(result)
 	}
 	run := func(request restic.Request) restic.Result {
 		request.TimeoutSeconds = int(timeout / time.Second)
@@ -127,6 +133,12 @@ func executeMaintenance(
 	case "check_metadata", "check_data":
 		request.Operation = command.RunKind
 		if command.RunKind == "check_data" {
+			if plan == nil {
+				result.Status = "failed"
+				result.ResultCode = "execution_failed"
+				result.Summary = "The data check plan is missing."
+				return finish(result)
+			}
 			request.DataSubsetPart = int(plan.DataSubsetPart)
 			request.DataSubsetTotal = int(plan.DataSubsetTotal)
 		}
@@ -171,7 +183,7 @@ func executeForget(
 	result CommandResult,
 	job Job,
 	proof *CompleteSnapshotProof,
-	plan MaintenancePlan,
+	plan *MaintenancePlan,
 	persistPlan func(MaintenancePlan) error,
 	finish func(CommandResult) (CommandResult, []byte, bool, uint64),
 	now func() time.Time,
@@ -195,8 +207,11 @@ func executeForget(
 		}
 	}
 
-	candidateIDs := append([]string(nil), plan.CandidateSnapshotIDs...)
-	if plan.Kind == "" {
+	candidateIDs := make([]string, 0)
+	if plan != nil {
+		candidateIDs = append(candidateIDs, plan.CandidateSnapshotIDs...)
+	}
+	if plan == nil {
 		policy := restic.Retention{
 			Last: job.Retention.Last, Hourly: job.Retention.Hourly, Daily: job.Retention.Daily,
 			Weekly: job.Retention.Weekly, Monthly: job.Retention.Monthly, Yearly: job.Retention.Yearly,
@@ -226,11 +241,11 @@ func executeForget(
 			candidateIDs = expandDatabaseRunCandidates(snapshotRecords(inventoryResult), candidateIDs)
 		}
 		candidateIDs = withoutProtected(candidateIDs, protected)
-		plan = MaintenancePlan{
+		persistedPlan := MaintenancePlan{
 			Kind: "forget", CandidateSnapshotIDs: candidateIDs,
 			ProtectedSnapshotIDs: append([]string(nil), proof.SnapshotIDs...),
 		}
-		if err := persistPlan(plan); err != nil {
+		if err := persistPlan(persistedPlan); err != nil {
 			result.Status = "failed"
 			result.ResultCode = "execution_failed"
 			result.Summary = "The retention plan could not be persisted before execution."

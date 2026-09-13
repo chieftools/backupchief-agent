@@ -15,7 +15,7 @@ func (daemon *daemon) activeCountsLocked() (int, int) {
 	return backups, maintenance
 }
 
-func (daemon *daemon) prepareMaintenanceLocked(job Job, journaled *JournalCommand) (Job, MaintenancePlan) {
+func (daemon *daemon) prepareMaintenanceLocked(job Job, journaled *JournalCommand) (Job, *MaintenancePlan) {
 	if daemon.state.Maintenance == nil {
 		daemon.state.Maintenance = make(map[string]MaintenanceRuntime)
 	}
@@ -28,11 +28,12 @@ func (daemon *daemon) prepareMaintenanceLocked(job Job, journaled *JournalComman
 	}
 	job.Retention.HasUnresolvedRuns = job.Retention.HasUnresolvedRuns || runtimeState.Unresolved
 
-	plan := MaintenancePlan{Kind: journaled.RunKind}
+	var plan *MaintenancePlan
 	if journaled.MaintenancePlan != nil {
-		plan = *journaled.MaintenancePlan
+		persisted := *journaled.MaintenancePlan
+		plan = &persisted
 	}
-	if journaled.RunKind == "check_data" && journaled.MaintenancePlan == nil {
+	if journaled.RunKind == "check_data" && plan == nil {
 		if runtimeState.DataParts != job.Integrity.DataParts {
 			runtimeState.DataParts = job.Integrity.DataParts
 			runtimeState.NextDataPart = 1
@@ -40,9 +41,10 @@ func (daemon *daemon) prepareMaintenanceLocked(job Job, journaled *JournalComman
 		if runtimeState.NextDataPart < 1 || runtimeState.NextDataPart > job.Integrity.DataParts {
 			runtimeState.NextDataPart = 1
 		}
-		plan.DataSubsetPart = runtimeState.NextDataPart
-		plan.DataSubsetTotal = job.Integrity.DataParts
-		journaled.MaintenancePlan = &plan
+		plan = &MaintenancePlan{
+			Kind: journaled.RunKind, DataSubsetPart: runtimeState.NextDataPart, DataSubsetTotal: job.Integrity.DataParts,
+		}
+		journaled.MaintenancePlan = plan
 	}
 	if job.Retention.HasUnresolvedRuns {
 		runtimeState.Unresolved = true
