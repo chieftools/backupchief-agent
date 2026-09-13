@@ -4,6 +4,12 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.5.0]
+
+### Added
+
+- Added ZIP exports for individual files, directories, and database artifacts from a selected snapshot. Exports stream directly from Restic, refuse to overwrite an existing output file, and advertise their availability to the control plane.
+
 ## [0.4.2]
 
 ### Added
@@ -67,7 +73,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/chieftools/backupchief-agent/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/chieftools/backupchief-agent/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/chieftools/backupchief-agent/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/chieftools/backupchief-agent/compare/v0.3.0...v0.4.0
