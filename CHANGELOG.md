@@ -4,6 +4,19 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.4.0]
+
+### Added
+
+- Added PostgreSQL backup jobs using the system-installed `psql` and `pg_dump` tools. Jobs can back up selected databases or discover every accessible non-template database.
+- Streamed each database directly into its own plain `.sql` file in Restic without writing the dump to temporary storage.
+- Added PostgreSQL source inspections that verify credentials, discover accessible databases, and test `pg_dump` with a schema-only dump.
+- Added startup capability probes for `psql` and `pg_dump`.
+
+### Changed
+
+- Included the server ID in the User-Agent for managed HTTP and WebSocket requests so the control plane can identify the originating server.
+
 ## [0.3.0]
 
 ### Added
@@ -38,7 +51,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/chieftools/backupchief-agent/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/chieftools/backupchief-agent/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/chieftools/backupchief-agent/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/chieftools/backupchief-agent/releases/tag/v0.1.0
