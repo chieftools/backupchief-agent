@@ -4,6 +4,16 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.4.1]
+
+### Added
+
+- Added bounded, non-recursive directory listings for a path in a specific snapshot.
+
+### Fixed
+
+- Fixed PostgreSQL client detection, database discovery, and dumps on Debian and Ubuntu systems that use `pg_wrapper`. Discovery now reports SQL errors instead of treating them as an empty database selection.
+
 ## [0.4.0]
 
 ### Added
@@ -51,7 +61,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/chieftools/backupchief-agent/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/chieftools/backupchief-agent/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/chieftools/backupchief-agent/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/chieftools/backupchief-agent/compare/v0.1.0...v0.2.0
