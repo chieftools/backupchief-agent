@@ -36,7 +36,7 @@ func (daemon *daemon) prepareMaintenanceLocked(job Job, journaled *JournalComman
 		persisted := *journaled.MaintenancePlan
 		plan = &persisted
 	}
-	if journaled.RunKind == "forget" && job.Maintenance.Strategy == "after_scheduled_backup" && plan == nil {
+	if journaled.RunKind == "forget" && len(journaled.Command.Payload.SnapshotIDs) == 0 && job.Maintenance.Strategy == "after_scheduled_backup" && plan == nil {
 		pruneDue := true
 		if lastPrune, err := time.Parse("2006-01-02T15:04:05.000000Z", runtimeState.LastPruneCompletedAt); err == nil {
 			pruneDue = !daemon.now().Before(lastPrune.Add(time.Duration(job.Maintenance.PruneIntervalSeconds) * time.Second))

@@ -10,6 +10,32 @@ import (
 	"testing"
 )
 
+func TestTargetedForgetCommandsRequireProtocolFifteenAndUniqueSnapshotIDs(t *testing.T) {
+	command := AgentCommand{
+		ID: "01k4p4h5n8d2r6t7v9w3x1yabd", Generation: 1, Kind: "run_maintenance",
+		IssuedAt: "2026-09-09T08:20:00.000000Z", ExpiresAt: "2026-09-09T09:20:00.000000Z",
+		Payload: CommandPayload{
+			JobID: "01k4p4g2m7d9r3t6v8w1x5y2zb", RequiredConfigRevision: 4,
+			Maintenance: "forget", SnapshotIDs: []string{strings.Repeat("a", 64)},
+		},
+	}
+	if err := validateCommand(command, 1, "1.5.0"); err != nil {
+		t.Fatalf("valid targeted forget: %v", err)
+	}
+	if err := validateCommand(command, 1, "1.4.0"); err == nil {
+		t.Fatal("targeted forget was accepted before protocol 1.5")
+	}
+	command.Payload.SnapshotIDs = []string{strings.Repeat("a", 64), strings.Repeat("a", 64)}
+	if err := validateCommand(command, 1, "1.5.0"); err == nil {
+		t.Fatal("duplicate targeted snapshot identity was accepted")
+	}
+	command.Payload.Maintenance = "prune"
+	command.Payload.SnapshotIDs = []string{strings.Repeat("b", 64)}
+	if err := validateCommand(command, 1, "1.5.0"); err == nil {
+		t.Fatal("targeted snapshot identities were accepted for prune")
+	}
+}
+
 func TestClientNegotiatesDownAfterRollbackAndBackUpAfterUpgrade(t *testing.T) {
 	var requests atomic.Int32
 	var upgraded atomic.Bool

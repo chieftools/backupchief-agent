@@ -153,18 +153,19 @@ type JobSchedule struct {
 }
 
 type JobRetention struct {
-	Last               uint64
-	Hourly             uint64
-	Daily              uint64
-	Weekly             uint64
-	Monthly            uint64
-	Yearly             uint64
-	KeepLatestComplete bool
-	GroupBy            string
-	ForgetCron         string
-	PruneCron          string
-	LatestComplete     *CompleteSnapshotProof
-	HasUnresolvedRuns  bool
+	Last                 uint64
+	Hourly               uint64
+	Daily                uint64
+	Weekly               uint64
+	Monthly              uint64
+	Yearly               uint64
+	KeepLatestComplete   bool
+	GroupBy              string
+	ForgetCron           string
+	PruneCron            string
+	LatestComplete       *CompleteSnapshotProof
+	HasUnresolvedRuns    bool
+	ProtectedSnapshotIDs []string
 }
 
 type JobIntegrity struct {
@@ -276,8 +277,9 @@ type integrityDocument struct {
 }
 
 type repositorySafety struct {
-	LatestComplete    *completeSnapshotProofDocument `json:"latest_complete,omitempty"`
-	HasUnresolvedRuns bool                           `json:"has_unresolved_runs,omitempty"`
+	LatestComplete       *completeSnapshotProofDocument `json:"latest_complete,omitempty"`
+	HasUnresolvedRuns    bool                           `json:"has_unresolved_runs,omitempty"`
+	ProtectedSnapshotIDs []string                       `json:"protected_snapshot_ids,omitempty"`
 }
 
 type completeSnapshotProofDocument struct {
@@ -575,6 +577,7 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 			}
 		}
 		retention.HasUnresolvedRuns = raw.Safety.HasUnresolvedRuns
+		retention.ProtectedSnapshotIDs = append([]string{}, raw.Safety.ProtectedSnapshotIDs...)
 	}
 	jobSource := JobSource{
 		Root:          raw.Source.Root,
@@ -925,8 +928,9 @@ func encodeConfig(config Config, managedDigest string) ([]byte, error) {
 				DataParts:        job.Integrity.DataParts,
 			},
 			Safety: &repositorySafety{
-				LatestComplete:    latestComplete,
-				HasUnresolvedRuns: job.Retention.HasUnresolvedRuns,
+				LatestComplete:       latestComplete,
+				HasUnresolvedRuns:    job.Retention.HasUnresolvedRuns,
+				ProtectedSnapshotIDs: append([]string{}, job.Retention.ProtectedSnapshotIDs...),
 			},
 		}
 		if job.Maintenance.Strategy != "" {
@@ -1052,6 +1056,16 @@ func validateJob(job Job) error {
 			}
 			seen[snapshotID] = true
 		}
+	}
+	if len(retention.ProtectedSnapshotIDs) > 1000 {
+		return fmt.Errorf("protected snapshot identities are invalid")
+	}
+	seenProtected := map[string]bool{}
+	for index, snapshotID := range retention.ProtectedSnapshotIDs {
+		if !digestPattern.MatchString(snapshotID) || seenProtected[snapshotID] || index > 0 && retention.ProtectedSnapshotIDs[index-1] >= snapshotID {
+			return fmt.Errorf("protected snapshot identities are invalid")
+		}
+		seenProtected[snapshotID] = true
 	}
 	integrity := job.Integrity
 	if !slices.Contains([]string{"auto", "custom"}, integrity.DataMode) || integrity.DataParts < 2 || integrity.DataParts > 12 {

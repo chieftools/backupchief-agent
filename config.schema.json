@@ -79,7 +79,7 @@
       "additionalProperties": false,
       "required": ["protocol_revision", "generation", "revision", "schema_version", "issued_at"],
       "properties": {
-		"protocol_revision": { "const": "1.4.0" },
+		"protocol_revision": { "const": "1.5.0" },
         "generation": { "type": "integer", "minimum": 1 },
         "revision": { "type": "integer", "minimum": 1 },
         "schema_version": { "const": 1 },
@@ -282,7 +282,13 @@
             }
           }
         },
-        "has_unresolved_runs": { "type": "boolean", "default": false }
+        "has_unresolved_runs": { "type": "boolean", "default": false },
+        "protected_snapshot_ids": {
+          "type": "array",
+          "maxItems": 1000,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/digest" }
+        }
       }
     }
   }

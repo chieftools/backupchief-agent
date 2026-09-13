@@ -648,19 +648,31 @@ func validateCommand(command AgentCommand, expectedGeneration uint64, protocolRe
 	}
 	switch command.Kind {
 	case "run_backup":
-		if !ulidPattern.MatchString(command.Payload.JobID) || command.Payload.RequiredConfigRevision == 0 || command.Payload.RunID != "" || command.Payload.Maintenance != "" {
+		if !ulidPattern.MatchString(command.Payload.JobID) || command.Payload.RequiredConfigRevision == 0 || command.Payload.RunID != "" || command.Payload.Maintenance != "" || command.Payload.SnapshotIDs != nil {
 			return fmt.Errorf("backup command payload is invalid")
 		}
 	case "run_maintenance":
 		if !ulidPattern.MatchString(command.Payload.JobID) || command.Payload.RequiredConfigRevision == 0 || command.Payload.RunID != "" || !contains([]string{"forget", "prune", "check_metadata", "check_data", "snapshot_inventory"}, command.Payload.Maintenance) {
 			return fmt.Errorf("maintenance command payload is invalid")
 		}
+		if command.Payload.SnapshotIDs != nil {
+			if command.Payload.Maintenance != "forget" || !protocolRevisionSupports(protocolRevision, "1.5.0") || len(command.Payload.SnapshotIDs) == 0 || len(command.Payload.SnapshotIDs) > 1000 {
+				return fmt.Errorf("maintenance command snapshot identities are invalid")
+			}
+			seen := map[string]bool{}
+			for _, snapshotID := range command.Payload.SnapshotIDs {
+				if !digestPattern.MatchString(snapshotID) || seen[snapshotID] {
+					return fmt.Errorf("maintenance command snapshot identities are invalid")
+				}
+				seen[snapshotID] = true
+			}
+		}
 	case "cancel_run":
-		if !ulidPattern.MatchString(command.Payload.JobID) || !ulidPattern.MatchString(command.Payload.RunID) || command.Payload.RequiredConfigRevision != 0 || command.Payload.Maintenance != "" {
+		if !ulidPattern.MatchString(command.Payload.JobID) || !ulidPattern.MatchString(command.Payload.RunID) || command.Payload.RequiredConfigRevision != 0 || command.Payload.Maintenance != "" || command.Payload.SnapshotIDs != nil {
 			return fmt.Errorf("cancellation command payload is invalid")
 		}
 	case "inspect_source":
-		if !contains([]string{"file", "mysql", "postgresql"}, command.Payload.Type) || command.Payload.Type == "postgresql" && !protocolRevisionSupports(protocolRevision, "1.2.0") || len(command.Payload.Source) == 0 || !digestPattern.MatchString(command.Payload.SourceDigest) || command.Payload.JobID != "" || command.Payload.RunID != "" || command.Payload.RequiredConfigRevision != 0 || command.Payload.Maintenance != "" {
+		if !contains([]string{"file", "mysql", "postgresql"}, command.Payload.Type) || command.Payload.Type == "postgresql" && !protocolRevisionSupports(protocolRevision, "1.2.0") || len(command.Payload.Source) == 0 || !digestPattern.MatchString(command.Payload.SourceDigest) || command.Payload.JobID != "" || command.Payload.RunID != "" || command.Payload.RequiredConfigRevision != 0 || command.Payload.Maintenance != "" || command.Payload.SnapshotIDs != nil {
 			return fmt.Errorf("source inspection command payload is invalid")
 		}
 	default:

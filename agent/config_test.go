@@ -321,6 +321,32 @@ func TestConfigNormalizesPrefixedRunIdentity(t *testing.T) {
 	}
 }
 
+func TestConfigRoundTripsForeverProtectedSnapshotIdentities(t *testing.T) {
+	first := strings.Repeat("1", 64)
+	second := strings.Repeat("2", 64)
+	body := bytes.Replace(
+		validJobConfigBody(),
+		[]byte(`"has_unresolved_runs":false`),
+		[]byte(`"has_unresolved_runs":false,"protected_snapshot_ids":["`+first+`","`+second+`"]`),
+		1,
+	)
+	body = bytes.Replace(body, []byte(`"protocol_revision":"1.1.0"`), []byte(`"protocol_revision":"1.5.0"`), 1)
+	config, _, err := DecodeConfig(body, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(config.Jobs[0].Retention.ProtectedSnapshotIDs, []string{first, second}) {
+		t.Fatalf("protected snapshot identities: %v", config.Jobs[0].Retention.ProtectedSnapshotIDs)
+	}
+	encoded, err := encodeConfig(config, strings.Repeat("a", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(encoded, []byte(`"protected_snapshot_ids": [`)) {
+		t.Fatalf("encoded configuration omitted protected snapshots: %s", encoded)
+	}
+}
+
 func TestUpdateConfigReplacesAnInvalidCacheWithoutAnEnrollmentToken(t *testing.T) {
 	store := newAgentTestStore(t)
 	bootstrap := testBootstrap()

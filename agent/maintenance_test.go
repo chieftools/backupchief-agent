@@ -80,6 +80,128 @@ func TestForgetPersistsAProtectedFixedSnapshotPlanBeforeRemoval(t *testing.T) {
 	}
 }
 
+func TestPolicyForgetPreservesForeverProtectedSnapshots(t *testing.T) {
+	remove := strings.Repeat("d", 64)
+	held := strings.Repeat("e", 64)
+	latest := strings.Repeat("f", 64)
+	executor := &scriptedMaintenanceExecutor{results: []restic.Result{
+		{ExitCode: 0, Outcome: "complete", Output: `[{"id":"` + remove + `"},{"id":"` + held + `"},{"id":"` + latest + `"}]`},
+		{ExitCode: 0, Outcome: "complete", Output: `[{"remove":[{"id":"` + remove + `"},{"id":"` + held + `"},{"id":"` + latest + `"}]}]`},
+		{ExitCode: 0, Outcome: "complete"},
+		{ExitCode: 0, Outcome: "complete", Output: `[{"id":"` + held + `"},{"id":"` + latest + `"}]`},
+	}}
+	job := maintenanceExecutionJob(t)
+	job.Retention.Daily = 7
+	job.Retention.LatestComplete = &CompleteSnapshotProof{
+		RunID: "01k4p4f7m1r9d3t6v8w2x5y7ze", FinishedAt: "2026-09-10T08:00:00.000000Z", SnapshotIDs: []string{latest},
+	}
+	job.Retention.ProtectedSnapshotIDs = []string{held}
+	var persisted MaintenancePlan
+
+	result, _, _, _ := executeMaintenance(
+		context.Background(), executor, 1, maintenanceJournalCommand("forget", job.ID), job, nil,
+		func(plan MaintenancePlan) error { persisted = plan; return nil }, time.Now,
+	)
+
+	if result.Status != "complete" || result.ResultCode != "success" {
+		t.Fatalf("policy result: %+v", result)
+	}
+	if !reflect.DeepEqual(persisted.CandidateSnapshotIDs, []string{remove}) || !reflect.DeepEqual(persisted.ProtectedSnapshotIDs, []string{held, latest}) {
+		t.Fatalf("policy plan: %+v", persisted)
+	}
+	if len(executor.requests) != 4 || !reflect.DeepEqual(executor.requests[2].SnapshotIDs, []string{remove}) {
+		t.Fatalf("policy requests: %+v", executor.requests)
+	}
+}
+
+func TestTargetedForgetExpiresTheWholeDatabaseRunWithoutPolicyPlanning(t *testing.T) {
+	anchor := strings.Repeat("1", 64)
+	peer := strings.Repeat("2", 64)
+	latest := strings.Repeat("3", 64)
+	held := strings.Repeat("4", 64)
+	executor := &scriptedMaintenanceExecutor{results: []restic.Result{
+		{ExitCode: 0, Outcome: "complete", Output: `[{"id":"` + anchor + `","tags":["backupchief-run:synthetic-run","backupchief-run-anchor"]},{"id":"` + peer + `","tags":["backupchief-run:synthetic-run"]},{"id":"` + latest + `"},{"id":"` + held + `"}]`},
+		{ExitCode: 0, Outcome: "complete"},
+		{ExitCode: 0, Outcome: "complete", Output: `[{"id":"` + latest + `"},{"id":"` + held + `"}]`},
+	}}
+	job := maintenanceExecutionJob(t)
+	job.Type = JobTypeMySQL
+	job.Retention.LatestComplete = &CompleteSnapshotProof{
+		RunID: "01k4p4f7m1r9d3t6v8w2x5y7ze", FinishedAt: "2026-09-10T08:00:00.000000Z", SnapshotIDs: []string{latest},
+	}
+	job.Retention.ProtectedSnapshotIDs = []string{held}
+	command := maintenanceJournalCommand("forget", job.ID)
+	command.Command.Payload.SnapshotIDs = []string{anchor}
+	var persisted MaintenancePlan
+	persistedBeforeForget := false
+
+	result, _, _, _ := executeMaintenance(
+		context.Background(), executor, 1, command, job, nil,
+		func(plan MaintenancePlan) error {
+			persisted = plan
+			persistedBeforeForget = len(executor.requests) == 1
+			return nil
+		},
+		time.Now,
+	)
+
+	if result.Status != "complete" || result.ResultCode != "success" || !persistedBeforeForget {
+		t.Fatalf("targeted result=%+v persisted-before-forget=%t", result, persistedBeforeForget)
+	}
+	if !reflect.DeepEqual(persisted.CandidateSnapshotIDs, []string{anchor, peer}) || !reflect.DeepEqual(persisted.ProtectedSnapshotIDs, []string{latest, held}) {
+		t.Fatalf("targeted plan: %+v", persisted)
+	}
+	if len(executor.requests) != 3 || executor.requests[1].Operation != "forget" || !reflect.DeepEqual(executor.requests[1].SnapshotIDs, []string{anchor, peer}) {
+		t.Fatalf("targeted requests: %+v", executor.requests)
+	}
+}
+
+func TestTargetedForgetRefusesAProtectedSnapshotAsOneAction(t *testing.T) {
+	target := strings.Repeat("5", 64)
+	latest := strings.Repeat("6", 64)
+	executor := &scriptedMaintenanceExecutor{results: []restic.Result{{
+		ExitCode: 0, Outcome: "complete", Output: `[{"id":"` + target + `"},{"id":"` + latest + `"}]`,
+	}}}
+	job := maintenanceExecutionJob(t)
+	job.Retention.LatestComplete = &CompleteSnapshotProof{
+		RunID: "01k4p4f7m1r9d3t6v8w2x5y7ze", FinishedAt: "2026-09-10T08:00:00.000000Z", SnapshotIDs: []string{latest},
+	}
+	job.Retention.ProtectedSnapshotIDs = []string{target}
+	command := maintenanceJournalCommand("forget", job.ID)
+	command.Command.Payload.SnapshotIDs = []string{target}
+
+	result, _, _, _ := executeMaintenance(
+		context.Background(), executor, 1, command, job, nil,
+		func(MaintenancePlan) error { t.Fatal("protected target was persisted"); return nil }, time.Now,
+	)
+
+	if result.Status != "skipped" || result.ResultCode != "recovery_point_protected" || len(executor.requests) != 1 || result.SnapshotEvidence == nil || result.SnapshotEvidence.Scope != "repository" {
+		t.Fatalf("protected target result=%+v requests=%+v", result, executor.requests)
+	}
+}
+
+func TestTargetedForgetTreatsAnAbsentSnapshotAsAlreadyExpired(t *testing.T) {
+	absent := strings.Repeat("7", 64)
+	latest := strings.Repeat("8", 64)
+	executor := &scriptedMaintenanceExecutor{results: []restic.Result{{
+		ExitCode: 0, Outcome: "complete", Output: `[{"id":"` + latest + `"}]`,
+	}}}
+	job := maintenanceExecutionJob(t)
+	job.Retention.LatestComplete = &CompleteSnapshotProof{
+		RunID: "01k4p4f7m1r9d3t6v8w2x5y7ze", FinishedAt: "2026-09-10T08:00:00.000000Z", SnapshotIDs: []string{latest},
+	}
+	command := maintenanceJournalCommand("forget", job.ID)
+	command.Command.Payload.SnapshotIDs = []string{absent}
+
+	result, _, _, _ := executeMaintenance(
+		context.Background(), executor, 1, command, job, nil, func(MaintenancePlan) error { return nil }, time.Now,
+	)
+
+	if result.Status != "complete" || result.ResultCode != "success" || len(executor.requests) != 1 || result.SnapshotEvidence == nil {
+		t.Fatalf("absent target result=%+v requests=%+v", result, executor.requests)
+	}
+}
+
 func TestCombinedRetentionRunsPruneWhenDueAndRecordsItsCompletion(t *testing.T) {
 	remove := strings.Repeat("8", 64)
 	protected := strings.Repeat("9", 64)

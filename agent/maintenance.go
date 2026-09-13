@@ -116,7 +116,7 @@ func executeMaintenance(
 			result.Summary = "Retention was skipped because no complete recovery point is available."
 			return finish(result)
 		}
-		return executeForget(runContext, run, request, result, job, proof, plan, persistPlan, finish, now)
+		return executeForget(runContext, run, request, result, job, proof, command.Command.Payload.SnapshotIDs, plan, persistPlan, finish, now)
 	case "snapshot_inventory":
 		request.Operation = "snapshots"
 		response := run(request)
@@ -196,6 +196,7 @@ func executeForget(
 	result CommandResult,
 	job Job,
 	proof *CompleteSnapshotProof,
+	targetSnapshotIDs []string,
 	plan *MaintenancePlan,
 	persistPlan func(MaintenancePlan) error,
 	finish func(CommandResult) (CommandResult, []byte, bool, uint64),
@@ -210,6 +211,9 @@ func executeForget(
 	}
 	inventoryObservedAt := now()
 	protected := stringSet(proof.SnapshotIDs)
+	for _, snapshotID := range job.Retention.ProtectedSnapshotIDs {
+		protected[snapshotID] = true
+	}
 	for snapshotID := range protected {
 		if _, exists := inventory[snapshotID]; !exists {
 			attachSnapshotEvidence(&result, "repository", snapshotIDs(inventory), inventoryObservedAt)
@@ -226,38 +230,66 @@ func executeForget(
 		candidateIDs = append(candidateIDs, plan.CandidateSnapshotIDs...)
 	}
 	if !forgetPlanned {
-		policy := restic.Retention{
-			Last: job.Retention.Last, Hourly: job.Retention.Hourly, Daily: job.Retention.Daily,
-			Weekly: job.Retention.Weekly, Monthly: job.Retention.Monthly, Yearly: job.Retention.Yearly,
-		}
-		if retentionPolicyEmpty(policy) {
-			for _, snapshot := range snapshotRecords(inventoryResult) {
-				if !isDatabaseJob(job.Type) || contains(snapshot.Tags, "backupchief-run-anchor") {
-					candidateIDs = append(candidateIDs, snapshot.ID)
-				}
-			}
-			sort.Strings(candidateIDs)
-		} else {
-			request.Operation = "forget_plan"
-			request.Retention = &policy
-			if isDatabaseJob(job.Type) {
-				request.Tags = []string{"backupchief-run-anchor"}
-			}
-			planResult := run(request)
-			var parsed bool
-			candidateIDs, parsed = parseForgetCandidates(planResult)
-			if !parsed {
-				result = maintenanceResult(result, planResult, ctx, "Retention plan completed.")
+		if len(targetSnapshotIDs) > 0 {
+			candidateIDs = append(candidateIDs, targetSnapshotIDs...)
+			if intersectsProtected(candidateIDs, protected) {
+				attachSnapshotEvidence(&result, "repository", snapshotIDs(inventory), inventoryObservedAt)
+				result.Status = "skipped"
+				result.ResultCode = "recovery_point_protected"
+				result.Summary = "The recovery point was not expired because it is protected."
 				return finish(result)
 			}
+			if isDatabaseJob(job.Type) {
+				candidateIDs = expandDatabaseRunCandidates(snapshotRecords(inventoryResult), candidateIDs)
+			}
+			if intersectsProtected(candidateIDs, protected) {
+				attachSnapshotEvidence(&result, "repository", snapshotIDs(inventory), inventoryObservedAt)
+				result.Status = "skipped"
+				result.ResultCode = "recovery_point_protected"
+				result.Summary = "The recovery point was not expired because it is protected."
+				return finish(result)
+			}
+			present := map[string]bool{}
+			for _, snapshotID := range candidateIDs {
+				if inventory[snapshotID] {
+					present[snapshotID] = true
+				}
+			}
+			candidateIDs = snapshotIDs(present)
+		} else {
+			policy := restic.Retention{
+				Last: job.Retention.Last, Hourly: job.Retention.Hourly, Daily: job.Retention.Daily,
+				Weekly: job.Retention.Weekly, Monthly: job.Retention.Monthly, Yearly: job.Retention.Yearly,
+			}
+			if retentionPolicyEmpty(policy) {
+				for _, snapshot := range snapshotRecords(inventoryResult) {
+					if !isDatabaseJob(job.Type) || contains(snapshot.Tags, "backupchief-run-anchor") {
+						candidateIDs = append(candidateIDs, snapshot.ID)
+					}
+				}
+				sort.Strings(candidateIDs)
+			} else {
+				request.Operation = "forget_plan"
+				request.Retention = &policy
+				if isDatabaseJob(job.Type) {
+					request.Tags = []string{"backupchief-run-anchor"}
+				}
+				planResult := run(request)
+				var parsed bool
+				candidateIDs, parsed = parseForgetCandidates(planResult)
+				if !parsed {
+					result = maintenanceResult(result, planResult, ctx, "Retention plan completed.")
+					return finish(result)
+				}
+			}
+			if isDatabaseJob(job.Type) {
+				candidateIDs = expandDatabaseRunCandidates(snapshotRecords(inventoryResult), candidateIDs)
+			}
+			candidateIDs = withoutProtected(candidateIDs, protected)
 		}
-		if isDatabaseJob(job.Type) {
-			candidateIDs = expandDatabaseRunCandidates(snapshotRecords(inventoryResult), candidateIDs)
-		}
-		candidateIDs = withoutProtected(candidateIDs, protected)
 		persistedPlan := MaintenancePlan{
 			Kind: "forget", CandidateSnapshotIDs: candidateIDs,
-			ProtectedSnapshotIDs: append([]string(nil), proof.SnapshotIDs...),
+			ProtectedSnapshotIDs: snapshotIDs(protected),
 			ForgetPlanned:        true,
 		}
 		if plan != nil {
@@ -625,6 +657,15 @@ func withoutProtected(values []string, protected map[string]bool) []string {
 		}
 	}
 	return filtered
+}
+
+func intersectsProtected(values []string, protected map[string]bool) bool {
+	for _, value := range values {
+		if protected[value] {
+			return true
+		}
+	}
+	return false
 }
 
 func maintenanceStatistics(inventory, candidates, remaining, protected int) *RunStatistics {

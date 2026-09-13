@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	ProtocolRevision          = "1.4.0"
+	ProtocolRevision          = "1.5.0"
 	ProtocolHeader            = "BackupChief-Protocol-Revision"
 	LatestProtocolHeader      = "BackupChief-Latest-Protocol-Revision"
 	DefaultEndpoint           = "https://backup.chief.app/agent/v1"
@@ -181,6 +181,7 @@ type CommandPayload struct {
 	RunID                  string         `json:"run_id,omitempty"`
 	RequiredConfigRevision uint64         `json:"required_config_revision,omitempty"`
 	Maintenance            string         `json:"maintenance,omitempty"`
+	SnapshotIDs            []string       `json:"snapshot_ids,omitempty"`
 	Type                   string         `json:"type,omitempty"`
 	Source                 map[string]any `json:"source,omitempty"`
 	SourceDigest           string         `json:"source_digest,omitempty"`
