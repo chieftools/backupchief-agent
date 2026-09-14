@@ -143,7 +143,32 @@ func postgresqlDumpArguments(source PostgreSQLSource, database, passfile string,
 	if schemaOnly {
 		arguments = append(arguments, "--schema-only")
 	}
+	if source.TableSelection != nil {
+		patterns := make([]string, 0)
+		for _, table := range source.TableSelection.Tables {
+			if table.Database == database {
+				patterns = append(patterns, postgresqlTablePattern(table.Schema, table.Table))
+			}
+		}
+		sort.Strings(patterns)
+		option := "--exclude-table="
+		if source.TableSelection.Mode == "include" {
+			arguments = append(arguments, "--strict-names")
+			option = "--table="
+		}
+		for _, pattern := range patterns {
+			arguments = append(arguments, option+pattern)
+		}
+	}
 	return append(arguments, "--dbname="+postgresqlConnectionString(source, database, passfile))
+}
+
+func postgresqlTablePattern(schema, table string) string {
+	quote := func(value string) string {
+		return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
+	}
+
+	return quote(schema) + "." + quote(table)
 }
 
 func postgresqlConnectionString(source PostgreSQLSource, database, passfile string) string {
@@ -216,6 +241,40 @@ func discoverPostgreSQLDatabases(ctx context.Context, binary string, source Post
 	}
 	sort.Strings(databases)
 	return databases, nil
+}
+
+func discoverPostgreSQLTables(ctx context.Context, binary string, source PostgreSQLSource, database, passfile string) (map[string]bool, error) {
+	query := "SELECT encode(convert_to(n.nspname, 'UTF8'), 'hex'), encode(convert_to(c.relname, 'UTF8'), 'hex') FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S') ORDER BY n.nspname, c.relname"
+	arguments := []string{"--no-psqlrc", "--no-password", "--tuples-only", "--no-align", "--quiet", "--field-separator=\t", "--set=ON_ERROR_STOP=on", "--dbname=" + postgresqlConnectionString(source, database, passfile), "--command=" + query}
+	command := exec.CommandContext(ctx, binary, arguments...)
+	command.Env = []string{"PATH=/usr/bin:/bin:/usr/local/bin", "LANG=C"}
+	var output bytes.Buffer
+	var stderr inspectionOutput
+	command.Stdout = &output
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		return nil, commandFailure("psql", err, stderr.String())
+	}
+
+	tables := map[string]bool{}
+	scanner := bufio.NewScanner(bytes.NewReader(output.Bytes()))
+	for scanner.Scan() {
+		parts := strings.Split(scanner.Text(), "\t")
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("psql returned an invalid table catalog row")
+		}
+		schema, schemaErr := hex.DecodeString(strings.TrimSpace(parts[0]))
+		table, tableErr := hex.DecodeString(strings.TrimSpace(parts[1]))
+		if schemaErr != nil || tableErr != nil {
+			return nil, fmt.Errorf("psql returned an invalid table catalog row")
+		}
+		tables[string(schema)+"\x00"+string(table)] = true
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	return tables, nil
 }
 
 func selectedPostgreSQLDatabases(source PostgreSQLSource, discovered []string) ([]string, bool) {

@@ -79,7 +79,7 @@
       "additionalProperties": false,
       "required": ["protocol_revision", "generation", "revision", "schema_version", "issued_at"],
       "properties": {
-		"protocol_revision": { "const": "1.5.0" },
+		"protocol_revision": { "const": "1.6.0" },
         "generation": { "type": "integer", "minimum": 1 },
         "revision": { "type": "integer", "minimum": 1 },
         "schema_version": { "const": 1 },
@@ -142,7 +142,9 @@
       "oneOf": [
 		{ "$ref": "#/$defs/file_job" },
 		{ "$ref": "#/$defs/mysql_job" },
-		{ "$ref": "#/$defs/postgresql_job" }
+		{ "$ref": "#/$defs/mysql_tables_job" },
+		{ "$ref": "#/$defs/postgresql_job" },
+		{ "$ref": "#/$defs/postgresql_tables_job" }
       ]
     },
     "file_job": {
@@ -177,7 +179,18 @@
 	  "required": ["type", "source", "repository", "schedule"],
 	  "properties": {
 		"name": { "type": "string", "minLength": 1, "maxLength": 255 }, "type": { "const": "mysql" },
-		"enabled": { "type": "boolean", "default": true }, "source": { "$ref": "#/$defs/mysql_source" },
+		"enabled": { "type": "boolean", "default": true }, "source": { "allOf": [{ "$ref": "#/$defs/mysql_source" }, { "not": { "required": ["table_selection"] } }] },
+		"repository": { "$ref": "#/$defs/repository" }, "schedule": { "$ref": "#/$defs/cron" },
+		"maintenance": { "$ref": "#/$defs/maintenance" },
+		"retention": { "$ref": "#/$defs/retention" }, "integrity": { "$ref": "#/$defs/integrity" }, "safety": { "$ref": "#/$defs/safety" }
+	  }
+	},
+	"mysql_tables_job": {
+	  "type": "object", "additionalProperties": false,
+	  "required": ["type", "source", "repository", "schedule"],
+	  "properties": {
+		"name": { "type": "string", "minLength": 1, "maxLength": 255 }, "type": { "const": "mysql_tables" },
+		"enabled": { "type": "boolean", "default": true }, "source": { "allOf": [{ "$ref": "#/$defs/mysql_source" }, { "required": ["table_selection"] }, { "if": { "properties": { "table_selection": { "properties": { "mode": { "const": "include" } }, "required": ["mode"] } } }, "then": { "properties": { "selection": { "properties": { "mode": { "const": "selected" } }, "required": ["mode"] } } } }] },
 		"repository": { "$ref": "#/$defs/repository" }, "schedule": { "$ref": "#/$defs/cron" },
 		"maintenance": { "$ref": "#/$defs/maintenance" },
 		"retention": { "$ref": "#/$defs/retention" }, "integrity": { "$ref": "#/$defs/integrity" }, "safety": { "$ref": "#/$defs/safety" }
@@ -190,7 +203,15 @@
 		"host": { "type": "string", "minLength": 1, "maxLength": 255 }, "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
 		"username": { "type": "string", "minLength": 1, "maxLength": 255 }, "password": { "type": "string", "maxLength": 4096 },
 		"selection": { "type": "object", "additionalProperties": false, "required": ["mode"], "properties": { "mode": { "enum": ["selected", "all_accessible"] }, "databases": { "type": "array", "maxItems": 1000, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 64 } } } },
-		"dump": { "type": "object", "additionalProperties": false, "properties": { "include_routines": { "type": "boolean" }, "include_events": { "type": "boolean" }, "custom_flags": { "type": "array", "maxItems": 50, "uniqueItems": true, "items": { "type": "string", "pattern": "^--[a-z0-9][a-z0-9-]*(=.*)?$", "maxLength": 512 } } } }
+		"dump": { "type": "object", "additionalProperties": false, "properties": { "include_routines": { "type": "boolean" }, "include_events": { "type": "boolean" }, "custom_flags": { "type": "array", "maxItems": 50, "uniqueItems": true, "items": { "type": "string", "pattern": "^--[a-z0-9][a-z0-9-]*(=.*)?$", "maxLength": 512 } } } },
+		"table_selection": { "$ref": "#/$defs/mysql_table_selection" }
+	  }
+	},
+	"mysql_table_selection": {
+	  "type": "object", "additionalProperties": false, "required": ["mode", "tables"],
+	  "properties": {
+		"mode": { "enum": ["include", "exclude"] },
+		"tables": { "type": "array", "minItems": 1, "maxItems": 1000, "uniqueItems": true, "items": { "type": "object", "additionalProperties": false, "required": ["database", "table"], "properties": { "database": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[^-]" }, "table": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[^-]" } } } }
 	  }
 	},
 	"postgresql_job": {
@@ -198,7 +219,18 @@
 	  "required": ["type", "source", "repository", "schedule"],
 	  "properties": {
 		"name": { "type": "string", "minLength": 1, "maxLength": 255 }, "type": { "const": "postgresql" },
-		"enabled": { "type": "boolean", "default": true }, "source": { "$ref": "#/$defs/postgresql_source" },
+		"enabled": { "type": "boolean", "default": true }, "source": { "allOf": [{ "$ref": "#/$defs/postgresql_source" }, { "not": { "required": ["table_selection"] } }] },
+		"repository": { "$ref": "#/$defs/repository" }, "schedule": { "$ref": "#/$defs/cron" },
+		"maintenance": { "$ref": "#/$defs/maintenance" },
+		"retention": { "$ref": "#/$defs/retention" }, "integrity": { "$ref": "#/$defs/integrity" }, "safety": { "$ref": "#/$defs/safety" }
+	  }
+	},
+	"postgresql_tables_job": {
+	  "type": "object", "additionalProperties": false,
+	  "required": ["type", "source", "repository", "schedule"],
+	  "properties": {
+		"name": { "type": "string", "minLength": 1, "maxLength": 255 }, "type": { "const": "postgresql_tables" },
+		"enabled": { "type": "boolean", "default": true }, "source": { "allOf": [{ "$ref": "#/$defs/postgresql_source" }, { "required": ["table_selection"] }, { "if": { "properties": { "table_selection": { "properties": { "mode": { "const": "include" } }, "required": ["mode"] } } }, "then": { "properties": { "selection": { "properties": { "mode": { "const": "selected" } }, "required": ["mode"] } } } }] },
 		"repository": { "$ref": "#/$defs/repository" }, "schedule": { "$ref": "#/$defs/cron" },
 		"maintenance": { "$ref": "#/$defs/maintenance" },
 		"retention": { "$ref": "#/$defs/retention" }, "integrity": { "$ref": "#/$defs/integrity" }, "safety": { "$ref": "#/$defs/safety" }
@@ -211,7 +243,15 @@
 		"host": { "type": "string", "minLength": 1, "maxLength": 255 }, "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
 		"username": { "type": "string", "minLength": 1, "maxLength": 255 }, "password": { "type": "string", "maxLength": 4096 },
 		"connection_database": { "type": "string", "minLength": 1, "maxLength": 63 },
-		"selection": { "type": "object", "additionalProperties": false, "required": ["mode"], "properties": { "mode": { "enum": ["selected", "all_accessible"] }, "databases": { "type": "array", "maxItems": 1000, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 63, "not": { "enum": ["template0", "template1"] } } } } }
+		"selection": { "type": "object", "additionalProperties": false, "required": ["mode"], "properties": { "mode": { "enum": ["selected", "all_accessible"] }, "databases": { "type": "array", "maxItems": 1000, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 63, "not": { "enum": ["template0", "template1"] } } } } },
+		"table_selection": { "$ref": "#/$defs/postgresql_table_selection" }
+	  }
+	},
+	"postgresql_table_selection": {
+	  "type": "object", "additionalProperties": false, "required": ["mode", "tables"],
+	  "properties": {
+		"mode": { "enum": ["include", "exclude"] },
+		"tables": { "type": "array", "minItems": 1, "maxItems": 1000, "uniqueItems": true, "items": { "type": "object", "additionalProperties": false, "required": ["database", "schema", "table"], "properties": { "database": { "type": "string", "minLength": 1, "maxLength": 63 }, "schema": { "type": "string", "minLength": 1, "maxLength": 63 }, "table": { "type": "string", "minLength": 1, "maxLength": 63 } } } }
 	  }
 	},
     "repository": {

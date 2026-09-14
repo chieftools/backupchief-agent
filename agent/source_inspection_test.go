@@ -28,6 +28,21 @@ func TestSourceInspectionUsesAgentStateForPrivateMySQLCredentials(t *testing.T) 
 	}
 }
 
+func TestSourceInspectionVerifiesExactMySQLTableSelection(t *testing.T) {
+	installInspectionTools(t, catalogMySQLTool, successfulMySQLDumpTool)
+	payload := inspectionMySQLPayload()
+	payload.Type = "mysql_tables"
+	payload.Source["table_selection"] = map[string]any{
+		"mode": "exclude", "tables": []map[string]any{{"database": "synthetic_app", "table": "transient_rows"}},
+	}
+
+	result := inspectSource(context.Background(), 1, "01k4p4k2n8d3r6t9v1w5x7yabc", t.TempDir(), payload)
+
+	if result.Status != "complete" || result.ResultCode != "success" || result.Failure != nil {
+		t.Fatalf("result: %+v", result)
+	}
+}
+
 func TestSourceInspectionReportsCredentialWorkspaceFailure(t *testing.T) {
 	installInspectionTools(t, successfulMySQLTool, successfulMySQLDumpTool)
 	payload := inspectionMySQLPayload()
@@ -64,6 +79,19 @@ func TestSourceInspectionRejectsAnInaccessiblePostgreSQLSelection(t *testing.T) 
 	result := inspectSource(context.Background(), 1, "01k4p4k2n8d3r6t9v1w5x7yabc", t.TempDir(), payload)
 
 	assertInspectionFailure(t, result, "database_selection_invalid", "database_selection")
+}
+
+func TestSourceInspectionRejectsAMissingExactPostgreSQLTable(t *testing.T) {
+	installPostgreSQLInspectionTools(t, catalogPostgreSQLTool, successfulPostgreSQLDumpTool)
+	payload := inspectionPostgreSQLPayload()
+	payload.Type = "postgresql_tables"
+	payload.Source["table_selection"] = map[string]any{
+		"mode": "include", "tables": []map[string]any{{"database": "synthetic_app", "schema": "analytics", "table": "missing_rollup"}},
+	}
+
+	result := inspectSource(context.Background(), 1, "01k4p4k2n8d3r6t9v1w5x7yabc", t.TempDir(), payload)
+
+	assertInspectionFailure(t, result, "table_selection_invalid", "table_selection")
 }
 
 func TestSourceInspectionReportsRedactedDatabaseDiscoveryFailure(t *testing.T) {
@@ -195,6 +223,22 @@ fi
 printf '73796e7468657469635f617070\n'
 `
 
+const catalogMySQLTool = `#!/bin/sh
+if [ "$1" = "--version" ]; then
+    echo "mysql synthetic-version"
+    exit 0
+fi
+for argument in "$@"; do
+    case "$argument" in
+        *INFORMATION_SCHEMA.TABLES*)
+            printf '73796e7468657469635f617070\t7472616e7369656e745f726f7773\n'
+            exit 0
+            ;;
+    esac
+done
+printf '73796e7468657469635f617070\n'
+`
+
 const failingMySQLTool = `#!/bin/sh
 if [ "$1" = "--version" ]; then
     echo "mysql synthetic-version"
@@ -238,6 +282,22 @@ if [ "$found_on_error_stop" != "true" ]; then
     printf 'missing ON_ERROR_STOP\n' >&2
     exit 1
 fi
+printf '706f737467726573\n73796e7468657469635f617070\n'
+`
+
+const catalogPostgreSQLTool = `#!/bin/sh
+if [ "$1" = "--version" ]; then
+    echo "psql synthetic-version"
+    exit 0
+fi
+for argument in "$@"; do
+    case "$argument" in
+        *pg_class*)
+            printf '616e616c7974696373\t6461696c795f726f6c6c7570\n'
+            exit 0
+            ;;
+    esac
+done
 printf '706f737467726573\n73796e7468657469635f617070\n'
 `
 

@@ -82,7 +82,7 @@ func executeMySQLBackup(ctx context.Context, executor BackupExecutor, stateDirec
 			flags = append(flags, "--events")
 		}
 		flags = append(flags, mysql.CustomFlags...)
-		flags = append(flags, "--databases", database)
+		flags = append(flags, mysqlTableArguments(*mysql, database)...)
 		tags := []string{"backupchief-job:" + job.ID, "backupchief-run:" + command.RunID, "backupchief-type:mysql", "backupchief-database:" + encoded}
 		if !anchorWritten {
 			tags = append(tags, "backupchief-run-anchor")
@@ -132,6 +132,30 @@ func executeMySQLBackup(ctx context.Context, executor BackupExecutor, stateDirec
 		truncated = true
 	}
 	return result, append([]byte(nil), log...), truncated, dropped
+}
+
+func mysqlTableArguments(source MySQLSource, database string) []string {
+	selection := source.TableSelection
+	if selection == nil {
+		return []string{"--databases", database}
+	}
+
+	tables := make([]string, 0)
+	for _, table := range selection.Tables {
+		if table.Database == database {
+			tables = append(tables, table.Table)
+		}
+	}
+	sort.Strings(tables)
+	if selection.Mode == "include" {
+		return append([]string{database}, tables...)
+	}
+
+	arguments := make([]string, 0, len(tables)+2)
+	for _, table := range tables {
+		arguments = append(arguments, "--ignore-table="+database+"."+table)
+	}
+	return append(arguments, "--databases", database)
 }
 
 func mysqlDumpFilename(database string) string {
@@ -200,6 +224,39 @@ func discoverMySQLDatabases(ctx context.Context, binary, optionFile string) ([]s
 	}
 	sort.Strings(databases)
 	return databases, nil
+}
+
+func discoverMySQLTables(ctx context.Context, binary, optionFile string) (map[string]bool, error) {
+	query := "SELECT HEX(TABLE_SCHEMA), HEX(TABLE_NAME) FROM INFORMATION_SCHEMA.TABLES ORDER BY TABLE_SCHEMA, TABLE_NAME"
+	command := exec.CommandContext(ctx, binary, "--defaults-extra-file="+optionFile, "--batch", "--skip-column-names", "--execute="+query)
+	command.Env = []string{"PATH=/usr/bin:/bin:/usr/local/bin:/usr/local/mysql/bin", "LANG=C"}
+	var output bytes.Buffer
+	var stderr inspectionOutput
+	command.Stdout = &output
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		return nil, commandFailure("mysql", err, stderr.String())
+	}
+
+	tables := map[string]bool{}
+	scanner := bufio.NewScanner(bytes.NewReader(output.Bytes()))
+	for scanner.Scan() {
+		parts := strings.Split(scanner.Text(), "\t")
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("mysql returned an invalid table catalog row")
+		}
+		database, databaseErr := hex.DecodeString(strings.TrimSpace(parts[0]))
+		table, tableErr := hex.DecodeString(strings.TrimSpace(parts[1]))
+		if databaseErr != nil || tableErr != nil {
+			return nil, fmt.Errorf("mysql returned an invalid table catalog row")
+		}
+		tables[string(database)+"\x00"+string(table)] = true
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	return tables, nil
 }
 
 type inspectionOutput struct {

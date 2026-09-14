@@ -45,6 +45,20 @@ func TestMySQLDatabaseSelectionAllowsOneThousandDatabases(t *testing.T) {
 	}
 }
 
+func TestMySQLTableSelectionRejectsUnrepresentableExclusions(t *testing.T) {
+	source := JobSource{MySQL: &MySQLSource{
+		Host: "database.example.test", Port: 3306, Username: "synthetic_reader",
+		SelectionMode: "selected", Databases: []string{"synthetic_app"},
+		TableSelection: &TableSelection{Mode: "exclude", Tables: []TableSelectionEntry{
+			{Database: "synthetic_app", Table: "events.archive"},
+		}},
+	}}
+
+	if err := validateMySQLSource(source); err == nil {
+		t.Fatal("accepted an exclusion name containing a period")
+	}
+}
+
 func TestPostgreSQLConfigurationRequiresProtocolRevisionAndRoundTrips(t *testing.T) {
 	body := postgresqlConfigBody(t, ProtocolRevision)
 	config, _, err := DecodeConfig(body, 1)
@@ -68,6 +82,39 @@ func TestPostgreSQLConfigurationRequiresProtocolRevisionAndRoundTrips(t *testing
 	}
 	if len(legacy.Jobs) != 0 || len(legacy.Warnings) != 1 || !strings.Contains(legacy.Warnings[0], "requires protocol revision 1.2.0") {
 		t.Fatalf("legacy PostgreSQL configuration: jobs=%+v warnings=%q", legacy.Jobs, legacy.Warnings)
+	}
+}
+
+func TestFilteredDatabaseConfigurationRequiresProtocolRevisionAndSurvivesCacheRoundTrip(t *testing.T) {
+	body := filteredMySQLConfigBody(t, ProtocolRevision)
+	config, _, err := DecodeConfig(body, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Jobs) != 1 || config.Jobs[0].Type != JobTypeMySQLTables || config.Jobs[0].Source.MySQL == nil || config.Jobs[0].Source.MySQL.TableSelection == nil {
+		t.Fatalf("filtered MySQL job: %+v", config.Jobs)
+	}
+	encoded, err := encodeConfig(config, strings.Repeat("c", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(encoded, []byte(`"type": "mysql_tables"`)) || !bytes.Contains(encoded, []byte(`"table_selection": {`)) {
+		t.Fatalf("encoded filtered configuration: %s", encoded)
+	}
+
+	legacy, _, err := DecodeConfig(filteredMySQLConfigBody(t, "1.5.0"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(legacy.Jobs) != 0 || len(legacy.Warnings) != 1 || !strings.Contains(legacy.Warnings[0], "requires protocol revision 1.6.0") {
+		t.Fatalf("legacy filtered configuration: jobs=%+v warnings=%q", legacy.Jobs, legacy.Warnings)
+	}
+	legacyEncoded, err := encodeConfig(legacy, strings.Repeat("d", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(legacyEncoded, []byte(`"type": "mysql_tables"`)) || !bytes.Contains(legacyEncoded, []byte(`"table_selection"`)) {
+		t.Fatalf("legacy cache did not preserve filtered job: %s", legacyEncoded)
 	}
 }
 
@@ -485,6 +532,30 @@ func postgresqlConfigBody(t *testing.T, protocol string) []byte {
 	job["source"] = map[string]any{
 		"host": "postgresql.example.test", "port": 5432, "username": "synthetic_reader", "password": "synthetic-secret",
 		"connection_database": "postgres", "selection": map[string]any{"mode": "selected", "databases": []string{"synthetic_app"}},
+	}
+	body, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func filteredMySQLConfigBody(t *testing.T, protocol string) []byte {
+	t.Helper()
+	var document map[string]any
+	if err := json.Unmarshal(validJobConfigBody(), &document); err != nil {
+		t.Fatal(err)
+	}
+	document["metadata"].(map[string]any)["protocol_revision"] = protocol
+	job := document["jobs"].(map[string]any)["job_01k4p4f7m1r9d3t6v8w2x5y7za"].(map[string]any)
+	job["type"] = "mysql_tables"
+	job["source"] = map[string]any{
+		"host": "mysql.example.test", "port": 3306, "username": "synthetic_reader", "password": "synthetic-secret",
+		"selection": map[string]any{"mode": "selected", "databases": []string{"synthetic_app"}},
+		"dump":      map[string]any{"include_routines": false, "include_events": false, "custom_flags": []string{}},
+		"table_selection": map[string]any{
+			"mode": "exclude", "tables": []map[string]any{{"database": "synthetic_app", "table": "transient_rows"}},
+		},
 	}
 	body, err := json.Marshal(document)
 	if err != nil {

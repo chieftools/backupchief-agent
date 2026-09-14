@@ -49,10 +49,15 @@ func inspectSource(ctx context.Context, generation uint64, runID, stateDirectory
 		result.Failure = nil
 		return result
 	}
-	if payload.Type == "postgresql" {
+	jobType := JobType(payload.Type)
+	if isPostgreSQLJob(jobType) {
+		if (jobType == JobTypePostgreSQLTables) != (source.TableSelection != nil) {
+			result.Failure = inspectionFailure("source_validation", "The source type does not match its table selection fields.", source.Password)
+			return result
+		}
 		return inspectPostgreSQLSource(ctx, result, source, stateDirectory)
 	}
-	if payload.Type != "mysql" || source.Selection == nil || source.Dump == nil {
+	if !isMySQLJob(jobType) || source.Selection == nil || source.Dump == nil || (jobType == JobTypeMySQLTables) != (source.TableSelection != nil) {
 		result.Failure = inspectionFailure("source_validation", "The source type or required source fields are not supported by this agent.")
 		return result
 	}
@@ -60,7 +65,8 @@ func inspectSource(ctx context.Context, generation uint64, runID, stateDirectory
 		Host: source.Host, Port: source.Port, Username: source.Username, Password: source.Password,
 		SelectionMode: source.Selection.Mode, Databases: source.Selection.Databases,
 		IncludeRoutines: source.Dump.IncludeRoutines, IncludeEvents: source.Dump.IncludeEvents,
-		CustomFlags: source.Dump.CustomFlags,
+		CustomFlags:    source.Dump.CustomFlags,
+		TableSelection: normalizeTableSelection(source.TableSelection),
 	}
 	if err := validateMySQLSource(JobSource{MySQL: &mysql}); err != nil {
 		result.Summary = "The MySQL source configuration is invalid."
@@ -102,12 +108,35 @@ func inspectSource(ctx context.Context, generation uint64, runID, stateDirectory
 		result.Failure = inspectionFailure("database_discovery", "MySQL returned no accessible non-system databases.", mysql.Password)
 		return result
 	}
+	if mysql.TableSelection != nil {
+		accessible := map[string]bool{}
+		for _, database := range discovered {
+			accessible[database] = true
+		}
+		tables, catalogErr := discoverMySQLTables(ctx, mysqlBinary, optionFile)
+		if catalogErr != nil {
+			result.ResultCode = "table_selection_invalid"
+			result.Summary = "The selected MySQL tables could not be verified."
+			result.Databases = discovered
+			result.Failure = inspectionFailure("table_selection", catalogErr.Error(), mysql.Password)
+			return result
+		}
+		for _, table := range mysql.TableSelection.Tables {
+			if !accessible[table.Database] || !tables[table.Database+"\x00"+table.Table] {
+				result.ResultCode = "table_selection_invalid"
+				result.Summary = "The selected MySQL tables do not all exist or are not accessible."
+				result.Databases = discovered
+				result.Failure = inspectionFailure("table_selection", fmt.Sprintf("Table %q in database %q was not returned by the catalog query.", table.Table, table.Database), mysql.Password)
+				return result
+			}
+		}
+	}
 	arguments := []string{"--defaults-extra-file=" + optionFile, "--no-data", "--single-transaction", "--quick", "--skip-lock-tables", "--no-tablespaces"}
 	if mysqlDumpSupportsColumnStatistics(ctx, dumpBinary) {
 		arguments = append(arguments, "--column-statistics=0")
 	}
 	arguments = append(arguments, mysql.CustomFlags...)
-	arguments = append(arguments, "--databases", testDatabase)
+	arguments = append(arguments, mysqlTableArguments(mysql, testDatabase)...)
 	command := exec.CommandContext(ctx, dumpBinary, arguments...)
 	command.Env = []string{"PATH=/usr/bin:/bin:/usr/local/bin:/usr/local/mysql/bin", "LANG=C"}
 	command.Stdout = &bytes.Buffer{}
@@ -137,6 +166,7 @@ func inspectPostgreSQLSource(ctx context.Context, result CommandResult, source s
 	postgresql := PostgreSQLSource{
 		Host: source.Host, Port: source.Port, Username: source.Username, Password: source.Password,
 		ConnectionDatabase: source.ConnectionDatabase, SelectionMode: source.Selection.Mode, Databases: source.Selection.Databases,
+		TableSelection: normalizeTableSelection(source.TableSelection),
 	}
 	if err := validatePostgreSQLSource(JobSource{PostgreSQL: &postgresql}); err != nil {
 		result.Summary = "The PostgreSQL source configuration is invalid."
@@ -172,6 +202,38 @@ func inspectPostgreSQLSource(ctx context.Context, result CommandResult, source s
 		result.Databases = discovered
 		result.Failure = inspectionFailure("database_selection", "The selection contains a database that was not returned as connectable, or no connectable databases were found.", postgresql.Password)
 		return result
+	}
+	if postgresql.TableSelection != nil {
+		catalogs := map[string]map[string]bool{}
+		for _, table := range postgresql.TableSelection.Tables {
+			if _, checked := catalogs[table.Database]; checked {
+				continue
+			}
+			tablePassfile, tableCleanup, passfileErr := postgresqlPassfile(postgresql, table.Database, stateDirectory)
+			if passfileErr != nil {
+				result.Failure = inspectionFailure("credential_setup", fmt.Sprintf("prepare private PostgreSQL credentials: %v", passfileErr), postgresql.Password)
+				return result
+			}
+			catalog, catalogErr := discoverPostgreSQLTables(ctx, psqlBinary, postgresql, table.Database, tablePassfile)
+			tableCleanup()
+			if catalogErr != nil {
+				result.ResultCode = "table_selection_invalid"
+				result.Summary = "The selected PostgreSQL tables could not be verified."
+				result.Databases = discovered
+				result.Failure = inspectionFailure("table_selection", catalogErr.Error(), postgresql.Password)
+				return result
+			}
+			catalogs[table.Database] = catalog
+		}
+		for _, table := range postgresql.TableSelection.Tables {
+			if !catalogs[table.Database][table.Schema+"\x00"+table.Table] {
+				result.ResultCode = "table_selection_invalid"
+				result.Summary = "The selected PostgreSQL tables do not all exist or are not accessible."
+				result.Databases = discovered
+				result.Failure = inspectionFailure("table_selection", fmt.Sprintf("Table %q in schema %q of database %q was not returned by the catalog query.", table.Table, table.Schema, table.Database), postgresql.Password)
+				return result
+			}
+		}
 	}
 
 	testDatabase := targets[0]

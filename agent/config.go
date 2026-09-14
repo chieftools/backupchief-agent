@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/chieftools/backupchief-agent/pusher"
@@ -25,9 +26,11 @@ const (
 type JobType string
 
 const (
-	JobTypeFile       JobType = "file"
-	JobTypeMySQL      JobType = "mysql"
-	JobTypePostgreSQL JobType = "postgresql"
+	JobTypeFile             JobType = "file"
+	JobTypeMySQL            JobType = "mysql"
+	JobTypeMySQLTables      JobType = "mysql_tables"
+	JobTypePostgreSQL       JobType = "postgresql"
+	JobTypePostgreSQLTables JobType = "postgresql_tables"
 )
 
 var (
@@ -39,6 +42,33 @@ var (
 	storageConfigKeyPattern      = regexp.MustCompile(`^storage_[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 	resourceTypePattern          = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,63}$`)
 )
+
+func isSupportedJobType(jobType JobType) bool {
+	return slices.Contains([]JobType{JobTypeFile, JobTypeMySQL, JobTypeMySQLTables, JobTypePostgreSQL, JobTypePostgreSQLTables}, jobType)
+}
+
+func isMySQLJob(jobType JobType) bool {
+	return jobType == JobTypeMySQL || jobType == JobTypeMySQLTables
+}
+
+func isPostgreSQLJob(jobType JobType) bool {
+	return jobType == JobTypePostgreSQL || jobType == JobTypePostgreSQLTables
+}
+
+func jobTypeIntroducedIn(jobType JobType) string {
+	switch jobType {
+	case JobTypeFile:
+		return "1.0.0"
+	case JobTypeMySQL:
+		return "1.1.0"
+	case JobTypePostgreSQL:
+		return "1.2.0"
+	case JobTypeMySQLTables, JobTypePostgreSQLTables:
+		return "1.6.0"
+	default:
+		return ""
+	}
+}
 
 type Config struct {
 	ProtocolRevision string
@@ -113,6 +143,7 @@ type MySQLSource struct {
 	IncludeRoutines bool
 	IncludeEvents   bool
 	CustomFlags     []string
+	TableSelection  *TableSelection
 }
 
 type PostgreSQLSource struct {
@@ -123,6 +154,18 @@ type PostgreSQLSource struct {
 	ConnectionDatabase string
 	SelectionMode      string
 	Databases          []string
+	TableSelection     *TableSelection
+}
+
+type TableSelection struct {
+	Mode   string
+	Tables []TableSelectionEntry
+}
+
+type TableSelectionEntry struct {
+	Database string
+	Schema   string
+	Table    string
 }
 
 type JobRepository struct {
@@ -239,6 +282,18 @@ type sourceDocument struct {
 	ConnectionDatabase string                     `json:"connection_database,omitempty"`
 	Selection          *databaseSelectionDocument `json:"selection,omitempty"`
 	Dump               *mysqlDumpDocument         `json:"dump,omitempty"`
+	TableSelection     *tableSelectionDocument    `json:"table_selection,omitempty"`
+}
+
+type tableSelectionDocument struct {
+	Mode   string                        `json:"mode"`
+	Tables []tableSelectionEntryDocument `json:"tables"`
+}
+
+type tableSelectionEntryDocument struct {
+	Database string `json:"database"`
+	Schema   string `json:"schema,omitempty"`
+	Table    string `json:"table"`
 }
 
 type databaseSelectionDocument struct {
@@ -417,14 +472,14 @@ func normalizeConfig(document configDocument, expectedGeneration uint64) (Config
 		if err != nil {
 			return Config{}, fmt.Errorf("job %q: %w", key, err)
 		}
-		if !slices.Contains([]JobType{JobTypeFile, JobTypeMySQL, JobTypePostgreSQL}, JobType(jobType)) {
+		if !isSupportedJobType(JobType(jobType)) {
 			config.unsupportedJobs[key] = cloneRawMessage(raw)
 			config.addWarning(fmt.Sprintf("job %q uses unsupported type %q; skipped", key, jobType))
 			continue
 		}
-		if managed && JobType(jobType) == JobTypePostgreSQL && !protocolRevisionSupports(document.Metadata.ProtocolRevision, "1.2.0") {
+		if managed && jobTypeIntroducedIn(JobType(jobType)) != "" && !protocolRevisionSupports(document.Metadata.ProtocolRevision, jobTypeIntroducedIn(JobType(jobType))) {
 			config.unsupportedJobs[key] = cloneRawMessage(raw)
-			config.addWarning(fmt.Sprintf("job %q requires protocol revision 1.2.0; skipped", key))
+			config.addWarning(fmt.Sprintf("job %q requires protocol revision %s; skipped", key, jobTypeIntroducedIn(JobType(jobType))))
 			continue
 		}
 		var document jobDocument
@@ -497,6 +552,32 @@ func cloneRawMessage(data json.RawMessage) json.RawMessage {
 	return append(json.RawMessage(nil), data...)
 }
 
+func normalizeTableSelection(document *tableSelectionDocument) *TableSelection {
+	if document == nil {
+		return nil
+	}
+
+	tables := make([]TableSelectionEntry, 0, len(document.Tables))
+	for _, table := range document.Tables {
+		tables = append(tables, TableSelectionEntry{Database: table.Database, Schema: table.Schema, Table: table.Table})
+	}
+
+	return &TableSelection{Mode: document.Mode, Tables: tables}
+}
+
+func encodeTableSelection(selection *TableSelection) *tableSelectionDocument {
+	if selection == nil {
+		return nil
+	}
+
+	tables := make([]tableSelectionEntryDocument, 0, len(selection.Tables))
+	for _, table := range selection.Tables {
+		tables = append(tables, tableSelectionEntryDocument{Database: table.Database, Schema: table.Schema, Table: table.Table})
+	}
+
+	return &tableSelectionDocument{Mode: selection.Mode, Tables: tables}
+}
+
 func (config *Config) addWarning(warning string) {
 	const maximumWarnings = 100
 
@@ -517,7 +598,7 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 	if managed && !ulidPattern.MatchString(keyID) {
 		return Job{}, fmt.Errorf("key is invalid")
 	}
-	if !slices.Contains([]JobType{JobTypeFile, JobTypeMySQL, JobTypePostgreSQL}, raw.Type) {
+	if !isSupportedJobType(raw.Type) {
 		return Job{}, fmt.Errorf("type %q is unsupported", raw.Type)
 	}
 	if raw.Name != "" && (runeLength(raw.Name) > 255 || strings.ContainsRune(raw.Name, 0)) {
@@ -584,7 +665,7 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 		OneFileSystem: oneFileSystem,
 		Excludes:      append([]string{}, raw.Source.Excludes...),
 	}
-	if raw.Type == JobTypeMySQL {
+	if isMySQLJob(raw.Type) {
 		if raw.Source.Selection == nil || raw.Source.Dump == nil {
 			return Job{}, fmt.Errorf("MySQL source is incomplete")
 		}
@@ -598,8 +679,9 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 			IncludeRoutines: raw.Source.Dump.IncludeRoutines,
 			IncludeEvents:   raw.Source.Dump.IncludeEvents,
 			CustomFlags:     append([]string{}, raw.Source.Dump.CustomFlags...),
+			TableSelection:  normalizeTableSelection(raw.Source.TableSelection),
 		}}
-	} else if raw.Type == JobTypePostgreSQL {
+	} else if isPostgreSQLJob(raw.Type) {
 		if raw.Source.Selection == nil || raw.Source.Dump != nil {
 			return Job{}, fmt.Errorf("PostgreSQL source is incomplete")
 		}
@@ -611,6 +693,7 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 			ConnectionDatabase: raw.Source.ConnectionDatabase,
 			SelectionMode:      raw.Source.Selection.Mode,
 			Databases:          append([]string{}, raw.Source.Selection.Databases...),
+			TableSelection:     normalizeTableSelection(raw.Source.TableSelection),
 		}}
 	}
 	job := Job{
@@ -885,19 +968,21 @@ func encodeConfig(config Config, managedDigest string) ([]byte, error) {
 		source := sourceDocument{
 			Root: job.Source.Root, OneFileSystem: &oneFileSystem, Excludes: job.Source.Excludes,
 		}
-		if job.Type == JobTypeMySQL && job.Source.MySQL != nil {
+		if isMySQLJob(job.Type) && job.Source.MySQL != nil {
 			mysql := job.Source.MySQL
 			source = sourceDocument{
 				Host: mysql.Host, Port: mysql.Port, Username: mysql.Username, Password: mysql.Password,
-				Selection: &databaseSelectionDocument{Mode: mysql.SelectionMode, Databases: mysql.Databases},
-				Dump:      &mysqlDumpDocument{IncludeRoutines: mysql.IncludeRoutines, IncludeEvents: mysql.IncludeEvents, CustomFlags: mysql.CustomFlags},
+				Selection:      &databaseSelectionDocument{Mode: mysql.SelectionMode, Databases: mysql.Databases},
+				Dump:           &mysqlDumpDocument{IncludeRoutines: mysql.IncludeRoutines, IncludeEvents: mysql.IncludeEvents, CustomFlags: mysql.CustomFlags},
+				TableSelection: encodeTableSelection(mysql.TableSelection),
 			}
-		} else if job.Type == JobTypePostgreSQL && job.Source.PostgreSQL != nil {
+		} else if isPostgreSQLJob(job.Type) && job.Source.PostgreSQL != nil {
 			postgresql := job.Source.PostgreSQL
 			source = sourceDocument{
 				Host: postgresql.Host, Port: postgresql.Port, Username: postgresql.Username, Password: postgresql.Password,
 				ConnectionDatabase: postgresql.ConnectionDatabase,
 				Selection:          &databaseSelectionDocument{Mode: postgresql.SelectionMode, Databases: postgresql.Databases},
+				TableSelection:     encodeTableSelection(postgresql.TableSelection),
 			}
 		}
 		documentJob := jobDocument{
@@ -1001,7 +1086,7 @@ const (
 )
 
 func validateJob(job Job) error {
-	if !slices.Contains([]JobType{JobTypeFile, JobTypeMySQL, JobTypePostgreSQL}, job.Type) {
+	if !isSupportedJobType(job.Type) {
 		return fmt.Errorf("type %q is unsupported", job.Type)
 	}
 	if job.ID == "" || !digestPattern.MatchString(job.ID) && !ulidPattern.MatchString(job.ID) {
@@ -1016,12 +1101,20 @@ func validateJob(job Job) error {
 				return fmt.Errorf("exclude is invalid")
 			}
 		}
-	} else if job.Type == JobTypeMySQL {
+	} else if isMySQLJob(job.Type) {
+		if (job.Type == JobTypeMySQLTables) != (job.Source.MySQL != nil && job.Source.MySQL.TableSelection != nil) {
+			return fmt.Errorf("MySQL table selection source is invalid")
+		}
 		if err := validateMySQLSource(job.Source); err != nil {
 			return err
 		}
-	} else if err := validatePostgreSQLSource(job.Source); err != nil {
-		return err
+	} else {
+		if (job.Type == JobTypePostgreSQLTables) != (job.Source.PostgreSQL != nil && job.Source.PostgreSQL.TableSelection != nil) {
+			return fmt.Errorf("PostgreSQL table selection source is invalid")
+		}
+		if err := validatePostgreSQLSource(job.Source); err != nil {
+			return err
+		}
 	}
 	if job.Repository.Location == "" || runeLength(job.Repository.Location) > 2048 || !digestPattern.MatchString(job.Repository.ID) {
 		return fmt.Errorf("repository identity is invalid")
@@ -1103,6 +1196,9 @@ func validateMySQLSource(source JobSource) error {
 			return fmt.Errorf("MySQL dump options are invalid")
 		}
 	}
+	if err := validateTableSelection(mysql.TableSelection, mysql.SelectionMode, mysql.Databases, false); err != nil {
+		return fmt.Errorf("MySQL table selection is invalid")
+	}
 	return nil
 }
 
@@ -1122,7 +1218,64 @@ func validatePostgreSQLSource(source JobSource) error {
 		}
 		seen[database] = true
 	}
+	if err := validateTableSelection(postgresql.TableSelection, postgresql.SelectionMode, postgresql.Databases, true); err != nil {
+		return fmt.Errorf("PostgreSQL table selection is invalid")
+	}
 	return nil
+}
+
+func validateTableSelection(selection *TableSelection, selectionMode string, databases []string, postgresql bool) error {
+	if selection == nil {
+		return nil
+	}
+	if !slices.Contains([]string{"include", "exclude"}, selection.Mode) || len(selection.Tables) == 0 || len(selection.Tables) > 1000 || selection.Mode == "include" && selectionMode != "selected" {
+		return fmt.Errorf("table selection is invalid")
+	}
+
+	selected := make(map[string]bool, len(databases))
+	for _, database := range databases {
+		selected[database] = true
+	}
+	covered := make(map[string]bool, len(databases))
+	seen := make(map[string]bool, len(selection.Tables))
+	for _, table := range selection.Tables {
+		maximum := 64
+		if postgresql {
+			maximum = 63
+		}
+		if table.Database == "" || table.Table == "" || runeLength(table.Database) > maximum || runeLength(table.Table) > maximum || containsControl(table.Database) || containsControl(table.Table) {
+			return fmt.Errorf("table selection is invalid")
+		}
+		if postgresql {
+			if table.Schema == "" || runeLength(table.Schema) > maximum || containsControl(table.Schema) || strings.EqualFold(table.Database, "template0") || strings.EqualFold(table.Database, "template1") {
+				return fmt.Errorf("table selection is invalid")
+			}
+		} else if table.Schema != "" || mysqlSystemDatabases[strings.ToLower(table.Database)] || strings.HasPrefix(table.Database, "-") || strings.HasPrefix(table.Table, "-") || selection.Mode == "exclude" && (strings.Contains(table.Database, ".") || strings.Contains(table.Table, ".")) {
+			return fmt.Errorf("table selection is invalid")
+		}
+		if selectionMode == "selected" && !selected[table.Database] {
+			return fmt.Errorf("table selection is invalid")
+		}
+		key := table.Database + "\x00" + table.Schema + "\x00" + table.Table
+		if seen[key] {
+			return fmt.Errorf("table selection is invalid")
+		}
+		seen[key] = true
+		covered[table.Database] = true
+	}
+	if selection.Mode == "include" {
+		for _, database := range databases {
+			if !covered[database] {
+				return fmt.Errorf("table selection is invalid")
+			}
+		}
+	}
+
+	return nil
+}
+
+func containsControl(value string) bool {
+	return strings.IndexFunc(value, unicode.IsControl) >= 0
 }
 
 var mysqlFlagPattern = regexp.MustCompile(`^--[a-z0-9][a-z0-9-]*(?:=[^\x00\r\n]{0,480})?$`)

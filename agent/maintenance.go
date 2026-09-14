@@ -506,7 +506,7 @@ func expandMySQLRunCandidates(snapshots []repositorySnapshot, anchors []string) 
 }
 
 func isDatabaseJob(jobType JobType) bool {
-	return jobType == JobTypeMySQL || jobType == JobTypePostgreSQL
+	return isMySQLJob(jobType) || isPostgreSQLJob(jobType)
 }
 
 func maintenanceRequest(job Job) restic.Request {

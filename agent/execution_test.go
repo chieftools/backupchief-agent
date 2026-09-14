@@ -168,6 +168,26 @@ func TestMySQLDumpFilenameFallsBackForNonPortableNames(t *testing.T) {
 	}
 }
 
+func TestMySQLTableSelectionBuildsExactIncludeAndExcludeArguments(t *testing.T) {
+	include := MySQLSource{TableSelection: &TableSelection{
+		Mode: "include",
+		Tables: []TableSelectionEntry{
+			{Database: "synthetic_app", Table: "orders"},
+			{Database: "synthetic_other", Table: "ignored_here"},
+			{Database: "synthetic_app", Table: "accounts"},
+		},
+	}}
+	exclude := include
+	exclude.TableSelection = &TableSelection{Mode: "exclude", Tables: include.TableSelection.Tables}
+
+	if got, want := mysqlTableArguments(include, "synthetic_app"), []string{"synthetic_app", "accounts", "orders"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("include arguments: %v, want %v", got, want)
+	}
+	if got, want := mysqlTableArguments(exclude, "synthetic_app"), []string{"--ignore-table=synthetic_app.accounts", "--ignore-table=synthetic_app.orders", "--databases", "synthetic_app"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("exclude arguments: %v, want %v", got, want)
+	}
+}
+
 func TestExecutePostgreSQLBackupUsesAPrivatePassfileAndPortableDumpFlags(t *testing.T) {
 	installPostgreSQLInspectionTools(t, successfulPostgreSQLTool, successfulPostgreSQLDumpTool)
 	snapshotID := strings.Repeat("e", 64)
@@ -194,6 +214,27 @@ func TestExecutePostgreSQLBackupUsesAPrivatePassfileAndPortableDumpFlags(t *test
 		if strings.Contains(argument, "synthetic-secret") || strings.Contains(argument, "--create") || strings.Contains(argument, "--clean") {
 			t.Fatalf("unsafe pg_dump argument: %q", argument)
 		}
+	}
+}
+
+func TestPostgreSQLTableSelectionQuotesExactIdentifierPatterns(t *testing.T) {
+	source := PostgreSQLSource{TableSelection: &TableSelection{
+		Mode: "include",
+		Tables: []TableSelectionEntry{
+			{Database: "synthetic_app", Schema: `Case"Schema`, Table: "Order.Items"},
+			{Database: "synthetic_other", Schema: "public", Table: "ignored_here"},
+		},
+	}}
+
+	arguments := postgresqlDumpArguments(source, "synthetic_app", "/tmp/synthetic-passfile", false)
+	if !contains(arguments, "--strict-names") || !contains(arguments, `--table="Case""Schema"."Order.Items"`) {
+		t.Fatalf("include arguments: %v", arguments)
+	}
+
+	source.TableSelection.Mode = "exclude"
+	arguments = postgresqlDumpArguments(source, "synthetic_app", "/tmp/synthetic-passfile", false)
+	if contains(arguments, "--strict-names") || !contains(arguments, `--exclude-table="Case""Schema"."Order.Items"`) {
+		t.Fatalf("exclude arguments: %v", arguments)
 	}
 }
 

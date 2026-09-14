@@ -45,10 +45,10 @@ func executeBackup(
 	job Job,
 	now func() time.Time,
 ) (CommandResult, []byte, bool, uint64) {
-	if job.Type == JobTypeMySQL {
+	if isMySQLJob(job.Type) {
 		return executeMySQLBackup(ctx, executor, stateDirectory, serverID, generation, command, job, now)
 	}
-	if job.Type == JobTypePostgreSQL {
+	if isPostgreSQLJob(job.Type) {
 		return executePostgreSQLBackup(ctx, executor, stateDirectory, serverID, generation, command, job, now)
 	}
 	startedAt := now()

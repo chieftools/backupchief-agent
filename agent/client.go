@@ -672,7 +672,8 @@ func validateCommand(command AgentCommand, expectedGeneration uint64, protocolRe
 			return fmt.Errorf("cancellation command payload is invalid")
 		}
 	case "inspect_source":
-		if !contains([]string{"file", "mysql", "postgresql"}, command.Payload.Type) || command.Payload.Type == "postgresql" && !protocolRevisionSupports(protocolRevision, "1.2.0") || len(command.Payload.Source) == 0 || !digestPattern.MatchString(command.Payload.SourceDigest) || command.Payload.JobID != "" || command.Payload.RunID != "" || command.Payload.RequiredConfigRevision != 0 || command.Payload.Maintenance != "" || command.Payload.SnapshotIDs != nil {
+		jobType := JobType(command.Payload.Type)
+		if !isSupportedJobType(jobType) || !protocolRevisionSupports(protocolRevision, jobTypeIntroducedIn(jobType)) || len(command.Payload.Source) == 0 || !digestPattern.MatchString(command.Payload.SourceDigest) || command.Payload.JobID != "" || command.Payload.RunID != "" || command.Payload.RequiredConfigRevision != 0 || command.Payload.Maintenance != "" || command.Payload.SnapshotIDs != nil {
 			return fmt.Errorf("source inspection command payload is invalid")
 		}
 	default:
