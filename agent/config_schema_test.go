@@ -18,7 +18,7 @@ func TestPublishedSchemaAcceptsStandaloneConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Host.Name != "" || config.Host.Key != "" || len(config.Jobs) != 3 || config.Jobs[2].Type != JobTypePostgreSQL {
+	if config.Host.Name != "" || config.Host.Key != "" || len(config.Jobs) != 3 || config.Jobs[2].Type != JobTypePostgreSQLFiltered {
 		t.Fatalf("unexpected standalone configuration: %+v", config)
 	}
 }
@@ -87,14 +87,14 @@ func standaloneConfigBody() []byte {
     },
     "job_postgresql": {
       "name": "Synthetic PostgreSQL",
-      "type": "postgresql",
+      "type": "postgresql_filtered",
       "source": {
         "host": "postgresql.example.test",
         "port": 5432,
         "username": "synthetic_reader",
         "password": "synthetic-secret",
         "connection_database": "postgres",
-        "selection": {"mode": "selected", "databases": ["synthetic_app"]}
+        "selection": {"mode": "exclude", "databases": ["synthetic_scratch"]}
       },
       "repository": {"destination": "storage_nearby", "path": "postgresql/repository", "password": "synthetic-postgresql-password"},
       "schedule": "45 3 * * *"

@@ -28,10 +28,23 @@ func TestSourceInspectionUsesAgentStateForPrivateMySQLCredentials(t *testing.T) 
 	}
 }
 
+func TestSourceInspectionAppliesMySQLDatabaseExclusions(t *testing.T) {
+	installInspectionTools(t, successfulMySQLTool, successfulMySQLDumpTool)
+	payload := inspectionMySQLPayload()
+	payload.Type = "mysql_filtered"
+	payload.Source["selection"] = map[string]any{"mode": "exclude", "databases": []string{"synthetic_scratch"}}
+
+	result := inspectSource(context.Background(), 1, "01k4p4k2n8d3r6t9v1w5x7yabc", t.TempDir(), payload)
+
+	if result.Status != "complete" || result.ResultCode != "success" || result.Failure != nil {
+		t.Fatalf("result: %+v", result)
+	}
+}
+
 func TestSourceInspectionVerifiesExactMySQLTableSelection(t *testing.T) {
 	installInspectionTools(t, catalogMySQLTool, successfulMySQLDumpTool)
 	payload := inspectionMySQLPayload()
-	payload.Type = "mysql_tables"
+	payload.Type = "mysql_filtered"
 	payload.Source["table_selection"] = map[string]any{
 		"mode": "exclude", "tables": []map[string]any{{"database": "synthetic_app", "table": "transient_rows"}},
 	}
@@ -84,7 +97,7 @@ func TestSourceInspectionRejectsAnInaccessiblePostgreSQLSelection(t *testing.T) 
 func TestSourceInspectionRejectsAMissingExactPostgreSQLTable(t *testing.T) {
 	installPostgreSQLInspectionTools(t, catalogPostgreSQLTool, successfulPostgreSQLDumpTool)
 	payload := inspectionPostgreSQLPayload()
-	payload.Type = "postgresql_tables"
+	payload.Type = "postgresql_filtered"
 	payload.Source["table_selection"] = map[string]any{
 		"mode": "include", "tables": []map[string]any{{"database": "synthetic_app", "schema": "analytics", "table": "missing_rollup"}},
 	}

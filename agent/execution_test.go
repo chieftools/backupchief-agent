@@ -227,6 +227,24 @@ func TestMySQLTableSelectionBuildsExactIncludeAndExcludeArguments(t *testing.T) 
 	}
 }
 
+func TestDatabaseExclusionsFilterDiscoveredTargets(t *testing.T) {
+	mysql, mysqlValid := selectedMySQLDatabases(MySQLSource{
+		SelectionMode: "exclude",
+		Databases:     []string{"synthetic_scratch"},
+	}, []string{"synthetic_app", "synthetic_scratch", "synthetic_store"})
+	postgresql, postgresqlValid := selectedPostgreSQLDatabases(PostgreSQLSource{
+		SelectionMode: "exclude",
+		Databases:     []string{"synthetic_scratch"},
+	}, []string{"postgres", "synthetic_app", "synthetic_scratch"})
+
+	if !mysqlValid || !reflect.DeepEqual(mysql, []string{"synthetic_app", "synthetic_store"}) {
+		t.Fatalf("MySQL targets: %v valid=%v", mysql, mysqlValid)
+	}
+	if !postgresqlValid || !reflect.DeepEqual(postgresql, []string{"postgres", "synthetic_app"}) {
+		t.Fatalf("PostgreSQL targets: %v valid=%v", postgresql, postgresqlValid)
+	}
+}
+
 func TestExecutePostgreSQLBackupUsesAPrivatePassfileAndPortableDumpFlags(t *testing.T) {
 	installPostgreSQLInspectionTools(t, successfulPostgreSQLTool, successfulPostgreSQLDumpTool)
 	snapshotID := strings.Repeat("e", 64)

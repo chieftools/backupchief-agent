@@ -285,6 +285,19 @@ func selectedPostgreSQLDatabases(source PostgreSQLSource, discovered []string) (
 	if source.SelectionMode == "all_accessible" {
 		return discovered, len(discovered) > 0 && len(discovered) <= maximumPostgreSQLDatabases
 	}
+	if source.SelectionMode == "exclude" {
+		excluded := make(map[string]bool, len(source.Databases))
+		for _, database := range source.Databases {
+			excluded[database] = true
+		}
+		databases := make([]string, 0, len(discovered))
+		for _, database := range discovered {
+			if !excluded[database] {
+				databases = append(databases, database)
+			}
+		}
+		return databases, len(databases) > 0 && len(databases) <= maximumPostgreSQLDatabases
+	}
 
 	accessible := map[string]bool{}
 	for _, database := range discovered {

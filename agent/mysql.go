@@ -43,17 +43,18 @@ func executeMySQLBackup(ctx context.Context, executor BackupExecutor, stateDirec
 	}
 
 	databases := append([]string{}, mysql.Databases...)
-	if mysql.SelectionMode == "all_accessible" {
+	if mysql.SelectionMode != "selected" {
 		optionFile, cleanup, err := mysqlOptionFile(*mysql, stateDirectory)
 		if err != nil {
 			return failedMySQLResult(result, "execution_failed", "Could not prepare private MySQL credentials.", now)
 		}
 		defer cleanup()
 
-		databases, err = discoverMySQLDatabases(ctx, mysqlBinary, optionFile)
-		if err != nil {
+		discovered, discoveryErr := discoverMySQLDatabases(ctx, mysqlBinary, optionFile)
+		if discoveryErr != nil {
 			return failedMySQLResult(result, "source_authentication_failed", "Could not discover accessible MySQL databases.", now)
 		}
+		databases, _ = selectedMySQLDatabases(*mysql, discovered)
 	}
 	if len(databases) == 0 || len(databases) > maximumMySQLDatabases {
 		return failedMySQLResult(result, "database_selection_invalid", "The MySQL selection must contain between 1 and 1000 databases.", now)
@@ -136,6 +137,38 @@ func executeMySQLBackup(ctx context.Context, executor BackupExecutor, stateDirec
 		truncated = true
 	}
 	return result, append([]byte(nil), log...), truncated, dropped
+}
+
+func selectedMySQLDatabases(source MySQLSource, discovered []string) ([]string, bool) {
+	if source.SelectionMode == "all_accessible" {
+		return append([]string(nil), discovered...), len(discovered) > 0 && len(discovered) <= maximumMySQLDatabases
+	}
+	if source.SelectionMode == "selected" {
+		accessible := make(map[string]bool, len(discovered))
+		for _, database := range discovered {
+			accessible[database] = true
+		}
+		databases := append([]string(nil), source.Databases...)
+		sort.Strings(databases)
+		for _, database := range databases {
+			if !accessible[database] {
+				return nil, false
+			}
+		}
+		return databases, len(databases) > 0 && len(databases) <= maximumMySQLDatabases
+	}
+
+	excluded := make(map[string]bool, len(source.Databases))
+	for _, database := range source.Databases {
+		excluded[database] = true
+	}
+	targets := make([]string, 0, len(discovered))
+	for _, database := range discovered {
+		if !excluded[database] {
+			targets = append(targets, database)
+		}
+	}
+	return targets, len(targets) > 0 && len(targets) <= maximumMySQLDatabases
 }
 
 func mysqlTableArguments(source MySQLSource, database string) []string {

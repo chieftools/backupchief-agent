@@ -26,11 +26,11 @@ const (
 type JobType string
 
 const (
-	JobTypeFile             JobType = "file"
-	JobTypeMySQL            JobType = "mysql"
-	JobTypeMySQLTables      JobType = "mysql_tables"
-	JobTypePostgreSQL       JobType = "postgresql"
-	JobTypePostgreSQLTables JobType = "postgresql_tables"
+	JobTypeFile               JobType = "file"
+	JobTypeMySQL              JobType = "mysql"
+	JobTypeMySQLFiltered      JobType = "mysql_filtered"
+	JobTypePostgreSQL         JobType = "postgresql"
+	JobTypePostgreSQLFiltered JobType = "postgresql_filtered"
 )
 
 var (
@@ -44,15 +44,15 @@ var (
 )
 
 func isSupportedJobType(jobType JobType) bool {
-	return slices.Contains([]JobType{JobTypeFile, JobTypeMySQL, JobTypeMySQLTables, JobTypePostgreSQL, JobTypePostgreSQLTables}, jobType)
+	return slices.Contains([]JobType{JobTypeFile, JobTypeMySQL, JobTypeMySQLFiltered, JobTypePostgreSQL, JobTypePostgreSQLFiltered}, jobType)
 }
 
 func isMySQLJob(jobType JobType) bool {
-	return jobType == JobTypeMySQL || jobType == JobTypeMySQLTables
+	return slices.Contains([]JobType{JobTypeMySQL, JobTypeMySQLFiltered}, jobType)
 }
 
 func isPostgreSQLJob(jobType JobType) bool {
-	return jobType == JobTypePostgreSQL || jobType == JobTypePostgreSQLTables
+	return slices.Contains([]JobType{JobTypePostgreSQL, JobTypePostgreSQLFiltered}, jobType)
 }
 
 func jobTypeIntroducedIn(jobType JobType) string {
@@ -63,7 +63,7 @@ func jobTypeIntroducedIn(jobType JobType) string {
 		return "1.1.0"
 	case JobTypePostgreSQL:
 		return "1.2.0"
-	case JobTypeMySQLTables, JobTypePostgreSQLTables:
+	case JobTypeMySQLFiltered, JobTypePostgreSQLFiltered:
 		return "1.6.0"
 	default:
 		return ""
@@ -1102,15 +1102,15 @@ func validateJob(job Job) error {
 			}
 		}
 	} else if isMySQLJob(job.Type) {
-		if (job.Type == JobTypeMySQLTables) != (job.Source.MySQL != nil && job.Source.MySQL.TableSelection != nil) {
-			return fmt.Errorf("MySQL table selection source is invalid")
+		if !validMySQLJobSource(job.Type, job.Source.MySQL) {
+			return fmt.Errorf("MySQL selection source is invalid")
 		}
 		if err := validateMySQLSource(job.Source); err != nil {
 			return err
 		}
 	} else {
-		if (job.Type == JobTypePostgreSQLTables) != (job.Source.PostgreSQL != nil && job.Source.PostgreSQL.TableSelection != nil) {
-			return fmt.Errorf("PostgreSQL table selection source is invalid")
+		if !validPostgreSQLJobSource(job.Type, job.Source.PostgreSQL) {
+			return fmt.Errorf("PostgreSQL selection source is invalid")
 		}
 		if err := validatePostgreSQLSource(job.Source); err != nil {
 			return err
@@ -1173,12 +1173,42 @@ func validateJob(job Job) error {
 	return nil
 }
 
+func validMySQLJobSource(jobType JobType, source *MySQLSource) bool {
+	if source == nil {
+		return false
+	}
+
+	switch jobType {
+	case JobTypeMySQL:
+		return source.TableSelection == nil && source.SelectionMode != "exclude"
+	case JobTypeMySQLFiltered:
+		return source.TableSelection != nil || source.SelectionMode == "exclude"
+	default:
+		return false
+	}
+}
+
+func validPostgreSQLJobSource(jobType JobType, source *PostgreSQLSource) bool {
+	if source == nil {
+		return false
+	}
+
+	switch jobType {
+	case JobTypePostgreSQL:
+		return source.TableSelection == nil && source.SelectionMode != "exclude"
+	case JobTypePostgreSQLFiltered:
+		return source.TableSelection != nil || source.SelectionMode == "exclude"
+	default:
+		return false
+	}
+}
+
 func validateMySQLSource(source JobSource) error {
 	mysql := source.MySQL
 	if mysql == nil || source.PostgreSQL != nil || source.Root != "" || len(source.Excludes) != 0 || mysql.Host == "" || runeLength(mysql.Host) > 255 || strings.ContainsAny(mysql.Host, "\r\n\x00") || mysql.Port == 0 || mysql.Username == "" || runeLength(mysql.Username) > 255 || strings.ContainsAny(mysql.Username, "\r\n\x00") || runeLength(mysql.Password) > 4096 || strings.ContainsRune(mysql.Password, 0) {
 		return fmt.Errorf("MySQL source is invalid")
 	}
-	if !slices.Contains([]string{"selected", "all_accessible"}, mysql.SelectionMode) || len(mysql.Databases) > maximumMySQLDatabases || mysql.SelectionMode == "selected" && len(mysql.Databases) == 0 || mysql.SelectionMode == "all_accessible" && len(mysql.Databases) != 0 {
+	if !slices.Contains([]string{"selected", "all_accessible", "exclude"}, mysql.SelectionMode) || len(mysql.Databases) > maximumMySQLDatabases || mysql.SelectionMode != "all_accessible" && len(mysql.Databases) == 0 || mysql.SelectionMode == "all_accessible" && len(mysql.Databases) != 0 {
 		return fmt.Errorf("MySQL database selection is invalid")
 	}
 	seen := map[string]bool{}
@@ -1207,7 +1237,7 @@ func validatePostgreSQLSource(source JobSource) error {
 	if postgresql == nil || source.MySQL != nil || source.Root != "" || len(source.Excludes) != 0 || postgresql.Host == "" || runeLength(postgresql.Host) > 255 || strings.ContainsAny(postgresql.Host, "\r\n\x00") || postgresql.Port == 0 || postgresql.Username == "" || runeLength(postgresql.Username) > 255 || strings.ContainsAny(postgresql.Username, "\r\n\x00") || runeLength(postgresql.Password) > 4096 || strings.ContainsAny(postgresql.Password, "\r\n\x00") || postgresql.ConnectionDatabase == "" || runeLength(postgresql.ConnectionDatabase) > 63 || strings.ContainsAny(postgresql.ConnectionDatabase, "\r\n\x00") {
 		return fmt.Errorf("PostgreSQL source is invalid")
 	}
-	if !slices.Contains([]string{"selected", "all_accessible"}, postgresql.SelectionMode) || len(postgresql.Databases) > maximumPostgreSQLDatabases || postgresql.SelectionMode == "selected" && len(postgresql.Databases) == 0 || postgresql.SelectionMode == "all_accessible" && len(postgresql.Databases) != 0 {
+	if !slices.Contains([]string{"selected", "all_accessible", "exclude"}, postgresql.SelectionMode) || len(postgresql.Databases) > maximumPostgreSQLDatabases || postgresql.SelectionMode != "all_accessible" && len(postgresql.Databases) == 0 || postgresql.SelectionMode == "all_accessible" && len(postgresql.Databases) != 0 {
 		return fmt.Errorf("PostgreSQL database selection is invalid")
 	}
 	seen := map[string]bool{}
@@ -1254,6 +1284,9 @@ func validateTableSelection(selection *TableSelection, selectionMode string, dat
 			return fmt.Errorf("table selection is invalid")
 		}
 		if selectionMode == "selected" && !selected[table.Database] {
+			return fmt.Errorf("table selection is invalid")
+		}
+		if selectionMode == "exclude" && selected[table.Database] {
 			return fmt.Errorf("table selection is invalid")
 		}
 		key := table.Database + "\x00" + table.Schema + "\x00" + table.Table

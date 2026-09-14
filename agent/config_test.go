@@ -91,14 +91,14 @@ func TestFilteredDatabaseConfigurationRequiresProtocolRevisionAndSurvivesCacheRo
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(config.Jobs) != 1 || config.Jobs[0].Type != JobTypeMySQLTables || config.Jobs[0].Source.MySQL == nil || config.Jobs[0].Source.MySQL.TableSelection == nil {
+	if len(config.Jobs) != 1 || config.Jobs[0].Type != JobTypeMySQLFiltered || config.Jobs[0].Source.MySQL == nil || config.Jobs[0].Source.MySQL.TableSelection == nil {
 		t.Fatalf("filtered MySQL job: %+v", config.Jobs)
 	}
 	encoded, err := encodeConfig(config, strings.Repeat("c", 64))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(encoded, []byte(`"type": "mysql_tables"`)) || !bytes.Contains(encoded, []byte(`"table_selection": {`)) {
+	if !bytes.Contains(encoded, []byte(`"type": "mysql_filtered"`)) || !bytes.Contains(encoded, []byte(`"table_selection": {`)) {
 		t.Fatalf("encoded filtered configuration: %s", encoded)
 	}
 
@@ -113,8 +113,59 @@ func TestFilteredDatabaseConfigurationRequiresProtocolRevisionAndSurvivesCacheRo
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(legacyEncoded, []byte(`"type": "mysql_tables"`)) || !bytes.Contains(legacyEncoded, []byte(`"table_selection"`)) {
+	if !bytes.Contains(legacyEncoded, []byte(`"type": "mysql_filtered"`)) || !bytes.Contains(legacyEncoded, []byte(`"table_selection"`)) {
 		t.Fatalf("legacy cache did not preserve filtered job: %s", legacyEncoded)
+	}
+}
+
+func TestDatabaseExclusionConfigurationRequiresProtocolRevisionAndRoundTrips(t *testing.T) {
+	body := excludedMySQLConfigBody(t, ProtocolRevision)
+	config, _, err := DecodeConfig(body, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Jobs) != 1 || config.Jobs[0].Type != JobTypeMySQLFiltered || config.Jobs[0].Source.MySQL == nil || config.Jobs[0].Source.MySQL.SelectionMode != "exclude" {
+		t.Fatalf("excluded MySQL job: %+v", config.Jobs)
+	}
+	encoded, err := encodeConfig(config, strings.Repeat("e", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(encoded, []byte(`"type": "mysql_filtered"`)) || !bytes.Contains(encoded, []byte(`"mode": "exclude"`)) {
+		t.Fatalf("encoded excluded configuration: %s", encoded)
+	}
+
+	legacy, _, err := DecodeConfig(excludedMySQLConfigBody(t, "1.5.0"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(legacy.Jobs) != 0 || len(legacy.Warnings) != 1 || !strings.Contains(legacy.Warnings[0], "requires protocol revision 1.6.0") {
+		t.Fatalf("legacy excluded configuration: jobs=%+v warnings=%q", legacy.Jobs, legacy.Warnings)
+	}
+}
+
+func TestDatabaseAndTableExclusionsCanBeCombined(t *testing.T) {
+	var document map[string]any
+	if err := json.Unmarshal(excludedMySQLConfigBody(t, ProtocolRevision), &document); err != nil {
+		t.Fatal(err)
+	}
+	job := document["jobs"].(map[string]any)["job_01k4p4f7m1r9d3t6v8w2x5y7za"].(map[string]any)
+	source := job["source"].(map[string]any)
+	source["table_selection"] = map[string]any{
+		"mode":   "exclude",
+		"tables": []map[string]any{{"database": "synthetic_active", "table": "temporary_rows"}},
+	}
+	body, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	config, _, err := DecodeConfig(body, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Jobs) != 1 || config.Jobs[0].Type != JobTypeMySQLFiltered || config.Jobs[0].Source.MySQL == nil || config.Jobs[0].Source.MySQL.TableSelection == nil {
+		t.Fatalf("combined filtered MySQL job: %+v", config.Jobs)
 	}
 }
 
@@ -548,7 +599,7 @@ func filteredMySQLConfigBody(t *testing.T, protocol string) []byte {
 	}
 	document["metadata"].(map[string]any)["protocol_revision"] = protocol
 	job := document["jobs"].(map[string]any)["job_01k4p4f7m1r9d3t6v8w2x5y7za"].(map[string]any)
-	job["type"] = "mysql_tables"
+	job["type"] = "mysql_filtered"
 	job["source"] = map[string]any{
 		"host": "mysql.example.test", "port": 3306, "username": "synthetic_reader", "password": "synthetic-secret",
 		"selection": map[string]any{"mode": "selected", "databases": []string{"synthetic_app"}},
@@ -556,6 +607,27 @@ func filteredMySQLConfigBody(t *testing.T, protocol string) []byte {
 		"table_selection": map[string]any{
 			"mode": "exclude", "tables": []map[string]any{{"database": "synthetic_app", "table": "transient_rows"}},
 		},
+	}
+	body, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func excludedMySQLConfigBody(t *testing.T, protocol string) []byte {
+	t.Helper()
+	var document map[string]any
+	if err := json.Unmarshal(validJobConfigBody(), &document); err != nil {
+		t.Fatal(err)
+	}
+	document["metadata"].(map[string]any)["protocol_revision"] = protocol
+	job := document["jobs"].(map[string]any)["job_01k4p4f7m1r9d3t6v8w2x5y7za"].(map[string]any)
+	job["type"] = "mysql_filtered"
+	job["source"] = map[string]any{
+		"host": "mysql.example.test", "port": 3306, "username": "synthetic_reader", "password": "synthetic-secret",
+		"selection": map[string]any{"mode": "exclude", "databases": []string{"synthetic_scratch"}},
+		"dump":      map[string]any{"include_routines": false, "include_events": false, "custom_flags": []string{}},
 	}
 	body, err := json.Marshal(document)
 	if err != nil {

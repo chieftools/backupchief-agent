@@ -51,13 +51,13 @@ func inspectSource(ctx context.Context, generation uint64, runID, stateDirectory
 	}
 	jobType := JobType(payload.Type)
 	if isPostgreSQLJob(jobType) {
-		if (jobType == JobTypePostgreSQLTables) != (source.TableSelection != nil) {
-			result.Failure = inspectionFailure("source_validation", "The source type does not match its table selection fields.", source.Password)
+		if source.Selection == nil || !validPostgreSQLJobSource(jobType, &PostgreSQLSource{SelectionMode: source.Selection.Mode, TableSelection: normalizeTableSelection(source.TableSelection)}) {
+			result.Failure = inspectionFailure("source_validation", "The source type does not match its database selection fields.", source.Password)
 			return result
 		}
 		return inspectPostgreSQLSource(ctx, result, source, stateDirectory)
 	}
-	if !isMySQLJob(jobType) || source.Selection == nil || source.Dump == nil || (jobType == JobTypeMySQLTables) != (source.TableSelection != nil) {
+	if !isMySQLJob(jobType) || source.Selection == nil || source.Dump == nil || !validMySQLJobSource(jobType, &MySQLSource{SelectionMode: source.Selection.Mode, TableSelection: normalizeTableSelection(source.TableSelection)}) {
 		result.Failure = inspectionFailure("source_validation", "The source type or required source fields are not supported by this agent.")
 		return result
 	}
@@ -95,22 +95,18 @@ func inspectSource(ctx context.Context, generation uint64, runID, stateDirectory
 		result.Failure = inspectionFailure("database_discovery", err.Error(), mysql.Password)
 		return result
 	}
-	testDatabase := ""
-	if mysql.SelectionMode == "selected" {
-		testDatabase = mysql.Databases[0]
-	} else if len(discovered) > 0 {
-		testDatabase = discovered[0]
-	}
-	if testDatabase == "" {
-		result.ResultCode = "source_authentication_failed"
-		result.Summary = "No accessible databases were discovered."
+	targets, valid := selectedMySQLDatabases(mysql, discovered)
+	if !valid {
+		result.ResultCode = "database_selection_invalid"
+		result.Summary = "The MySQL database selection is invalid."
 		result.Databases = discovered
-		result.Failure = inspectionFailure("database_discovery", "MySQL returned no accessible non-system databases.", mysql.Password)
+		result.Failure = inspectionFailure("database_selection", "The selection contains a database that was not returned as accessible, or no accessible databases remain after exclusions.", mysql.Password)
 		return result
 	}
+	testDatabase := targets[0]
 	if mysql.TableSelection != nil {
 		accessible := map[string]bool{}
-		for _, database := range discovered {
+		for _, database := range targets {
 			accessible[database] = true
 		}
 		tables, catalogErr := discoverMySQLTables(ctx, mysqlBinary, optionFile)
