@@ -103,7 +103,13 @@ func (runner Runner) Run(ctx context.Context, request Request) Result {
 	}
 
 	if request.Connection.Driver == "s3" {
-		proxy, err := egress.Start(ctx, request.Connection.Endpoint)
+		endpoint, err := canonicalS3Endpoint(request.Connection)
+		if err != nil {
+			result.Diagnostic = "cannot establish guarded S3 transport"
+			return result
+		}
+
+		proxy, err := egress.Start(ctx, endpoint.String())
 		if err != nil {
 			result.Diagnostic = "cannot establish guarded S3 transport"
 			return result

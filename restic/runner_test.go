@@ -44,6 +44,36 @@ func TestStdinBackupBuildsACommandWithoutShellInterpolation(t *testing.T) {
 	}
 }
 
+func TestAWSRepositoryAndGuardUseTheDerivedEndpoint(t *testing.T) {
+	request := testRequest(t)
+	request.Connection = Connection{
+		Driver:    "s3",
+		Endpoint:  "https://s3.eu-west-3.amazonaws.com",
+		Region:    "eu-west-3",
+		Bucket:    "synthetic-archive",
+		Prefix:    "repositories/synthetic-job",
+		AccessKey: "synthetic-access",
+		SecretKey: "synthetic-secret",
+	}
+
+	arguments, _, err := request.arguments("password", "", "cache", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint, err := canonicalS3Endpoint(request.Connection)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repository := "s3:https://s3.dualstack.eu-west-3.amazonaws.com/synthetic-archive/repositories/synthetic-job"
+	if !slices.Contains(arguments, repository) {
+		t.Fatalf("repository arguments: %v", arguments)
+	}
+	if endpoint.String() != "https://s3.dualstack.eu-west-3.amazonaws.com:443" {
+		t.Fatalf("guarded endpoint: %s", endpoint)
+	}
+}
+
 func testRequest(t *testing.T) Request {
 	t.Helper()
 

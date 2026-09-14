@@ -2,6 +2,8 @@ package restic
 
 import (
 	"errors"
+	"net"
+	"net/url"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -14,6 +16,8 @@ import (
 const protocolVersion = 1
 
 var bucketPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
+
+var amazonS3EndpointPattern = regexp.MustCompile(`^s3[.-]([a-z0-9-]+)\.amazonaws\.com$`)
 
 var snapshotPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
@@ -285,7 +289,7 @@ func (r Request) baseArguments(passwordFile, cache string, local bool) ([]string
 
 		arguments = append(arguments, "--repo", connection.Path)
 	case "s3":
-		endpoint, err := egress.Endpoint(connection.Endpoint)
+		endpoint, err := canonicalS3Endpoint(connection)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -298,7 +302,7 @@ func (r Request) baseArguments(passwordFile, cache string, local bool) ([]string
 			return nil, nil, errors.New("invalid or missing S3 settings")
 		}
 
-		// Keep the original authority for TLS and request signing; the proxy pins only the dial address.
+		// Keep the canonical authority for TLS and request signing; the proxy pins only the dial address.
 		endpoint.Host = strings.TrimSuffix(endpoint.Host, ":443")
 		endpoint.Path = "/" + connection.Bucket + "/" + connection.Prefix
 
@@ -323,6 +327,20 @@ func (r Request) baseArguments(passwordFile, cache string, local bool) ([]string
 	}
 
 	return arguments, environment, nil
+}
+
+func canonicalS3Endpoint(connection Connection) (*url.URL, error) {
+	endpoint, err := egress.Endpoint(connection.Endpoint)
+	if err != nil {
+		return nil, err
+	}
+
+	matches := amazonS3EndpointPattern.FindStringSubmatch(endpoint.Hostname())
+	if len(matches) == 2 && matches[1] == connection.Region {
+		endpoint.Host = net.JoinHostPort("s3.dualstack."+connection.Region+".amazonaws.com", "443")
+	}
+
+	return endpoint, nil
 }
 
 func allowsStaleLockRecovery(operation string) bool {
