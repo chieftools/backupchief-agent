@@ -28,7 +28,7 @@ var mysqlSystemDatabases = map[string]bool{
 
 var portableMySQLFilenamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
-func executeMySQLBackup(ctx context.Context, executor BackupExecutor, stateDirectory, serverID string, generation uint64, command *JournalCommand, job Job, now func() time.Time) (CommandResult, []byte, bool, uint64) {
+func executeMySQLBackup(ctx context.Context, executor BackupExecutor, stateDirectory, serverID string, generation uint64, command *JournalCommand, job Job, now func() time.Time, progress DatabaseBackupProgress) (CommandResult, []byte, bool, uint64) {
 	startedAt := now()
 	result := CommandResult{Generation: generation, RunID: command.RunID, JobID: job.ID, RunKind: "backup", StartedAt: protocolTimestamp(startedAt), SnapshotIDs: []string{}, Artifacts: []BackupArtifact{}}
 	mysql := job.Source.MySQL
@@ -105,10 +105,14 @@ func executeMySQLBackup(ctx context.Context, executor BackupExecutor, stateDirec
 			continue
 		}
 		summary := summaries[len(summaries)-1]
+		artifact := BackupArtifact{Database: database, Filename: filename, SnapshotID: summary.SnapshotID, SourceBytes: &summary.SourceBytes, StoredBytes: &summary.StoredBytes}
 		result.SnapshotIDs = append(result.SnapshotIDs, summary.SnapshotID)
-		result.Artifacts = append(result.Artifacts, BackupArtifact{Database: database, Filename: filename, SnapshotID: summary.SnapshotID, SourceBytes: &summary.SourceBytes, StoredBytes: &summary.StoredBytes})
+		result.Artifacts = append(result.Artifacts, artifact)
 		addDatabaseStatistics(total, summary)
 		anchorWritten = true
+		if progress != nil {
+			progress(artifact, len(result.Artifacts), len(databases))
+		}
 	}
 
 	result.FinishedAt = protocolTimestamp(now())

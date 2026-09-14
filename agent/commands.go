@@ -354,12 +354,61 @@ func (daemon *daemon) runBackup(ctx context.Context, commandID, runID string, jo
 	defer daemon.activeWG.Done()
 	result, log, truncated, dropped := executeBackup(
 		ctx, daemon.executor, daemon.store.stateDirectory(), daemon.bootstrap.ServerID, daemon.bootstrap.Generation,
-		daemon.journalCommand(commandID), job, daemon.now,
+		daemon.journalCommand(commandID), job, daemon.now, daemon.databaseBackupProgress(commandID),
 	)
 	if ctx.Err() == nil {
 		result.RepositoryBytes = measureRepositoryBytes(ctx, daemon.executor, job)
 	}
 	daemon.finishOperation(commandID, runID, job, result, log, truncated, dropped)
+}
+
+func (daemon *daemon) databaseBackupProgress(commandID string) DatabaseBackupProgress {
+	return func(artifact BackupArtifact, completed, total int) {
+		if daemon.client == nil || !protocolRevisionSupports(daemon.client.selectedProtocolRevision(), "1.6.0") {
+			return
+		}
+
+		daemon.mu.Lock()
+		journaled := daemon.journal.Commands[commandID]
+		if journaled == nil || journaled.State != "running" {
+			daemon.mu.Unlock()
+			return
+		}
+
+		eventID, err := newULID(daemon.now())
+		if err != nil {
+			daemon.mu.Unlock()
+			return
+		}
+
+		journaled.Sequence++
+		journaled.Events = append(journaled.Events, daemon.eventEnvelope(
+			journaled,
+			eventID,
+			journaled.Sequence,
+			protocolTimestamp(daemon.now()),
+			"run_progress",
+			map[string]any{
+				"database_snapshot":   artifact,
+				"databases_completed": completed,
+				"databases_total":     total,
+			},
+		))
+		if err := daemon.store.SaveCommandJournal(daemon.journal); err != nil {
+			journaled.Sequence--
+			journaled.Events = journaled.Events[:len(journaled.Events)-1]
+			if errors.Is(err, ErrSpoolCapacity) {
+				for _, cancel := range daemon.active {
+					cancel()
+				}
+			}
+			daemon.mu.Unlock()
+			return
+		}
+		daemon.mu.Unlock()
+
+		notifyLoop(daemon.reportWake)
+	}
 }
 
 func (daemon *daemon) runMaintenance(ctx context.Context, commandID, runID string, job Job, plan *MaintenancePlan) {

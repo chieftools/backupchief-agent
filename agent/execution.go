@@ -17,6 +17,8 @@ type BackupExecutor interface {
 	Run(context.Context, restic.Request) restic.Result
 }
 
+type DatabaseBackupProgress func(BackupArtifact, int, int)
+
 type resticSummary struct {
 	MessageType           string `json:"message_type"`
 	FilesNew              uint64 `json:"files_new"`
@@ -44,12 +46,17 @@ func executeBackup(
 	command *JournalCommand,
 	job Job,
 	now func() time.Time,
+	progress ...DatabaseBackupProgress,
 ) (CommandResult, []byte, bool, uint64) {
+	var reportProgress DatabaseBackupProgress
+	if len(progress) > 0 {
+		reportProgress = progress[0]
+	}
 	if isMySQLJob(job.Type) {
-		return executeMySQLBackup(ctx, executor, stateDirectory, serverID, generation, command, job, now)
+		return executeMySQLBackup(ctx, executor, stateDirectory, serverID, generation, command, job, now, reportProgress)
 	}
 	if isPostgreSQLJob(job.Type) {
-		return executePostgreSQLBackup(ctx, executor, stateDirectory, serverID, generation, command, job, now)
+		return executePostgreSQLBackup(ctx, executor, stateDirectory, serverID, generation, command, job, now, reportProgress)
 	}
 	startedAt := now()
 	base := CommandResult{

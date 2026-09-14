@@ -160,6 +160,45 @@ func TestMySQLBackupReportsBytesPerDatabaseSnapshot(t *testing.T) {
 	}
 }
 
+func TestMySQLBackupReportsEachCompletedDatabaseBeforeTheRunFinishes(t *testing.T) {
+	completedSnapshotID := strings.Repeat("a", 64)
+	executor := &sequentialExecutor{results: []restic.Result{
+		{ExitCode: 0, Outcome: "complete", Output: `{"message_type":"summary","total_files_processed":1,"total_bytes_processed":8192,"data_added_packed":2048,"snapshot_id":"` + completedSnapshotID + `"}`},
+		{ExitCode: 1, Outcome: "failed", Diagnostic: "synthetic database failure"},
+	}}
+	command := &JournalCommand{RunID: "01k4p4f7m1r9d3t6v8w2x5y7zc"}
+	job := executionJob(t.TempDir())
+	job.Type = JobTypeMySQL
+	job.Source = JobSource{MySQL: &MySQLSource{Host: "mysql.example.test", Port: 3306, Username: "synthetic_reader", Password: "synthetic-secret", SelectionMode: "selected", Databases: []string{"synthetic_accounts", "synthetic_audit"}}}
+	type progressRecord struct {
+		artifact  BackupArtifact
+		completed int
+		total     int
+	}
+	progress := []progressRecord{}
+
+	result, _, _, _ := executeBackup(
+		context.Background(),
+		executor,
+		t.TempDir(),
+		"01k4p4f7m1r9d3t6v8w2x5y7ze",
+		1,
+		command,
+		job,
+		time.Now,
+		func(artifact BackupArtifact, completed, total int) {
+			progress = append(progress, progressRecord{artifact: artifact, completed: completed, total: total})
+		},
+	)
+
+	if result.Status != "partial" || len(progress) != 1 {
+		t.Fatalf("result=%+v progress=%+v", result, progress)
+	}
+	if progress[0].artifact.SnapshotID != completedSnapshotID || progress[0].artifact.Database != "synthetic_accounts" || progress[0].completed != 1 || progress[0].total != 2 {
+		t.Fatalf("progress: %+v", progress[0])
+	}
+}
+
 func TestMySQLDumpFilenameFallsBackForNonPortableNames(t *testing.T) {
 	filename := mysqlDumpFilename("synthetic schema")
 
@@ -197,10 +236,19 @@ func TestExecutePostgreSQLBackupUsesAPrivatePassfileAndPortableDumpFlags(t *test
 	job.Type = JobTypePostgreSQL
 	job.Source = JobSource{PostgreSQL: &PostgreSQLSource{Host: "postgresql.example.test", Port: 5432, Username: "synthetic_reader", Password: "synthetic-secret", ConnectionDatabase: "postgres", SelectionMode: "selected", Databases: []string{"synthetic_app"}}}
 	now := func() time.Time { return time.Date(2026, 9, 13, 9, 30, 0, 0, time.UTC) }
+	progress := []BackupArtifact{}
 
-	result, _, _, _ := executeBackup(context.Background(), executor, t.TempDir(), "01k4p4f7m1r9d3t6v8w2x5y7ze", 1, command, job, now)
+	result, _, _, _ := executeBackup(
+		context.Background(), executor, t.TempDir(), "01k4p4f7m1r9d3t6v8w2x5y7ze", 1, command, job, now,
+		func(artifact BackupArtifact, completed, total int) {
+			if completed != 1 || total != 1 {
+				t.Fatalf("progress count: %d/%d", completed, total)
+			}
+			progress = append(progress, artifact)
+		},
+	)
 
-	if result.Status != "complete" || result.ResultCode != "success" || len(result.Artifacts) != 1 || result.Artifacts[0].Filename != "synthetic_app.sql" {
+	if result.Status != "complete" || result.ResultCode != "success" || len(result.Artifacts) != 1 || result.Artifacts[0].Filename != "synthetic_app.sql" || len(progress) != 1 || progress[0].SnapshotID != snapshotID {
 		t.Fatalf("result: %+v", result)
 	}
 	if len(executor.requests) != 1 {
@@ -363,6 +411,47 @@ func TestNewCommandReceiptWakesDispatcher(t *testing.T) {
 	case <-daemon.dispatchWake:
 		t.Fatal("unchanged command replay woke dispatcher")
 	default:
+	}
+}
+
+func TestDatabaseBackupProgressIsDurablyJournaledAndWakesReporter(t *testing.T) {
+	store := newAgentTestStore(t)
+	commandID := "01k4p4f7m1r9d3t6v8w2x5y7zd"
+	journaled := &JournalCommand{
+		Command: AgentCommand{
+			ID: commandID, Generation: 1, Kind: "run_backup",
+			Payload: CommandPayload{JobID: "01k4p4f7m1r9d3t6v8w2x5y7ze", RequiredConfigRevision: 2},
+		},
+		RunID: "01k4p4f7m1r9d3t6v8w2x5y7zc", ConfigRevision: 2, RunKind: "backup", Trigger: "manual",
+		ReceivedAt: "2026-09-14T10:00:00.000000Z", Acknowledged: true, State: "running", Sequence: 1, Events: []AgentEvent{},
+	}
+	journal := CommandJournal{Version: commandJournalVersion, Commands: map[string]*JournalCommand{commandID: journaled}}
+	if err := store.SaveCommandJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	daemon := &daemon{
+		store: store, client: NewClient("https://control.example.test", "synthetic-credential", "1.2.3-test", nil),
+		now: func() time.Time { return time.Date(2026, 9, 14, 10, 1, 0, 0, time.UTC) }, journal: journal,
+		reportWake: make(chan struct{}, 1), active: map[string]context.CancelFunc{},
+	}
+	artifact := BackupArtifact{Database: "synthetic_accounts", Filename: "synthetic_accounts.sql", SnapshotID: strings.Repeat("b", 64)}
+
+	daemon.databaseBackupProgress(commandID)(artifact, 1, 2)
+
+	if journaled.Sequence != 2 || len(journaled.Events) != 1 || journaled.Events[0].Kind != "run_progress" {
+		t.Fatalf("journaled progress: %+v", journaled)
+	}
+	if journaled.Events[0].Payload["databases_completed"] != 1 || journaled.Events[0].Payload["databases_total"] != 2 {
+		t.Fatalf("progress payload: %+v", journaled.Events[0].Payload)
+	}
+	select {
+	case <-daemon.reportWake:
+	default:
+		t.Fatal("database progress did not wake reporter")
+	}
+	persisted, err := store.LoadCommandJournal()
+	if err != nil || len(persisted.Commands[commandID].Events) != 1 || persisted.Commands[commandID].Events[0].Kind != "run_progress" {
+		t.Fatalf("persisted progress: %+v %v", persisted, err)
 	}
 }
 
