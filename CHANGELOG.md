@@ -4,6 +4,12 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.7.1]
+
+### Fixed
+
+- Fixed Amazon S3 repository connections through the guarded proxy by using the same region-specific dual-stack endpoint for Restic and the proxy.
+
 ## [0.7.0]
 
 ### Added
@@ -107,7 +113,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/chieftools/backupchief-agent/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/chieftools/backupchief-agent/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/chieftools/backupchief-agent/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/chieftools/backupchief-agent/compare/v0.5.0...v0.5.1
