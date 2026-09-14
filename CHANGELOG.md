@@ -4,6 +4,18 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.7.0]
+
+### Added
+
+- Added table-level include and exclude selection for MySQL and PostgreSQL backups. Source inspections verify that selected tables exist and are accessible before a backup runs.
+- Added database-level exclusions for MySQL and PostgreSQL backups.
+- Reported each completed database snapshot while a multi-database backup is still running, making successful database artifacts available for download even when a later database fails.
+
+### Changed
+
+- Updated the agent protocol to 1.6 for filtered database backups and database snapshot progress events.
+
 ## [0.6.0]
 
 ### Added
@@ -95,7 +107,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/chieftools/backupchief-agent/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/chieftools/backupchief-agent/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/chieftools/backupchief-agent/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/chieftools/backupchief-agent/compare/v0.4.2...v0.5.0
