@@ -597,18 +597,25 @@ func requestBodyForProtocol(path string, body []byte, protocolRevision string) (
 			payload["config"] = encodedConfig
 		}
 	}
-	if path == "/heartbeat" && protocolRevisionSupports(protocolRevision, "1.1.0") && !protocolRevisionSupports(protocolRevision, "1.2.0") {
+	if path == "/heartbeat" && protocolRevisionSupports(protocolRevision, "1.1.0") {
 		if rawCapabilities, exists := payload["capabilities"]; exists {
 			var capabilities map[string]any
 			if err := json.Unmarshal(rawCapabilities, &capabilities); err != nil {
 				return nil, fmt.Errorf("rewrite heartbeat capabilities: %w", err)
 			}
-			if backupTypes, ok := capabilities["backup_types"].(map[string]any); ok {
-				delete(backupTypes, "postgresql")
+			if !protocolRevisionSupports(protocolRevision, "1.2.0") {
+				if backupTypes, ok := capabilities["backup_types"].(map[string]any); ok {
+					delete(backupTypes, "postgresql")
+				}
+				if tools, ok := capabilities["tools"].(map[string]any); ok {
+					delete(tools, "psql")
+					delete(tools, "pg_dump")
+				}
 			}
-			if tools, ok := capabilities["tools"].(map[string]any); ok {
-				delete(tools, "psql")
-				delete(tools, "pg_dump")
+			if !protocolRevisionSupports(protocolRevision, "1.7.0") {
+				if tools, ok := capabilities["tools"].(map[string]any); ok {
+					delete(tools, "snapshot_restore")
+				}
 			}
 			encodedCapabilities, err := json.Marshal(capabilities)
 			if err != nil {

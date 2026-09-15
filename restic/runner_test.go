@@ -285,6 +285,17 @@ func TestRequestBoundaries(t *testing.T) {
 			t.Fatalf("accepted unsafe snapshot path %q", path)
 		}
 	}
+
+	request = testRequest(t)
+	request.Operation = "restore"
+	request.Snapshot = strings.Repeat("e", 64)
+	request.Path = "/srv/synthetic restore"
+	request.Target = "/tmp/synthetic restore target"
+	args, _, err = request.arguments("password", "new-password", "cache", true)
+	wantRestore := []string{"restore", request.Snapshot + ":" + request.Path, "--target", request.Target, "--verify", "--overwrite", "never"}
+	if err != nil || !reflect.DeepEqual(args[len(args)-len(wantRestore):], wantRestore) {
+		t.Fatalf("restore arguments: %v %v", args, err)
+	}
 }
 
 func TestDirectoryListingIsNonRecursive(t *testing.T) {
@@ -436,8 +447,9 @@ func TestBackupSelectionProtectsStateAndNestedRepository(t *testing.T) {
 	request.Operation = "restore"
 	request.Snapshot = summary.SnapshotID
 	request.Target = target
+	request.Path = root
 	requireComplete(t, runner, request)
-	restoredRoot := filepath.Join(target, strings.TrimPrefix(root, "/"))
+	restoredRoot := target
 
 	for _, name := range []string{".hidden", "file with spaces.txt", "nested/keep.txt"} {
 		if _, err := os.Stat(filepath.Join(restoredRoot, name)); err != nil {

@@ -9,9 +9,9 @@ import (
 	"github.com/chieftools/backupchief-agent/agent"
 )
 
-func TestDecodeExportPathRequiresNormalizedAbsoluteBase64URL(t *testing.T) {
+func TestDecodeSnapshotPathRequiresNormalizedAbsoluteBase64URL(t *testing.T) {
 	valid := base64.RawURLEncoding.EncodeToString([]byte("/srv/synthetic records/report.txt"))
-	path, err := decodeExportPath(valid)
+	path, err := decodeSnapshotPath(valid)
 	if err != nil || path != "/srv/synthetic records/report.txt" {
 		t.Fatalf("decode: %q %v", path, err)
 	}
@@ -21,7 +21,7 @@ func TestDecodeExportPathRequiresNormalizedAbsoluteBase64URL(t *testing.T) {
 		base64.RawURLEncoding.EncodeToString([]byte("relative/report.txt")),
 		base64.RawURLEncoding.EncodeToString([]byte("/srv/../private/report.txt")),
 	} {
-		if _, err := decodeExportPath(value); err == nil {
+		if _, err := decodeSnapshotPath(value); err == nil {
 			t.Fatalf("accepted invalid path %q", value)
 		}
 	}
@@ -47,24 +47,24 @@ func TestPublishSnapshotExportDoesNotReplaceExistingOutput(t *testing.T) {
 	}
 }
 
-func TestValidateJobExportSelectionUsesConfiguredRoot(t *testing.T) {
+func TestValidateJobSnapshotSelectionUsesConfiguredRoot(t *testing.T) {
 	job := agent.Job{Type: agent.JobTypeFile, Source: agent.JobSource{Root: "/srv/synthetic"}}
-	if err := validateJobExportSelection(job, "directory", "/srv/synthetic/Client Records"); err != nil {
+	if err := validateJobSnapshotSelection(job, "directory", "/srv/synthetic/Client Records"); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateJobExportSelection(job, "file", "/srv/synthetic-other/report.txt"); err == nil {
+	if err := validateJobSnapshotSelection(job, "file", "/srv/synthetic-other/report.txt"); err == nil {
 		t.Fatal("accepted path outside configured root")
 	}
 	rootJob := agent.Job{Type: agent.JobTypeFile, Source: agent.JobSource{Root: "/"}}
-	if err := validateJobExportSelection(rootJob, "file", "/var/lib/synthetic/report.txt"); err != nil {
+	if err := validateJobSnapshotSelection(rootJob, "file", "/var/lib/synthetic/report.txt"); err != nil {
 		t.Fatal(err)
 	}
 
 	database := agent.Job{Type: agent.JobTypeMySQL}
-	if err := validateJobExportSelection(database, "database", "/synthetic_ledger.sql"); err != nil {
+	if err := validateJobSnapshotSelection(database, "database", "/synthetic_ledger.sql"); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateJobExportSelection(database, "directory", filepath.Join("/", "synthetic_ledger.sql")); err == nil {
+	if err := validateJobSnapshotSelection(database, "directory", filepath.Join("/", "synthetic_ledger.sql")); err == nil {
 		t.Fatal("accepted directory selection for database job")
 	}
 }

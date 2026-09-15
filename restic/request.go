@@ -229,8 +229,15 @@ func (r Request) arguments(passwordFile, newPasswordFile, cache string, local bo
 			strings.ContainsRune(r.Target, 0) {
 			return nil, nil, errors.New("restore requires a full snapshot ID and absolute target")
 		}
+		snapshot := r.Snapshot
+		if r.Path != "" {
+			if !safeSnapshotPath(r.Path) {
+				return nil, nil, errors.New("restore path must be normalized and absolute")
+			}
+			snapshot += ":" + r.Path
+		}
 
-		arguments = append(arguments, "restore", r.Snapshot, "--target", r.Target, "--verify")
+		arguments = append(arguments, "restore", snapshot, "--target", r.Target, "--verify", "--overwrite", "never")
 	default:
 		return nil, nil, errors.New("unsupported restic operation")
 	}

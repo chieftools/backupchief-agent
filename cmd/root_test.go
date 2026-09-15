@@ -43,7 +43,7 @@ func TestHelpExplainsAgentCommands(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"backupchief [command]", "Run backups from a local configuration", "backup", "config", "repository", "run", "setup", "version"} {
+	for _, want := range []string{"backupchief [command]", "Run backups from a local configuration", "backup", "config", "repository", "restore", "run", "setup", "version"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("help missing %q: %s", want, &output)
 		}

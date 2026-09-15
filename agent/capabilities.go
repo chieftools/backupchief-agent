@@ -41,9 +41,10 @@ func probeCapabilities() map[string]any {
 				},
 			},
 			"tools": map[string]any{
-				"restic":          map[string]any{"available": true, "bundled": true, "version": restic.Version},
-				"snapshot_export": map[string]any{"available": true, "archive": "zip"},
-				"mysql":           mysql, "mysqldump": mysqldump, "psql": psql, "pg_dump": pgDump,
+				"restic":           map[string]any{"available": true, "bundled": true, "version": restic.Version},
+				"snapshot_export":  map[string]any{"available": true, "archive": "zip"},
+				"snapshot_restore": map[string]any{"available": true, "target": "empty_directory"},
+				"mysql":            mysql, "mysqldump": mysqldump, "psql": psql, "pg_dump": pgDump,
 			},
 		}
 	})

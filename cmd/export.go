@@ -37,11 +37,11 @@ func newExportCommand(configPath *string) *cobra.Command {
 			if !job.Enabled {
 				return errors.New("the selected backup job is not active")
 			}
-			path, err := decodeExportPath(encodedPath)
+			path, err := decodeSnapshotPath(encodedPath)
 			if err != nil {
 				return err
 			}
-			if err = validateJobExportSelection(job, kind, path); err != nil {
+			if err = validateJobSnapshotSelection(job, kind, path); err != nil {
 				return err
 			}
 
@@ -133,7 +133,7 @@ func publishSnapshotExport(part, output string) error {
 	return nil
 }
 
-func decodeExportPath(encoded string) (string, error) {
+func decodeSnapshotPath(encoded string) (string, error) {
 	decoded, err := base64.RawURLEncoding.DecodeString(encoded)
 	if err != nil || len(decoded) == 0 || len(decoded) > 4096 || decoded[0] != '/' || strings.ContainsAny(string(decoded), "\\\x00") {
 		return "", errors.New("invalid encoded snapshot path")
@@ -146,9 +146,9 @@ func decodeExportPath(encoded string) (string, error) {
 	return path, nil
 }
 
-func validateJobExportSelection(job agent.Job, kind, path string) error {
+func validateJobSnapshotSelection(job agent.Job, kind, path string) error {
 	if kind != "file" && kind != "directory" && kind != "database" {
-		return errors.New("invalid export selection kind")
+		return errors.New("invalid snapshot selection kind")
 	}
 	if job.Type == agent.JobTypeFile {
 		root := filepath.Clean(job.Source.Root)

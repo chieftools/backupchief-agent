@@ -118,7 +118,7 @@ func TestHeartbeatOmitsPostgreSQLCapabilitiesForProtocolEleven(t *testing.T) {
 			"mysql":      map[string]any{"available": true},
 			"postgresql": map[string]any{"available": true},
 		},
-		"tools": map[string]any{"mysql": map[string]any{}, "psql": map[string]any{}, "pg_dump": map[string]any{}},
+		"tools": map[string]any{"mysql": map[string]any{}, "psql": map[string]any{}, "pg_dump": map[string]any{}, "snapshot_restore": map[string]any{"available": true}},
 	}}
 	body, err := json.Marshal(request)
 	if err != nil {
@@ -135,8 +135,36 @@ func TestHeartbeatOmitsPostgreSQLCapabilitiesForProtocolEleven(t *testing.T) {
 	capabilities := payload["capabilities"].(map[string]any)
 	backupTypes := capabilities["backup_types"].(map[string]any)
 	tools := capabilities["tools"].(map[string]any)
-	if backupTypes["mysql"] == nil || backupTypes["postgresql"] != nil || tools["psql"] != nil || tools["pg_dump"] != nil {
+	if backupTypes["mysql"] == nil || backupTypes["postgresql"] != nil || tools["psql"] != nil || tools["pg_dump"] != nil || tools["snapshot_restore"] != nil {
 		t.Fatalf("downgraded capabilities: %#v", capabilities)
+	}
+}
+
+func TestHeartbeatReportsSnapshotRestoreOnlyFromProtocolSeventeen(t *testing.T) {
+	request := HeartbeatRequest{Capabilities: map[string]any{
+		"backup_types": map[string]any{"file": map[string]any{"available": true}},
+		"tools":        map[string]any{"snapshot_restore": map[string]any{"available": true}},
+	}}
+	body, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for revision, expected := range map[string]bool{"1.6.0": false, "1.7.0": true} {
+		rewritten, rewriteErr := requestBodyForProtocol("/heartbeat", body, revision)
+		if rewriteErr != nil {
+			t.Fatal(rewriteErr)
+		}
+		var payload map[string]any
+		if err = json.Unmarshal(rewritten, &payload); err != nil {
+			t.Fatal(err)
+		}
+		capabilities := payload["capabilities"].(map[string]any)
+		tools := capabilities["tools"].(map[string]any)
+		_, exists := tools["snapshot_restore"]
+		if exists != expected {
+			t.Fatalf("protocol %s snapshot restore capability: %#v", revision, capabilities)
+		}
 	}
 }
 
