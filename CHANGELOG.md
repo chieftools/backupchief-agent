@@ -4,6 +4,18 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.9.0]
+
+### Added
+
+- Added attached repository replicas for backup jobs. Snapshots from successful and partially successful backup runs are copied from the primary repository to each replica, with durable retries and replication results reported to the control plane.
+- Added direct snapshot restores and portable ZIP exports from configured replica repositories.
+- Bundled rclone for repository transfers between local and S3 storage, so replication does not require a separately installed rclone executable.
+
+### Changed
+
+- Updated the agent protocol to 1.8 for repository replication configuration and completion events.
+
 ## [0.8.0]
 
 ### Added
@@ -129,7 +141,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/chieftools/backupchief-agent/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/chieftools/backupchief-agent/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/chieftools/backupchief-agent/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/chieftools/backupchief-agent/compare/v0.7.0...v0.7.1
