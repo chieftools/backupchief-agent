@@ -100,6 +100,7 @@ func TestMeasureRepositoryBytesUsesRawDataStats(t *testing.T) {
 }
 
 func TestExecuteMySQLBackupStreamsOneDatabaseIntoRestic(t *testing.T) {
+	installInspectionTools(t, successfulMySQLTool, successfulMySQLDumpTool)
 	snapshotID := strings.Repeat("d", 64)
 	executor := &recordingExecutor{result: restic.Result{ExitCode: 0, Outcome: "complete", Output: `{"message_type":"summary","total_files_processed":1,"total_bytes_processed":2048,"data_added_packed":512,"snapshot_id":"` + snapshotID + `"}`}}
 	command := &JournalCommand{RunID: "01k4p4f7m1r9d3t6v8w2x5y7zc"}
@@ -117,7 +118,7 @@ func TestExecuteMySQLBackupStreamsOneDatabaseIntoRestic(t *testing.T) {
 		t.Fatalf("requests: %d", len(executor.requests))
 	}
 	request := executor.requests[0]
-	if request.Operation != "backup_stdin" || request.StdinFilename != "synthetic_app.sql" || !strings.Contains(request.CommandConfig, `password="synthetic-secret"`) {
+	if request.Operation != "backup_stdin" || request.StdinFilename != "synthetic_app.sql" || !strings.Contains(request.CommandConfig, `password="synthetic-secret"`) || !contains(request.StdinCommand, "--set-gtid-purged=OFF") {
 		t.Fatalf("stream request: %+v", request)
 	}
 	if !contains(request.Tags, "backupchief-run-anchor") || !contains(request.Tags, "backupchief-database:73796e7468657469635f617070") {
@@ -127,6 +128,39 @@ func TestExecuteMySQLBackupStreamsOneDatabaseIntoRestic(t *testing.T) {
 		if strings.Contains(argument, "synthetic-secret") {
 			t.Fatalf("password leaked into argv: %v", request.StdinCommand)
 		}
+	}
+}
+
+func TestMySQLBackupHonorsExplicitGTIDDumpOption(t *testing.T) {
+	installInspectionTools(t, successfulMySQLTool, successfulMySQLDumpTool)
+	snapshotID := strings.Repeat("c", 64)
+	executor := &recordingExecutor{result: restic.Result{ExitCode: 0, Outcome: "complete", Output: `{"message_type":"summary","total_files_processed":1,"snapshot_id":"` + snapshotID + `"}`}}
+	command := &JournalCommand{RunID: "01k4p4f7m1r9d3t6v8w2x5y7zc"}
+	job := executionJob(t.TempDir())
+	job.Type = JobTypeMySQL
+	job.Source = JobSource{MySQL: &MySQLSource{Host: "mysql.example.test", Port: 3306, Username: "synthetic_reader", SelectionMode: "selected", Databases: []string{"synthetic_app"}, CustomFlags: []string{"--set-gtid-purged=ON"}}}
+
+	executeBackup(context.Background(), executor, t.TempDir(), "01k4p4f7m1r9d3t6v8w2x5y7ze", 1, command, job, time.Now)
+
+	arguments := executor.requests[0].StdinCommand
+	if !contains(arguments, "--set-gtid-purged=ON") || contains(arguments, "--set-gtid-purged=OFF") {
+		t.Fatalf("GTID options: %v", arguments)
+	}
+}
+
+func TestMySQLBackupOmitsUnsupportedGTIDDumpOption(t *testing.T) {
+	installInspectionTools(t, successfulMySQLTool, successfulMySQLDumpWithoutGTIDTool)
+	snapshotID := strings.Repeat("b", 64)
+	executor := &recordingExecutor{result: restic.Result{ExitCode: 0, Outcome: "complete", Output: `{"message_type":"summary","total_files_processed":1,"snapshot_id":"` + snapshotID + `"}`}}
+	command := &JournalCommand{RunID: "01k4p4f7m1r9d3t6v8w2x5y7zc"}
+	job := executionJob(t.TempDir())
+	job.Type = JobTypeMySQL
+	job.Source = JobSource{MySQL: &MySQLSource{Host: "mysql.example.test", Port: 3306, Username: "synthetic_reader", SelectionMode: "selected", Databases: []string{"synthetic_app"}}}
+
+	executeBackup(context.Background(), executor, t.TempDir(), "01k4p4f7m1r9d3t6v8w2x5y7ze", 1, command, job, time.Now)
+
+	if contains(executor.requests[0].StdinCommand, "--set-gtid-purged=OFF") {
+		t.Fatalf("unsupported GTID option: %v", executor.requests[0].StdinCommand)
 	}
 }
 

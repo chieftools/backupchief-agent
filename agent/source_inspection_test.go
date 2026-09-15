@@ -28,6 +28,16 @@ func TestSourceInspectionUsesAgentStateForPrivateMySQLCredentials(t *testing.T) 
 	}
 }
 
+func TestSourceInspectionAllowsMySQLDumpWithoutGTIDOption(t *testing.T) {
+	installInspectionTools(t, successfulMySQLTool, successfulMySQLDumpWithoutGTIDTool)
+
+	result := inspectSource(context.Background(), 1, "01k4p4k2n8d3r6t9v1w5x7yabc", t.TempDir(), inspectionMySQLPayload())
+
+	if result.Status != "complete" || result.ResultCode != "success" || result.Failure != nil {
+		t.Fatalf("result: %+v", result)
+	}
+}
+
 func TestSourceInspectionAppliesMySQLDatabaseExclusions(t *testing.T) {
 	installInspectionTools(t, successfulMySQLTool, successfulMySQLDumpTool)
 	payload := inspectionMySQLPayload()
@@ -264,7 +274,36 @@ exit 1
 const successfulMySQLDumpTool = `#!/bin/sh
 if [ "$1" = "--version" ]; then
     echo "mysqldump synthetic-version"
+    exit 0
 fi
+if [ "$1" = "--help" ]; then
+	printf '%s\n' '  --column-statistics' '  --set-gtid-purged=name'
+    exit 0
+fi
+for argument in "$@"; do
+    if [ "$argument" = "--set-gtid-purged=OFF" ]; then
+        exit 0
+    fi
+done
+printf 'missing portable GTID option\n' >&2
+exit 1
+`
+
+const successfulMySQLDumpWithoutGTIDTool = `#!/bin/sh
+if [ "$1" = "--version" ]; then
+    echo "mysqldump synthetic-version"
+    exit 0
+fi
+if [ "$1" = "--help" ]; then
+    echo "  --skip-lock-tables"
+    exit 0
+fi
+for argument in "$@"; do
+    if [ "$argument" = "--set-gtid-purged=OFF" ]; then
+        printf 'unsupported synthetic GTID option\n' >&2
+        exit 1
+    fi
+done
 exit 0
 `
 

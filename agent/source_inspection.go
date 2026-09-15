@@ -128,8 +128,12 @@ func inspectSource(ctx context.Context, generation uint64, runID, stateDirectory
 		}
 	}
 	arguments := []string{"--defaults-extra-file=" + optionFile, "--no-data", "--single-transaction", "--quick", "--skip-lock-tables", "--no-tablespaces"}
-	if mysqlDumpSupportsColumnStatistics(ctx, dumpBinary) {
+	dumpHelp := mysqlDumpHelp(ctx, dumpBinary)
+	if mysqlDumpSupportsOption(dumpHelp, "column-statistics") {
 		arguments = append(arguments, "--column-statistics=0")
+	}
+	if mysqlDumpSupportsOption(dumpHelp, "set-gtid-purged") && !hasMySQLDumpFlag(mysql.CustomFlags, "set-gtid-purged") {
+		arguments = append(arguments, "--set-gtid-purged=OFF")
 	}
 	arguments = append(arguments, mysql.CustomFlags...)
 	arguments = append(arguments, mysqlTableArguments(mysql, testDatabase)...)

@@ -64,7 +64,9 @@ func executeMySQLBackup(ctx context.Context, executor BackupExecutor, stateDirec
 	var total RunStatistics = RunStatistics{"files_new": uint64(0), "files_changed": uint64(0), "files_unmodified": uint64(0), "directories_new": uint64(0), "directories_changed": uint64(0), "directories_unmodified": uint64(0), "source_files": uint64(0), "source_bytes": uint64(0), "stored_bytes": uint64(0)}
 	failed := 0
 	anchorWritten := false
-	supportsColumnStatistics := mysqlDumpSupportsColumnStatistics(ctx, dumpBinary)
+	dumpHelp := mysqlDumpHelp(ctx, dumpBinary)
+	supportsColumnStatistics := mysqlDumpSupportsOption(dumpHelp, "column-statistics")
+	supportsGTIDPurged := mysqlDumpSupportsOption(dumpHelp, "set-gtid-purged")
 	for _, database := range databases {
 		if ctx.Err() != nil {
 			result.Status, result.ResultCode, result.Summary = "cancelled", "cancelled", "The MySQL backup was cancelled."
@@ -75,6 +77,9 @@ func executeMySQLBackup(ctx context.Context, executor BackupExecutor, stateDirec
 		flags := []string{"--defaults-extra-file={backupchief-command-config}", "--single-transaction", "--quick", "--skip-lock-tables", "--no-tablespaces"}
 		if supportsColumnStatistics {
 			flags = append(flags, "--column-statistics=0")
+		}
+		if supportsGTIDPurged && !hasMySQLDumpFlag(mysql.CustomFlags, "set-gtid-purged") {
+			flags = append(flags, "--set-gtid-purged=OFF")
 		}
 		if mysql.IncludeRoutines {
 			flags = append(flags, "--routines")
@@ -193,6 +198,17 @@ func mysqlTableArguments(source MySQLSource, database string) []string {
 		arguments = append(arguments, "--ignore-table="+database+"."+table)
 	}
 	return append(arguments, "--databases", database)
+}
+
+func hasMySQLDumpFlag(flags []string, name string) bool {
+	for _, flag := range flags {
+		flagName := strings.TrimPrefix(strings.SplitN(flag, "=", 2)[0], "--")
+		if flagName == name {
+			return true
+		}
+	}
+
+	return false
 }
 
 func mysqlDumpFilename(database string) string {
@@ -326,11 +342,19 @@ func commandFailure(tool string, err error, stderr string) error {
 	return fmt.Errorf("%s: %w", tool, err)
 }
 
-func mysqlDumpSupportsColumnStatistics(ctx context.Context, binary string) bool {
+func mysqlDumpHelp(ctx context.Context, binary string) []byte {
 	probe, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	output, err := exec.CommandContext(probe, binary, "--help").CombinedOutput()
-	return err == nil && bytes.Contains(output, []byte("column-statistics"))
+	if err != nil {
+		return nil
+	}
+
+	return output
+}
+
+func mysqlDumpSupportsOption(help []byte, option string) bool {
+	return bytes.Contains(help, []byte("--"+option))
 }
 
 func resticConnection(job Job) restic.Connection {
