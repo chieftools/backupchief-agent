@@ -4,6 +4,12 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.7.2]
+
+### Fixed
+
+- Prevented per-database MySQL dumps from embedding server-wide GTID state by default, so independent database restores do not conflict. The agent detects whether the installed client supports the option and continues to honor an explicit custom GTID setting.
+
 ## [0.7.1]
 
 ### Fixed
@@ -113,7 +119,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/chieftools/backupchief-agent/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/chieftools/backupchief-agent/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/chieftools/backupchief-agent/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/chieftools/backupchief-agent/compare/v0.5.1...v0.6.0
