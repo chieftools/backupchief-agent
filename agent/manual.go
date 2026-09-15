@@ -45,16 +45,33 @@ func SelectJob(config Config, selector string) (Job, error) {
 	return Job{}, fmt.Errorf("job %q was not found", selector)
 }
 
+func SelectJobRepository(job Job, selector string) (JobRepository, error) {
+	if selector == "" || job.Repository.Key == selector {
+		return job.Repository, nil
+	}
+	for _, repository := range job.Replicas {
+		if repository.Key == selector {
+			return repository, nil
+		}
+	}
+
+	return JobRepository{}, fmt.Errorf("repository %q is not configured for job %q", selector, job.Key)
+}
+
 func ResticRequest(job Job, operation, host string) restic.Request {
+	return ResticRequestForRepository(job, job.Repository, operation, host)
+}
+
+func ResticRequestForRepository(job Job, repository JobRepository, operation, host string) restic.Request {
 	return restic.Request{
 		Version: 1, Operation: operation,
 		Connection: restic.Connection{
-			Driver: job.Repository.Connection.Driver, Path: job.Repository.Connection.Path,
-			Endpoint: job.Repository.Connection.Endpoint, Bucket: job.Repository.Connection.Bucket,
-			Prefix: job.Repository.Connection.Prefix, Region: job.Repository.Connection.Region,
-			AccessKey: job.Repository.Connection.AccessKey, SecretKey: job.Repository.Connection.SecretKey,
+			Driver: repository.Connection.Driver, Path: repository.Connection.Path,
+			Endpoint: repository.Connection.Endpoint, Bucket: repository.Connection.Bucket,
+			Prefix: repository.Connection.Prefix, Region: repository.Connection.Region,
+			AccessKey: repository.Connection.AccessKey, SecretKey: repository.Connection.SecretKey,
 		},
-		Password: job.Repository.ServicePassword, Root: job.Source.Root,
+		Password: repository.ServicePassword, Root: job.Source.Root,
 		Excludes: append([]string{}, job.Source.Excludes...), Host: host,
 		Tags: []string{"backupchief-job:" + job.ID}, TimeoutSeconds: 12 * 60 * 60, LockWaitSeconds: 5 * 60,
 	}

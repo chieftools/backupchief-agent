@@ -85,6 +85,68 @@ func TestPostgreSQLConfigurationRequiresProtocolRevisionAndRoundTrips(t *testing
 	}
 }
 
+func TestReplicaConfigurationRoundTrips(t *testing.T) {
+	var document map[string]any
+	if err := json.Unmarshal(validJobConfigBody(), &document); err != nil {
+		t.Fatal(err)
+	}
+	document["metadata"].(map[string]any)["protocol_revision"] = ProtocolRevision
+	destinations := document["destinations"].(map[string]any)
+	destinations["storage_01k4p4f7m1r9d3t6v8w2x5y7zd"] = map[string]any{"driver": "local", "path": "/srv/synthetic-replicas"}
+	job := document["jobs"].(map[string]any)["job_01k4p4f7m1r9d3t6v8w2x5y7za"].(map[string]any)
+	primary := job["repository"].(map[string]any)
+	primary["repository_key"] = "repository_01k4p4f7m1r9d3t6v8w2x5y7ze"
+	job["replicas"] = []map[string]any{{
+		"repository_key": "repository_01k4p4f7m1r9d3t6v8w2x5y7zf", "id": strings.Repeat("d", 64),
+		"destination": "storage_01k4p4f7m1r9d3t6v8w2x5y7zd", "path": "copies/repository",
+		"password": "synthetic-service-password", "status": "active", "source": primary["repository_key"],
+	}}
+	job["replication"] = map[string]any{"mode": "attached", "coalesce": true, "safety_hold_seconds": float64(604800)}
+	body, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	config, _, err := DecodeConfig(body, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Jobs) != 1 || len(config.Jobs[0].Replicas) != 1 || config.Jobs[0].Replicas[0].Source != config.Jobs[0].Repository.Key {
+		t.Fatalf("replicas: %+v", config.Jobs)
+	}
+	encoded, err := encodeConfig(config, strings.Repeat("e", 64))
+	if err != nil || !bytes.Contains(encoded, []byte(`"replicas": [`)) || !bytes.Contains(encoded, []byte(`"safety_hold_seconds": 604800`)) {
+		t.Fatalf("encoded replicas: %v %s", err, encoded)
+	}
+}
+
+func TestReplicaConfigurationRejectsInvalidRepositoryID(t *testing.T) {
+	var document map[string]any
+	if err := json.Unmarshal(validJobConfigBody(), &document); err != nil {
+		t.Fatal(err)
+	}
+	document["metadata"].(map[string]any)["protocol_revision"] = ProtocolRevision
+	destinations := document["destinations"].(map[string]any)
+	destinations["storage_01k4p4f7m1r9d3t6v8w2x5y7zd"] = map[string]any{"driver": "local", "path": "/srv/synthetic-replicas"}
+	job := document["jobs"].(map[string]any)["job_01k4p4f7m1r9d3t6v8w2x5y7za"].(map[string]any)
+	primary := job["repository"].(map[string]any)
+	primary["repository_key"] = "repository_01k4p4f7m1r9d3t6v8w2x5y7ze"
+	job["replicas"] = []map[string]any{{
+		"repository_key": "repository_01k4p4f7m1r9d3t6v8w2x5y7zf", "id": "not-a-repository-digest",
+		"destination": "storage_01k4p4f7m1r9d3t6v8w2x5y7zd", "path": "copies/repository",
+		"password": "synthetic-service-password", "status": "active", "source": primary["repository_key"],
+	}}
+	job["replication"] = map[string]any{"mode": "attached", "coalesce": true, "safety_hold_seconds": float64(604800)}
+	body, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := DecodeConfig(body, 1); err == nil {
+		t.Fatal("accepted a replica with an invalid repository ID")
+	}
+}
+
 func TestFilteredDatabaseConfigurationRequiresProtocolRevisionAndSurvivesCacheRoundTrip(t *testing.T) {
 	body := filteredMySQLConfigBody(t, ProtocolRevision)
 	config, _, err := DecodeConfig(body, 1)

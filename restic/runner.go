@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/chieftools/backupchief-agent/egress"
+	bundledrclone "github.com/chieftools/backupchief-agent/rclone"
 )
 
 type Runner struct {
@@ -34,7 +35,14 @@ func (runner Runner) Run(ctx context.Context, request Request) Result {
 		result.Diagnostic = "invalid private state directory"
 		return result
 	}
-	repositoryLock, err := lockRepository(ctx, runner.State, request.Connection)
+	shared := request.Operation == "backup" || request.Operation == "backup_stdin"
+	var repositoryLock *os.File
+	var err error
+	if shared {
+		repositoryLock, err = lockRepositoryShared(ctx, runner.State, request.Connection)
+	} else {
+		repositoryLock, err = lockRepository(ctx, runner.State, request.Connection)
+	}
 	if err != nil {
 		result.Diagnostic = "cannot acquire repository operation lock"
 		return result
@@ -43,6 +51,18 @@ func (runner Runner) Run(ctx context.Context, request Request) Result {
 		_ = syscall.Flock(int(repositoryLock.Fd()), syscall.LOCK_UN)
 		_ = repositoryLock.Close()
 	}()
+	var sourceLock *os.File
+	if request.SourceConnection != nil {
+		sourceLock, err = lockRepositoryShared(ctx, runner.State, *request.SourceConnection)
+		if err != nil {
+			result.Diagnostic = "cannot acquire source repository operation lock"
+			return result
+		}
+		defer func() {
+			_ = syscall.Flock(int(sourceLock.Fd()), syscall.LOCK_UN)
+			_ = sourceLock.Close()
+		}()
+	}
 
 	work, cleanup, err := workspace(ctx, runner.State)
 	if err != nil {
@@ -52,7 +72,9 @@ func (runner Runner) Run(ctx context.Context, request Request) Result {
 	defer cleanup()
 
 	passwordFile := filepath.Join(work, "password")
+	sourcePasswordFile := filepath.Join(work, "source-password")
 	newPasswordFile := filepath.Join(work, "new-password")
+	rcloneConfigFile := filepath.Join(work, "rclone.conf")
 	commandConfigFile := filepath.Join(work, "command.cnf")
 	cache := filepath.Join(runner.State, "cache")
 
@@ -61,7 +83,22 @@ func (runner Runner) Run(ctx context.Context, request Request) Result {
 		return result
 	}
 
-	args, env, err := request.arguments(passwordFile, newPasswordFile, cache, runner.AllowLocal)
+	var args []string
+	var env []string
+	var rcloneConfig string
+	if request.Operation == "init_from" || request.Operation == "copy" {
+		var rcloneProgram string
+		if request.SourceConnection != nil && (request.Connection.Driver != "local" || request.SourceConnection.Driver != "local") {
+			rcloneProgram, err = bundledrclone.Binary(ctx, runner.State)
+			if err != nil {
+				result.Diagnostic = "cannot prepare bundled rclone executable"
+				return result
+			}
+		}
+		args, env, rcloneConfig, err = request.dualArguments(passwordFile, sourcePasswordFile, cache, rcloneConfigFile, rcloneProgram, runner.AllowLocal)
+	} else {
+		args, env, err = request.arguments(passwordFile, newPasswordFile, cache, runner.AllowLocal)
+	}
 	if err != nil {
 		result.Diagnostic = err.Error()
 		return result
@@ -92,6 +129,18 @@ func (runner Runner) Run(ctx context.Context, request Request) Result {
 			return result
 		}
 	}
+	if request.SourcePassword != "" {
+		if err := os.WriteFile(sourcePasswordFile, []byte(request.SourcePassword), 0600); err != nil {
+			result.Diagnostic = "cannot write private source password input"
+			return result
+		}
+	}
+	if rcloneConfig != "" {
+		if err := os.WriteFile(rcloneConfigFile, []byte(rcloneConfig), 0600); err != nil {
+			result.Diagnostic = "cannot write private transport configuration"
+			return result
+		}
+	}
 	if request.Operation == "backup_stdin" {
 		if err := os.WriteFile(commandConfigFile, []byte(request.CommandConfig), 0600); err != nil {
 			result.Diagnostic = "cannot write private command configuration"
@@ -102,14 +151,24 @@ func (runner Runner) Run(ctx context.Context, request Request) Result {
 		}
 	}
 
-	if request.Connection.Driver == "s3" {
-		endpoint, err := canonicalS3Endpoint(request.Connection)
-		if err != nil {
+	endpoints := make([]string, 0, 2)
+	connections := []Connection{request.Connection}
+	if request.SourceConnection != nil {
+		connections = append(connections, *request.SourceConnection)
+	}
+	for _, connection := range connections {
+		if connection.Driver != "s3" {
+			continue
+		}
+		endpoint, endpointErr := canonicalS3Endpoint(connection)
+		if endpointErr != nil {
 			result.Diagnostic = "cannot establish guarded S3 transport"
 			return result
 		}
-
-		proxy, err := egress.Start(ctx, endpoint.String())
+		endpoints = append(endpoints, endpoint.String())
+	}
+	if len(endpoints) > 0 {
+		proxy, err := egress.StartMany(ctx, endpoints)
 		if err != nil {
 			result.Diagnostic = "cannot establish guarded S3 transport"
 			return result
@@ -364,9 +423,13 @@ func (b *boundedOutput) String() string {
 func redact(text string, request Request) string {
 	secrets := []string{
 		request.Password,
+		request.SourcePassword,
 		request.NewPassword,
 		request.Connection.AccessKey,
 		request.Connection.SecretKey,
+	}
+	if request.SourceConnection != nil {
+		secrets = append(secrets, request.SourceConnection.AccessKey, request.SourceConnection.SecretKey)
 	}
 
 	for _, secret := range secrets {

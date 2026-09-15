@@ -55,6 +55,9 @@ func TestPackageContents(t *testing.T) {
 						t.Fatalf("unexpected DEB identity: %s", identity)
 					}
 				}
+				if dependencies := run(t, "dpkg-deb", "-f", archive, "Depends"); strings.Contains(dependencies, "rclone") {
+					t.Fatalf("DEB retains a system rclone dependency: %s", dependencies)
+				}
 				run(t, "dpkg-deb", "-x", archive, root)
 				control := t.TempDir()
 				run(t, "dpkg-deb", "-e", archive, control)
@@ -68,6 +71,9 @@ func TestPackageContents(t *testing.T) {
 				identity := run(t, "rpm", "-qp", "--qf", "%{NAME} %{ARCH} %{OS} %{LICENSE} %{PACKAGER}", archive)
 				if identity != "backupchief "+target.arch+" linux Apache-2.0 Backup Chief Team <hello@chief.app>" {
 					t.Fatalf("unexpected RPM identity: %s", identity)
+				}
+				if dependencies := run(t, "rpm", "-qp", "--requires", archive); strings.Contains(dependencies, "rclone") {
+					t.Fatalf("RPM retains a system rclone dependency: %s", dependencies)
 				}
 				flags := run(t, "rpm", "-qp", "--qf", "[%{FILENAMES} %{FILEFLAGS:fflags}\n]", archive)
 				if !strings.Contains(flags, "/etc/backupchief/config.json cn\n") {
@@ -86,6 +92,13 @@ func TestPackageContents(t *testing.T) {
 			}
 			if !bytes.Equal(read(t, filepath.Join(root, licensePath)), read(t, "../restic/LICENSE")) {
 				t.Fatal("missing upstream restic license")
+			}
+			rcloneLicensePath := "usr/share/doc/backupchief/rclone-COPYING"
+			if target.format == "rpm" {
+				rcloneLicensePath = "usr/share/licenses/backupchief/rclone-COPYING"
+			}
+			if !bytes.Equal(read(t, filepath.Join(root, rcloneLicensePath)), read(t, "../rclone/COPYING")) {
+				t.Fatal("missing upstream rclone license")
 			}
 
 			binary := filepath.Join(root, "usr/bin/backupchief")

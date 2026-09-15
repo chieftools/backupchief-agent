@@ -56,6 +56,7 @@ cp packaging/backupchief.service "${RPMBUILD_DIR}/SOURCES/"
 cp packaging/postinstall.sh "${RPMBUILD_DIR}/SOURCES/"
 install -m 0644 LICENSE "${RPMBUILD_DIR}/SOURCES/LICENSE"
 install -m 0644 restic/LICENSE "${RPMBUILD_DIR}/SOURCES/restic-LICENSE"
+install -m 0644 rclone/COPYING "${RPMBUILD_DIR}/SOURCES/rclone-COPYING"
 install -m 0644 config.schema.json "${RPMBUILD_DIR}/SOURCES/config.schema.json"
 
 echo "Creating RPM spec file..."
@@ -72,7 +73,8 @@ Source0:        config.json
 Source1:        backupchief.service
 Source2:        LICENSE
 Source3:        restic-LICENSE
-Source4:        config.schema.json
+Source4:        rclone-COPYING
+Source5:        config.schema.json
 
 %global debug_package %{nil}
 %global _build_id_links none
@@ -96,11 +98,13 @@ install -m 0640 %{SOURCE0} %{buildroot}/etc/backupchief/config.json
 install -m 0644 %{SOURCE1} %{buildroot}/usr/lib/systemd/system/backupchief.service
 install -m 0644 %{SOURCE2} %{buildroot}/usr/share/licenses/backupchief/LICENSE
 install -m 0644 %{SOURCE3} %{buildroot}/usr/share/licenses/backupchief/restic-LICENSE
-install -m 0644 %{SOURCE4} %{buildroot}/usr/share/licenses/backupchief/config.schema.json
+install -m 0644 %{SOURCE4} %{buildroot}/usr/share/licenses/backupchief/rclone-COPYING
+install -m 0644 %{SOURCE5} %{buildroot}/usr/share/licenses/backupchief/config.schema.json
 
 %files
 %license %attr(0644, root, root) /usr/share/licenses/backupchief/LICENSE
 %license %attr(0644, root, root) /usr/share/licenses/backupchief/restic-LICENSE
+%license %attr(0644, root, root) /usr/share/licenses/backupchief/rclone-COPYING
 %doc %attr(0644, root, root) /usr/share/licenses/backupchief/config.schema.json
 %attr(0755, root, root) /usr/bin/backupchief
 %config(noreplace) %attr(0640, root, root) /etc/backupchief/config.json

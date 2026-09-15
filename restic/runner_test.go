@@ -207,6 +207,86 @@ func TestIndependentRecovery(t *testing.T) {
 	}
 }
 
+func TestInitializesAndCopiesBetweenLocalRepositories(t *testing.T) {
+	runner := testRunner(t)
+	source := testRequest(t)
+	requireComplete(t, runner, source)
+
+	root := filepath.Join(t.TempDir(), "synthetic source")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "record.txt"), []byte("synthetic replica payload\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source.Operation = "backup"
+	source.Root = root
+	requireComplete(t, runner, source)
+
+	destination := testRequest(t)
+	destination.Operation = "init_from"
+	destination.SourceConnection = &source.Connection
+	destination.SourcePassword = source.Password
+	requireComplete(t, runner, destination)
+
+	destination.Operation = "copy"
+	requireComplete(t, runner, destination)
+	destination.Operation = "snapshots"
+	destination.SourceConnection = nil
+	destination.SourcePassword = ""
+	result := requireComplete(t, runner, destination)
+
+	var snapshots []struct {
+		ID       string `json:"id"`
+		Original string `json:"original"`
+	}
+	if err := json.Unmarshal([]byte(result.Output), &snapshots); err != nil || len(snapshots) != 1 || snapshots[0].ID == "" || snapshots[0].Original == "" {
+		t.Fatalf("copied snapshots: %v %s", err, result.Output)
+	}
+}
+
+func TestDualRepositoryTransportUsesBundledRclone(t *testing.T) {
+	source := Connection{
+		Driver: "s3", Endpoint: "https://source.storage.example.test", Bucket: "synthetic-source",
+		Prefix: "repository", Region: "test-1", AccessKey: "synthetic-source-key", SecretKey: "synthetic-source-secret",
+	}
+	request := Request{
+		Version: 1, Operation: "copy", Connection: Connection{
+			Driver: "s3", Endpoint: "https://destination.storage.example.test", Bucket: "synthetic-destination",
+			Prefix: "repository", Region: "test-2", AccessKey: "synthetic-destination-key", SecretKey: "synthetic-destination-secret",
+		},
+		SourceConnection: &source, Password: "synthetic-destination-password", SourcePassword: "synthetic-source-password",
+		TimeoutSeconds: 3600, LockWaitSeconds: 30,
+	}
+
+	args, environment, config, err := request.dualArguments(
+		"destination-password", "source-password", "cache", "rclone.conf", "/private/runtime/rclone", false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(args, "rclone.program=/private/runtime/rclone") {
+		t.Fatalf("missing bundled rclone program: %v", args)
+	}
+	if !slices.Contains(environment, "RCLONE_CONFIG=rclone.conf") {
+		t.Fatalf("missing isolated rclone configuration: %v", environment)
+	}
+	for _, section := range []string{"[backupchief_source]", "[backupchief_destination]"} {
+		if !strings.Contains(config, section) {
+			t.Fatalf("missing rclone remote %s: %s", section, config)
+		}
+	}
+	if strings.Count(config, "no_check_bucket = true") != 2 {
+		t.Fatalf("rclone remotes may attempt bucket creation: %s", config)
+	}
+
+	if _, _, _, err := request.dualArguments(
+		"destination-password", "source-password", "cache", "rclone.conf", "", false,
+	); err == nil {
+		t.Fatal("accepted a system-resolved rclone executable")
+	}
+}
+
 func TestRequestBoundaries(t *testing.T) {
 	for _, operation := range []string{"unlock", "self-update", "forget", "unknown"} {
 		request := testRequest(t)
@@ -534,15 +614,20 @@ func TestProcessFixture(t *testing.T) {
 
 func TestSecretRedaction(t *testing.T) {
 	request := Request{
-		Password: "synthetic&password",
+		Password:       "synthetic&password",
+		SourcePassword: "synthetic-source-password",
 		Connection: Connection{
 			SecretKey: "synthetic/storage+secret",
 		},
+		SourceConnection: &Connection{
+			AccessKey: "synthetic-source-access",
+			SecretKey: "synthetic-source-secret",
+		},
 	}
 
-	got := redact("synthetic&password synthetic/storage+secret synthetic%26password", request)
+	got := redact("synthetic&password synthetic/storage+secret synthetic%26password synthetic-source-password synthetic-source-access synthetic-source-secret", request)
 
-	if got != "[REDACTED] [REDACTED] [REDACTED]" {
+	if got != "[REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED]" {
 		t.Fatal(got)
 	}
 }

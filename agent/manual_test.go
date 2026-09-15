@@ -25,3 +25,21 @@ func TestSelectJobUsesExactKeyOrUniqueDisplayName(t *testing.T) {
 		t.Fatalf("ambiguous display name error: %v", err)
 	}
 }
+
+func TestSelectJobRepositoryDefaultsToPrimaryAndSelectsAReplicaByKey(t *testing.T) {
+	primary := JobRepository{Key: "repository_primary", ServicePassword: "synthetic-primary-password"}
+	replica := JobRepository{Key: "repository_replica", ServicePassword: "synthetic-replica-password"}
+	job := Job{Key: "job_documents", Repository: primary, Replicas: []JobRepository{replica}}
+
+	selected, err := SelectJobRepository(job, "")
+	if err != nil || selected.Key != primary.Key {
+		t.Fatalf("default repository: %+v %v", selected, err)
+	}
+	selected, err = SelectJobRepository(job, replica.Key)
+	if err != nil || selected.ServicePassword != replica.ServicePassword {
+		t.Fatalf("replica repository: %+v %v", selected, err)
+	}
+	if _, err = SelectJobRepository(job, "repository_unrelated"); err == nil {
+		t.Fatal("selected a repository that is not configured for the job")
+	}
+}

@@ -79,7 +79,7 @@
       "additionalProperties": false,
       "required": ["protocol_revision", "generation", "revision", "schema_version", "issued_at"],
       "properties": {
-		"protocol_revision": { "const": "1.7.0" },
+		"protocol_revision": { "const": "1.8.0" },
         "generation": { "type": "integer", "minimum": 1 },
         "revision": { "type": "integer", "minimum": 1 },
         "schema_version": { "const": 1 },
@@ -161,7 +161,9 @@
         "maintenance": { "$ref": "#/$defs/maintenance" },
         "retention": { "$ref": "#/$defs/retention" },
         "integrity": { "$ref": "#/$defs/integrity" },
-        "safety": { "$ref": "#/$defs/safety" }
+        "safety": { "$ref": "#/$defs/safety" },
+        "replicas": { "$ref": "#/$defs/replicas" },
+        "replication": { "$ref": "#/$defs/replication" }
       }
     },
     "file_source": {
@@ -182,7 +184,7 @@
 		"enabled": { "type": "boolean", "default": true }, "source": { "allOf": [{ "$ref": "#/$defs/mysql_source" }, { "not": { "required": ["table_selection"] } }, { "properties": { "selection": { "properties": { "mode": { "enum": ["selected", "all_accessible"] } } } } }] },
 		"repository": { "$ref": "#/$defs/repository" }, "schedule": { "$ref": "#/$defs/cron" },
 		"maintenance": { "$ref": "#/$defs/maintenance" },
-		"retention": { "$ref": "#/$defs/retention" }, "integrity": { "$ref": "#/$defs/integrity" }, "safety": { "$ref": "#/$defs/safety" }
+		"retention": { "$ref": "#/$defs/retention" }, "integrity": { "$ref": "#/$defs/integrity" }, "safety": { "$ref": "#/$defs/safety" }, "replicas": { "$ref": "#/$defs/replicas" }, "replication": { "$ref": "#/$defs/replication" }
 	  }
 	},
 	"mysql_filtered_job": {
@@ -193,7 +195,7 @@
 		"enabled": { "type": "boolean", "default": true }, "source": { "allOf": [{ "$ref": "#/$defs/mysql_source" }, { "anyOf": [{ "properties": { "selection": { "properties": { "mode": { "const": "exclude" } } } } }, { "required": ["table_selection"] }] }, { "if": { "properties": { "table_selection": { "properties": { "mode": { "const": "include" } }, "required": ["mode"] } }, "required": ["table_selection"] }, "then": { "properties": { "selection": { "properties": { "mode": { "const": "selected" } }, "required": ["mode"] } } } }] },
 		"repository": { "$ref": "#/$defs/repository" }, "schedule": { "$ref": "#/$defs/cron" },
 		"maintenance": { "$ref": "#/$defs/maintenance" },
-		"retention": { "$ref": "#/$defs/retention" }, "integrity": { "$ref": "#/$defs/integrity" }, "safety": { "$ref": "#/$defs/safety" }
+		"retention": { "$ref": "#/$defs/retention" }, "integrity": { "$ref": "#/$defs/integrity" }, "safety": { "$ref": "#/$defs/safety" }, "replicas": { "$ref": "#/$defs/replicas" }, "replication": { "$ref": "#/$defs/replication" }
 	  }
 	},
 	"mysql_source": {
@@ -222,7 +224,7 @@
 		"enabled": { "type": "boolean", "default": true }, "source": { "allOf": [{ "$ref": "#/$defs/postgresql_source" }, { "not": { "required": ["table_selection"] } }, { "properties": { "selection": { "properties": { "mode": { "enum": ["selected", "all_accessible"] } } } } }] },
 		"repository": { "$ref": "#/$defs/repository" }, "schedule": { "$ref": "#/$defs/cron" },
 		"maintenance": { "$ref": "#/$defs/maintenance" },
-		"retention": { "$ref": "#/$defs/retention" }, "integrity": { "$ref": "#/$defs/integrity" }, "safety": { "$ref": "#/$defs/safety" }
+		"retention": { "$ref": "#/$defs/retention" }, "integrity": { "$ref": "#/$defs/integrity" }, "safety": { "$ref": "#/$defs/safety" }, "replicas": { "$ref": "#/$defs/replicas" }, "replication": { "$ref": "#/$defs/replication" }
 	  }
 	},
 	"postgresql_filtered_job": {
@@ -233,7 +235,7 @@
 		"enabled": { "type": "boolean", "default": true }, "source": { "allOf": [{ "$ref": "#/$defs/postgresql_source" }, { "anyOf": [{ "properties": { "selection": { "properties": { "mode": { "const": "exclude" } } } } }, { "required": ["table_selection"] }] }, { "if": { "properties": { "table_selection": { "properties": { "mode": { "const": "include" } }, "required": ["mode"] } }, "required": ["table_selection"] }, "then": { "properties": { "selection": { "properties": { "mode": { "const": "selected" } }, "required": ["mode"] } } } }] },
 		"repository": { "$ref": "#/$defs/repository" }, "schedule": { "$ref": "#/$defs/cron" },
 		"maintenance": { "$ref": "#/$defs/maintenance" },
-		"retention": { "$ref": "#/$defs/retention" }, "integrity": { "$ref": "#/$defs/integrity" }, "safety": { "$ref": "#/$defs/safety" }
+		"retention": { "$ref": "#/$defs/retention" }, "integrity": { "$ref": "#/$defs/integrity" }, "safety": { "$ref": "#/$defs/safety" }, "replicas": { "$ref": "#/$defs/replicas" }, "replication": { "$ref": "#/$defs/replication" }
 	  }
 	},
 	"postgresql_source": {
@@ -259,6 +261,7 @@
       "additionalProperties": false,
       "required": ["destination", "path", "password"],
       "properties": {
+        "repository_key": { "type": "string", "pattern": "^repository_[0-9a-hjkmnp-tv-z]{26}$" },
         "id": {
           "description": "Restic repository identity, not a Backup Chief resource ID.",
           "$ref": "#/$defs/digest"
@@ -266,6 +269,36 @@
         "destination": { "$ref": "#/$defs/storage_key" },
         "path": { "type": "string", "minLength": 1, "maxLength": 1024 },
         "password": { "type": "string", "minLength": 1, "maxLength": 1024 }
+      }
+    },
+    "replicas": {
+      "type": "array",
+      "maxItems": 10,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/replica_repository" }
+    },
+    "replica_repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository_key", "destination", "path", "password", "status", "source"],
+      "properties": {
+        "repository_key": { "type": "string", "pattern": "^repository_[0-9a-hjkmnp-tv-z]{26}$" },
+        "id": { "$ref": "#/$defs/digest" },
+        "destination": { "$ref": "#/$defs/storage_key" },
+        "path": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "password": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "status": { "enum": ["provisioning", "active", "failed"] },
+        "source": { "type": "string", "pattern": "^repository_[0-9a-hjkmnp-tv-z]{26}$" }
+      }
+    },
+    "replication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "coalesce", "safety_hold_seconds"],
+      "properties": {
+        "mode": { "const": "attached" },
+        "coalesce": { "const": true },
+        "safety_hold_seconds": { "type": "integer", "minimum": 86400, "maximum": 2592000 }
       }
     },
     "maintenance": {

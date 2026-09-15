@@ -18,6 +18,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 RESTIC_VERSION="$(tr -d '[:space:]' < "${REPOSITORY_DIR}/restic/VERSION")"
+RCLONE_VERSION="$(tr -d '[:space:]' < "${REPOSITORY_DIR}/rclone/VERSION")"
 RELEASE_PARENT="${OUTPUT_ROOT}/v${VERSION}"
 BUILD_DIR="$(mktemp -d)"
 STAGING="${BUILD_DIR}/v${VERSION}"
@@ -37,6 +38,7 @@ install -m 0755 backupchief-darwin-arm64 "${STAGING}/backupchief-${VERSION}-darw
 
 install -m 0644 LICENSE "${STAGING}/LICENSE"
 install -m 0644 restic/LICENSE "${STAGING}/restic-LICENSE"
+install -m 0644 rclone/COPYING "${STAGING}/rclone-COPYING"
 install -m 0644 CHANGELOG.md "${STAGING}/RELEASE_NOTES.md"
 
 artifact_json() {
@@ -58,6 +60,7 @@ cat > "${STAGING}/manifest.json" << EOF
     "schema": 1,
     "version": "${VERSION}",
     "restic_version": "${RESTIC_VERSION}",
+    "rclone_version": "${RCLONE_VERSION}",
     "platforms": {
         "darwin-arm64": {
             "backupchief": $(artifact_json "${DARWIN_HELPER}")
@@ -81,6 +84,7 @@ EOF
         LICENSE \
         RELEASE_NOTES.md \
         manifest.json \
+        rclone-COPYING \
         restic-LICENSE \
         > SHA256SUMS
 )

@@ -2,6 +2,7 @@ package egress
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -16,30 +17,42 @@ type Proxy struct {
 	mu          sync.Mutex
 	connections map[net.Conn]struct{}
 	closed      bool
-	host        string
+	hosts       map[string]struct{}
 	resolver    Resolver
 	dial        func(context.Context, string, string) (net.Conn, error)
 	slots       chan struct{}
 }
 
 func Start(ctx context.Context, endpoint string) (*Proxy, error) {
-	authorizedEndpoint, err := Endpoint(endpoint)
-	if err != nil {
-		return nil, err
+	return StartMany(ctx, []string{endpoint})
+}
+
+func StartMany(ctx context.Context, endpoints []string) (*Proxy, error) {
+	hosts := make(map[string]struct{}, len(endpoints))
+	for _, endpoint := range endpoints {
+		authorizedEndpoint, err := Endpoint(endpoint)
+		if err != nil {
+			return nil, err
+		}
+		hosts[authorizedEndpoint.Host] = struct{}{}
+	}
+	if len(hosts) == 0 {
+		return nil, errors.New("at least one egress endpoint is required")
 	}
 
 	proxy := &Proxy{
-		host:        authorizedEndpoint.Host,
+		hosts:       hosts,
 		resolver:    net.DefaultResolver,
 		dial:        (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
 		connections: make(map[net.Conn]struct{}),
 		slots:       make(chan struct{}, 16),
 	}
 
-	proxy.listener, err = net.Listen("tcp4", "127.0.0.1:0")
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
 	}
+	proxy.listener = listener
 
 	proxy.URL = "http://" + proxy.listener.Addr().String()
 	proxy.server = &http.Server{
@@ -70,7 +83,11 @@ func (p *Proxy) Close() {
 }
 
 func (p *Proxy) serve(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodConnect || r.Host != p.host || r.URL.Host != p.host {
+	if r.Method != http.MethodConnect || r.Host != r.URL.Host {
+		http.Error(w, "destination denied", http.StatusForbidden)
+		return
+	}
+	if _, allowed := p.hosts[r.Host]; !allowed {
 		http.Error(w, "destination denied", http.StatusForbidden)
 		return
 	}
@@ -88,7 +105,7 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	host, _, _ := net.SplitHostPort(p.host)
+	host, _, _ := net.SplitHostPort(r.Host)
 	ips, err := Addresses(ctx, p.resolver, host)
 	if err != nil {
 		http.Error(w, "destination denied", http.StatusForbidden)

@@ -41,6 +41,7 @@ var (
 	jobConfigKeyPattern          = regexp.MustCompile(`^job_[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 	storageConfigKeyPattern      = regexp.MustCompile(`^storage_[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 	resourceTypePattern          = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,63}$`)
+	repositoryConfigKeyPattern   = regexp.MustCompile(`^repository_[0-9a-hjkmnp-tv-z]{26}$`)
 )
 
 func isSupportedJobType(jobType JobType) bool {
@@ -113,6 +114,7 @@ type Job struct {
 	Enabled     bool
 	Source      JobSource
 	Repository  JobRepository
+	Replicas    []JobRepository
 	Schedule    JobSchedule
 	Maintenance JobMaintenance
 	Retention   JobRetention
@@ -169,11 +171,14 @@ type TableSelectionEntry struct {
 }
 
 type JobRepository struct {
+	Key             string
 	ID              string
 	Destination     string
 	Path            string
 	Location        string
 	ServicePassword string
+	Status          string
+	Source          string
 	Connection      RepositoryConnection
 }
 
@@ -258,6 +263,8 @@ type jobDocument struct {
 	Enabled     *bool                `json:"enabled,omitempty"`
 	Source      sourceDocument       `json:"source"`
 	Repository  repositoryDocument   `json:"repository"`
+	Replicas    []repositoryDocument `json:"replicas,omitempty"`
+	Replication *replicationDocument `json:"replication,omitempty"`
 	Schedule    string               `json:"schedule"`
 	Maintenance *maintenanceDocument `json:"maintenance,omitempty"`
 	Retention   *retentionDocument   `json:"retention,omitempty"`
@@ -308,10 +315,19 @@ type mysqlDumpDocument struct {
 }
 
 type repositoryDocument struct {
-	ID          string `json:"id,omitempty"`
-	Destination string `json:"destination"`
-	Path        string `json:"path"`
-	Password    string `json:"password"`
+	RepositoryKey string `json:"repository_key,omitempty"`
+	ID            string `json:"id,omitempty"`
+	Destination   string `json:"destination"`
+	Path          string `json:"path"`
+	Password      string `json:"password"`
+	Status        string `json:"status,omitempty"`
+	Source        string `json:"source,omitempty"`
+}
+
+type replicationDocument struct {
+	Mode              string `json:"mode"`
+	Coalesce          bool   `json:"coalesce"`
+	SafetyHoldSeconds uint64 `json:"safety_hold_seconds"`
 }
 
 type retentionDocument struct {
@@ -628,6 +644,37 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 	if repositoryID == "" {
 		repositoryID = fmt.Sprintf("%x", sha256.Sum256([]byte(location)))
 	}
+	primaryKey := raw.Repository.RepositoryKey
+	if primaryKey == "" && ulidPattern.MatchString(jobID) {
+		primaryKey = "repository_" + strings.ToLower(jobID)
+	}
+	replicas := make([]JobRepository, 0, len(raw.Replicas))
+	seenRepositories := map[string]bool{primaryKey: true}
+	for _, replica := range raw.Replicas {
+		if !repositoryConfigKeyPattern.MatchString(replica.RepositoryKey) || !digestPattern.MatchString(replica.ID) || seenRepositories[replica.RepositoryKey] || replica.Source != primaryKey || !slices.Contains([]string{"provisioning", "active", "failed"}, replica.Status) {
+			return Job{}, fmt.Errorf("replica repository identity is invalid")
+		}
+		replicaDestination, exists := destinations[replica.Destination]
+		if !exists {
+			return Job{}, fmt.Errorf("replica references unknown destination %q", replica.Destination)
+		}
+		replicaConnection, replicaLocation, err := resolveRepository(replicaDestination, replica.Path)
+		if err != nil {
+			return Job{}, fmt.Errorf("replica repository: %w", err)
+		}
+		if replica.Password == "" || runeLength(replica.Password) > 1024 || strings.ContainsAny(replica.Password, "\r\n\x00") {
+			return Job{}, fmt.Errorf("replica repository password is invalid")
+		}
+		seenRepositories[replica.RepositoryKey] = true
+		replicas = append(replicas, JobRepository{
+			Key: replica.RepositoryKey, ID: replica.ID, Destination: replica.Destination, Path: replica.Path,
+			Location: replicaLocation, ServicePassword: replica.Password, Status: replica.Status, Source: replica.Source,
+			Connection: replicaConnection,
+		})
+	}
+	if len(replicas) > 0 && (raw.Replication == nil || raw.Replication.Mode != "attached" || !raw.Replication.Coalesce || raw.Replication.SafetyHoldSeconds != 604800) {
+		return Job{}, fmt.Errorf("replication policy is invalid")
+	}
 	retention := defaultRetention(key)
 	if raw.Retention != nil {
 		applyRetention(&retention, *raw.Retention)
@@ -704,6 +751,7 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 		Enabled: enabled,
 		Source:  jobSource,
 		Repository: JobRepository{
+			Key:             primaryKey,
 			ID:              repositoryID,
 			Destination:     raw.Repository.Destination,
 			Path:            raw.Repository.Path,
@@ -711,6 +759,7 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 			ServicePassword: raw.Repository.Password,
 			Connection:      connection,
 		},
+		Replicas:  replicas,
 		Schedule:  JobSchedule{Kind: "cron", Expression: raw.Schedule, Timezone: "UTC"},
 		Retention: retention,
 		Integrity: integrity,
@@ -991,10 +1040,11 @@ func encodeConfig(config Config, managedDigest string) ([]byte, error) {
 			Enabled: &enabled,
 			Source:  source,
 			Repository: repositoryDocument{
-				ID:          job.Repository.ID,
-				Destination: destinationKey,
-				Path:        job.Repository.Path,
-				Password:    job.Repository.ServicePassword,
+				RepositoryKey: job.Repository.Key,
+				ID:            job.Repository.ID,
+				Destination:   destinationKey,
+				Path:          job.Repository.Path,
+				Password:      job.Repository.ServicePassword,
 			},
 			Schedule: job.Schedule.Expression,
 			Retention: &retentionDocument{
@@ -1017,6 +1067,21 @@ func encodeConfig(config Config, managedDigest string) ([]byte, error) {
 				HasUnresolvedRuns:    job.Retention.HasUnresolvedRuns,
 				ProtectedSnapshotIDs: append([]string{}, job.Retention.ProtectedSnapshotIDs...),
 			},
+		}
+		if len(job.Replicas) > 0 {
+			documentJob.Replicas = make([]repositoryDocument, 0, len(job.Replicas))
+			for _, replica := range job.Replicas {
+				replicaDestinationKey := destinationKeys[replica.Destination]
+				if replicaDestinationKey == "" {
+					replicaDestinationKey = prefixConfigKey(replica.Destination, "storage_")
+				}
+				documentJob.Replicas = append(documentJob.Replicas, repositoryDocument{
+					RepositoryKey: replica.Key,
+					ID:            replica.ID, Destination: replicaDestinationKey, Path: replica.Path,
+					Password: replica.ServicePassword, Status: replica.Status, Source: replica.Source,
+				})
+			}
+			documentJob.Replication = &replicationDocument{Mode: "attached", Coalesce: true, SafetyHoldSeconds: 604800}
 		}
 		if job.Maintenance.Strategy != "" {
 			documentJob.Maintenance = &maintenanceDocument{
@@ -1116,11 +1181,16 @@ func validateJob(job Job) error {
 			return err
 		}
 	}
-	if job.Repository.Location == "" || runeLength(job.Repository.Location) > 2048 || !digestPattern.MatchString(job.Repository.ID) {
+	if job.Repository.Location == "" || runeLength(job.Repository.Location) > 2048 || !digestPattern.MatchString(job.Repository.ID) || job.Repository.Key != "" && !repositoryConfigKeyPattern.MatchString(job.Repository.Key) {
 		return fmt.Errorf("repository identity is invalid")
 	}
 	if job.Repository.ServicePassword == "" || runeLength(job.Repository.ServicePassword) > 1024 || strings.ContainsAny(job.Repository.ServicePassword, "\r\n\x00") {
 		return fmt.Errorf("repository password is invalid")
+	}
+	for _, replica := range job.Replicas {
+		if !repositoryConfigKeyPattern.MatchString(replica.Key) || !digestPattern.MatchString(replica.ID) || replica.Source != job.Repository.Key || replica.Location == "" || runeLength(replica.Location) > 2048 || !slices.Contains([]string{"provisioning", "active", "failed"}, replica.Status) {
+			return fmt.Errorf("replica repository is invalid")
+		}
 	}
 	if _, err := parseFixedUTCSchedule(job.Schedule.Expression); err != nil {
 		return fmt.Errorf("schedule is invalid: %w", err)

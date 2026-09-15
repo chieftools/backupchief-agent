@@ -13,6 +13,7 @@ import (
 
 func newRestoreCommand(configPath *string) *cobra.Command {
 	var snapshot string
+	var repositorySelector string
 	var encodedPath string
 	var target string
 
@@ -32,12 +33,16 @@ func newRestoreCommand(configPath *string) *cobra.Command {
 			if !job.Enabled {
 				return errors.New("the selected backup job is not active")
 			}
+			repository, err := agent.SelectJobRepository(job, repositorySelector)
+			if err != nil {
+				return err
+			}
 			target, err = validateRestoreTarget(target)
 			if err != nil {
 				return err
 			}
 
-			request, err := restoreRequest(job, snapshot, target, encodedPath)
+			request, err := restoreRequest(job, repository, snapshot, target, encodedPath)
 			if err != nil {
 				return err
 			}
@@ -50,6 +55,7 @@ func newRestoreCommand(configPath *string) *cobra.Command {
 		},
 	}
 	command.Flags().StringVar(&snapshot, "snapshot", "", "Full snapshot ID")
+	command.Flags().StringVar(&repositorySelector, "repository", "", "Repository key (defaults to the primary)")
 	command.Flags().StringVar(&encodedPath, "path-base64", "", "Optional base64url-encoded snapshot directory")
 	command.Flags().StringVar(&target, "target", "", "Empty or non-existing restore directory")
 	_ = command.MarkFlagRequired("snapshot")
@@ -58,8 +64,8 @@ func newRestoreCommand(configPath *string) *cobra.Command {
 	return command
 }
 
-func restoreRequest(job agent.Job, snapshot, target, encodedPath string) (restic.Request, error) {
-	request := agent.ResticRequest(job, "restore", "")
+func restoreRequest(job agent.Job, repository agent.JobRepository, snapshot, target, encodedPath string) (restic.Request, error) {
+	request := agent.ResticRequestForRepository(job, repository, "restore", "")
 	request.Snapshot = snapshot
 	request.Target = target
 	request.Path = "/"

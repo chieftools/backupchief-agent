@@ -46,6 +46,7 @@ func (daemon *daemon) dispatchCommands(ctx context.Context) error {
 	if err := daemon.advanceCommands(ctx); err != nil {
 		return daemon.handleRequestError(err)
 	}
+	daemon.resumeReplications(ctx)
 	return nil
 }
 
@@ -359,7 +360,7 @@ func (daemon *daemon) runBackup(ctx context.Context, commandID, runID string, jo
 	if ctx.Err() == nil {
 		result.RepositoryBytes = measureRepositoryBytes(ctx, daemon.executor, job)
 	}
-	daemon.finishOperation(commandID, runID, job, result, log, truncated, dropped)
+	daemon.finishOperation(ctx, commandID, runID, job, result, log, truncated, dropped)
 }
 
 func (daemon *daemon) databaseBackupProgress(commandID string) DatabaseBackupProgress {
@@ -429,10 +430,10 @@ func (daemon *daemon) runMaintenance(ctx context.Context, commandID, runID strin
 	if ctx.Err() == nil {
 		result.RepositoryBytes = measureRepositoryBytes(ctx, daemon.executor, job)
 	}
-	daemon.finishOperation(commandID, runID, job, result, log, truncated, dropped)
+	daemon.finishOperation(ctx, commandID, runID, job, result, log, truncated, dropped)
 }
 
-func (daemon *daemon) finishOperation(commandID, runID string, job Job, result CommandResult, log []byte, truncated bool, dropped uint64) {
+func (daemon *daemon) finishOperation(ctx context.Context, commandID, runID string, job Job, result CommandResult, log []byte, truncated bool, dropped uint64) {
 	if daemon.client != nil && !protocolRevisionSupports(daemon.client.selectedProtocolRevision(), "1.2.0") {
 		result.SnapshotEvidence = nil
 		result.SnapshotEvidenceIDs = nil
@@ -456,6 +457,12 @@ func (daemon *daemon) finishOperation(commandID, runID string, job Job, result C
 	}
 	journaled.State = "finished"
 	journaled.Result = &result
+	if result.RunKind == "backup" && (result.Status == "complete" || result.Status == "partial") && len(result.SnapshotIDs) > 0 && len(job.Replicas) > 0 {
+		journaled.ReplicationPending = make([]string, 0, len(job.Replicas))
+		for _, replica := range job.Replicas {
+			journaled.ReplicationPending = append(journaled.ReplicationPending, replica.Key)
+		}
+	}
 	daemon.appendSnapshotEvidenceEvents(journaled, result)
 	journaled.Sequence++
 	if eventID, err := newULID(daemon.now()); err == nil {
@@ -495,7 +502,11 @@ func (daemon *daemon) finishOperation(commandID, runID string, job Job, result C
 	releaseMaintenance := journaled.Trigger == "scheduled" && result.RunKind == "backup" && result.Status == "complete"
 	releaseCatchUp := result.RunKind != "backup"
 	jobID := journaled.Command.Payload.JobID
+	hasReplication := len(journaled.ReplicationPending) > 0
 	daemon.mu.Unlock()
+	if hasReplication {
+		daemon.startReplication(ctx, job)
+	}
 	if releaseMaintenance {
 		_ = daemon.startNextDeferredMaintenance(context.Background(), jobID, false)
 	}
@@ -640,7 +651,7 @@ func (daemon *daemon) flushCommand(ctx context.Context, commandID string) error 
 			if item.Status != "rejected" {
 				continue
 			}
-			if batch[index].Kind == "run_finished" || batch[index].Kind == "snapshot_inventory_chunk" {
+			if batch[index].Kind == "run_finished" || batch[index].Kind == "snapshot_inventory_chunk" || batch[index].Kind == "replication_finished" {
 				retained = append(retained, batch[index])
 			}
 			rejection = fmt.Errorf("event %s was rejected: %s", item.ID, item.Code)
@@ -744,7 +755,7 @@ func (daemon *daemon) flushCommand(ctx context.Context, commandID string) error 
 
 	daemon.mu.Lock()
 	current := daemon.journal.Commands[commandID]
-	if current != nil && current.ResultReported && len(current.Events) == 0 && (current.LogID == "" || current.LogCompleted) {
+	if current != nil && current.ResultReported && len(current.Events) == 0 && (current.LogID == "" || current.LogCompleted) && len(current.ReplicationPending) == 0 {
 		delete(daemon.journal.Commands, commandID)
 		err := daemon.store.SaveCommandJournal(daemon.journal)
 		daemon.mu.Unlock()
@@ -769,9 +780,16 @@ func (daemon *daemon) reconcileInterrupted(ctx context.Context) error {
 		return nil
 	}
 	ids := make([]string, 0)
+	replicationJobs := make(map[string]Job)
 	for id, command := range daemon.journal.Commands {
 		if command.State == "running" {
 			ids = append(ids, id)
+		}
+		if command.State == "finished" && len(command.ReplicationPending) > 0 && command.JobSnapshot != "" {
+			job, err := decodeJobSnapshot(daemon.bootstrap, command.RunID, command.ConfigRevision, command.JobSnapshot)
+			if err == nil {
+				replicationJobs[job.ID] = job
+			}
 		}
 	}
 	daemon.reconciled = true
@@ -784,6 +802,9 @@ func (daemon *daemon) reconcileInterrupted(ctx context.Context) error {
 			daemon.mu.Unlock()
 			return err
 		}
+	}
+	for _, job := range replicationJobs {
+		daemon.startReplication(ctx, job)
 	}
 	return nil
 }

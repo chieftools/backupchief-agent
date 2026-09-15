@@ -68,3 +68,25 @@ func TestValidateJobSnapshotSelectionUsesConfiguredRoot(t *testing.T) {
 		t.Fatal("accepted directory selection for database job")
 	}
 }
+
+func TestExportRequestUsesTheSelectedRepository(t *testing.T) {
+	repository := agent.JobRepository{
+		ServicePassword: "synthetic-replica-password",
+		Connection: agent.RepositoryConnection{
+			Driver: "s3",
+			Bucket: "replica-example-test",
+			Prefix: "synthetic/repository",
+		},
+	}
+	request := exportRequest(
+		agent.Job{Type: agent.JobTypeFile},
+		repository,
+		"synthetic-replica-snapshot",
+		"directory",
+		"/srv/synthetic",
+	)
+
+	if request.Password != repository.ServicePassword || request.Connection.Bucket != repository.Connection.Bucket || request.Snapshot != "synthetic-replica-snapshot" {
+		t.Fatalf("export request: %+v", request)
+	}
+}

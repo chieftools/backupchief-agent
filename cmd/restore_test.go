@@ -12,7 +12,7 @@ import (
 func TestRestoreRequestUsesTheConfiguredSnapshotRoot(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "restored")
 	fileJob := agent.Job{Type: agent.JobTypeFile, Source: agent.JobSource{Root: "/srv/synthetic files"}}
-	request, err := restoreRequest(fileJob, "synthetic-snapshot", target, "")
+	request, err := restoreRequest(fileJob, fileJob.Repository, "synthetic-snapshot", target, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,7 +20,8 @@ func TestRestoreRequestUsesTheConfiguredSnapshotRoot(t *testing.T) {
 		t.Fatalf("file restore request: %+v", request)
 	}
 
-	databaseRequest, err := restoreRequest(agent.Job{Type: agent.JobTypeMySQL}, "synthetic-database-snapshot", target, "")
+	databaseJob := agent.Job{Type: agent.JobTypeMySQL}
+	databaseRequest, err := restoreRequest(databaseJob, databaseJob.Repository, "synthetic-database-snapshot", target, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,17 +35,37 @@ func TestRestoreRequestAcceptsASelectedFileDirectory(t *testing.T) {
 	selectedPath := "/srv/synthetic files/Quarterly Records"
 	encodedPath := base64.RawURLEncoding.EncodeToString([]byte(selectedPath))
 
-	request, err := restoreRequest(job, "synthetic-snapshot", filepath.Join(t.TempDir(), "restored"), encodedPath)
+	request, err := restoreRequest(job, job.Repository, "synthetic-snapshot", filepath.Join(t.TempDir(), "restored"), encodedPath)
 	if err != nil || request.Path != selectedPath {
 		t.Fatalf("selected directory request: %+v %v", request, err)
 	}
 
 	outsidePath := base64.RawURLEncoding.EncodeToString([]byte("/srv/unrelated"))
-	if _, err = restoreRequest(job, "synthetic-snapshot", "/tmp/synthetic", outsidePath); err == nil {
+	if _, err = restoreRequest(job, job.Repository, "synthetic-snapshot", "/tmp/synthetic", outsidePath); err == nil {
 		t.Fatal("accepted a selected directory outside the configured root")
 	}
-	if _, err = restoreRequest(agent.Job{Type: agent.JobTypeMySQL}, "synthetic-snapshot", "/tmp/synthetic", encodedPath); err == nil {
+	databaseJob := agent.Job{Type: agent.JobTypeMySQL}
+	if _, err = restoreRequest(databaseJob, databaseJob.Repository, "synthetic-snapshot", "/tmp/synthetic", encodedPath); err == nil {
 		t.Fatal("accepted a selected directory for a database job")
+	}
+}
+
+func TestRestoreRequestUsesTheSelectedRepository(t *testing.T) {
+	job := agent.Job{Type: agent.JobTypeFile, Source: agent.JobSource{Root: "/srv/synthetic"}}
+	repository := agent.JobRepository{
+		ServicePassword: "synthetic-replica-password",
+		Connection: agent.RepositoryConnection{
+			Driver: "s3",
+			Bucket: "replica-example-test",
+			Prefix: "synthetic/repository",
+		},
+	}
+	request, err := restoreRequest(job, repository, "synthetic-replica-snapshot", filepath.Join(t.TempDir(), "restored"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Password != repository.ServicePassword || request.Connection.Bucket != repository.Connection.Bucket || request.Snapshot != "synthetic-replica-snapshot" {
+		t.Fatalf("restore request: %+v", request)
 	}
 }
 

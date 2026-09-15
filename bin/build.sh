@@ -18,6 +18,8 @@ export GOTOOLCHAIN="go$(awk '/^go / { print $2 }' go.mod)"
 echo "Verifying pinned restic release inputs..."
 RESTIC_DIR="$(pwd)/restic"
 RESTIC_VERSION="$(tr -d '[:space:]' < "${RESTIC_DIR}/VERSION")"
+RCLONE_DIR="$(pwd)/rclone"
+RCLONE_VERSION="$(tr -d '[:space:]' < "${RCLONE_DIR}/VERSION")"
 VERIFY_DIR="$(mktemp -d)"
 trap 'rm -rf "${VERIFY_DIR}"' EXIT
 chmod 0700 "${VERIFY_DIR}"
@@ -26,6 +28,15 @@ gpgv --homedir "${VERIFY_DIR}" --keyring "${VERIFY_DIR}/keyring.gpg" --status-fd
     "${RESTIC_DIR}/SHA256SUMS.asc" "${RESTIC_DIR}/SHA256SUMS" > "${VERIFY_DIR}/signature"
 if ! grep -q '^\[GNUPG:\] VALIDSIG CF8F18F2844575973F79D4E191A6868BD3F7A907 ' "${VERIFY_DIR}/signature"; then
     echo "Unexpected restic release signer." >&2
+    exit 1
+fi
+
+echo "Verifying pinned rclone release inputs..."
+gpg --batch --no-options --dearmor < "${RCLONE_DIR}/signing-key.asc" > "${VERIFY_DIR}/rclone-keyring.gpg"
+gpgv --homedir "${VERIFY_DIR}" --keyring "${VERIFY_DIR}/rclone-keyring.gpg" --status-fd 1 \
+    "${RCLONE_DIR}/SHA256SUMS" > "${VERIFY_DIR}/rclone-signature"
+if ! grep -q '^\[GNUPG:\] VALIDSIG FBF737ECE9F8AB18604BD2AC93935E02FF3B54FA ' "${VERIFY_DIR}/rclone-signature"; then
+    echo "Unexpected rclone release signer." >&2
     exit 1
 fi
 
@@ -74,6 +85,50 @@ for PLATFORM in ${RESTIC_PLATFORMS}; do
 		echo "Unexpected checksum for ${EMBEDDED_ASSET}." >&2
 		exit 1
 	fi
+done
+
+for PLATFORM in ${RESTIC_PLATFORMS}; do
+    case "${PLATFORM}" in
+        linux_amd64)
+            RELEASE_PLATFORM="linux-amd64"
+            CHECKSUM_PLATFORM="linux-amd64"
+            ;;
+        linux_arm64)
+            RELEASE_PLATFORM="linux-arm64"
+            CHECKSUM_PLATFORM="linux-arm64"
+            ;;
+        darwin_arm64)
+            RELEASE_PLATFORM="osx-arm64"
+            CHECKSUM_PLATFORM="darwin-arm64"
+            ;;
+    esac
+
+    ASSET="rclone-v${RCLONE_VERSION}-${RELEASE_PLATFORM}.zip"
+    EMBEDDED_ASSET="rclone_${RELEASE_PLATFORM//-/_}.zip"
+    EXPECTED_HASH="$(awk -v asset="${ASSET}" '$2 == asset { print $1 }' "${RCLONE_DIR}/SHA256SUMS")"
+    if [ -z "${EXPECTED_HASH}" ]; then
+        echo "Pinned rclone checksum is missing for ${ASSET}." >&2
+        exit 1
+    fi
+    if [ ! -f "${RCLONE_DIR}/${EMBEDDED_ASSET}" ]; then
+        curl --fail --location --silent --show-error --max-time 180 \
+            "https://downloads.rclone.org/v${RCLONE_VERSION}/${ASSET}" \
+            --output "${VERIFY_DIR}/${ASSET}"
+        mv "${VERIFY_DIR}/${ASSET}" "${RCLONE_DIR}/${EMBEDDED_ASSET}"
+    fi
+
+    ACTUAL_HASH="$(shasum -a 256 "${RCLONE_DIR}/${EMBEDDED_ASSET}" | awk '{print $1}')"
+    if [ "${ACTUAL_HASH}" != "${EXPECTED_HASH}" ]; then
+        echo "Unexpected checksum for ${EMBEDDED_ASSET}." >&2
+        exit 1
+    fi
+
+    EXPECTED_BINARY_HASH="$(awk -v platform="${CHECKSUM_PLATFORM}" '$2 == platform { print $1 }' "${RCLONE_DIR}/BINARY_SHA256SUMS")"
+    ACTUAL_BINARY_HASH="$(unzip -p "${RCLONE_DIR}/${EMBEDDED_ASSET}" "rclone-v${RCLONE_VERSION}-${RELEASE_PLATFORM}/rclone" | shasum -a 256 | awk '{print $1}')"
+    if [ -z "${EXPECTED_BINARY_HASH}" ] || [ "${ACTUAL_BINARY_HASH}" != "${EXPECTED_BINARY_HASH}" ]; then
+        echo "Unexpected executable checksum inside ${EMBEDDED_ASSET}." >&2
+        exit 1
+    fi
 done
 
 if [ "${TARGET}" = all ] || [ "${TARGET}" = native ] || [ "${TARGET}" = dev-native ]; then

@@ -8,4 +8,5 @@
 /.backupchief-dev/
 
 /restic/*.bz2
+/rclone/*.zip
 /runtime/

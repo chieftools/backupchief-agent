@@ -17,7 +17,7 @@ import (
 func TestProxyPinsDialAndRejectsRebinding(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	proxy, err := Start(ctx, "https://objects.example.test")
+	proxy, err := StartMany(ctx, []string{"https://objects.example.test", "https://replica.example.test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,6 +76,13 @@ func TestProxyPinsDialAndRejectsRebinding(t *testing.T) {
 	}
 
 	_ = client.Close()
+	client, reader = connect("replica.example.test:443")
+	line, _ = reader.ReadString('\n')
+	if !strings.Contains(line, "200") {
+		t.Fatal(line)
+	}
+	_, _ = reader.ReadString('\n')
+	_ = client.Close()
 	private.Store(true)
 
 	prohibitedHosts := []string{
@@ -95,8 +102,8 @@ func TestProxyPinsDialAndRejectsRebinding(t *testing.T) {
 		}
 	}
 
-	if dials.Load() != 1 {
-		t.Fatalf("opened %d sockets; only the approved initial dial was allowed", dials.Load())
+	if dials.Load() != 2 {
+		t.Fatalf("opened %d sockets; only the two approved endpoint dials were allowed", dials.Load())
 	}
 }
 

@@ -2,6 +2,7 @@ package restic
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"net/url"
 	"path/filepath"
@@ -33,29 +34,116 @@ type Connection struct {
 }
 
 type Request struct {
-	Version           int        `json:"version"`
-	Operation         string     `json:"operation"`
-	Connection        Connection `json:"connection"`
-	Password          string     `json:"password"`
-	NewPassword       string     `json:"new_password,omitempty"`
-	KeyID             string     `json:"key_id,omitempty"`
-	Root              string     `json:"root,omitempty"`
-	Excludes          []string   `json:"excludes,omitempty"`
-	Host              string     `json:"host,omitempty"`
-	Tags              []string   `json:"tags,omitempty"`
-	Snapshot          string     `json:"snapshot,omitempty"`
-	SnapshotIDs       []string   `json:"snapshot_ids,omitempty"`
-	Retention         *Retention `json:"retention,omitempty"`
-	DataSubsetPart    int        `json:"data_subset_part,omitempty"`
-	DataSubsetTotal   int        `json:"data_subset_total,omitempty"`
-	Target            string     `json:"target,omitempty"`
-	Path              string     `json:"path,omitempty"`
-	StdinFilename     string     `json:"stdin_filename,omitempty"`
-	StdinCommand      []string   `json:"stdin_command,omitempty"`
-	CommandConfig     string     `json:"command_config,omitempty"`
-	TimeoutSeconds    int        `json:"timeout_seconds"`
-	LockWaitSeconds   int        `json:"lock_wait_seconds"`
-	RecoverStaleLocks bool       `json:"recover_stale_locks,omitempty"`
+	Version           int         `json:"version"`
+	Operation         string      `json:"operation"`
+	Connection        Connection  `json:"connection"`
+	SourceConnection  *Connection `json:"source_connection,omitempty"`
+	Password          string      `json:"password"`
+	SourcePassword    string      `json:"source_password,omitempty"`
+	NewPassword       string      `json:"new_password,omitempty"`
+	KeyID             string      `json:"key_id,omitempty"`
+	Root              string      `json:"root,omitempty"`
+	Excludes          []string    `json:"excludes,omitempty"`
+	Host              string      `json:"host,omitempty"`
+	Tags              []string    `json:"tags,omitempty"`
+	Snapshot          string      `json:"snapshot,omitempty"`
+	SnapshotIDs       []string    `json:"snapshot_ids,omitempty"`
+	Retention         *Retention  `json:"retention,omitempty"`
+	DataSubsetPart    int         `json:"data_subset_part,omitempty"`
+	DataSubsetTotal   int         `json:"data_subset_total,omitempty"`
+	Target            string      `json:"target,omitempty"`
+	Path              string      `json:"path,omitempty"`
+	StdinFilename     string      `json:"stdin_filename,omitempty"`
+	StdinCommand      []string    `json:"stdin_command,omitempty"`
+	CommandConfig     string      `json:"command_config,omitempty"`
+	TimeoutSeconds    int         `json:"timeout_seconds"`
+	LockWaitSeconds   int         `json:"lock_wait_seconds"`
+	RecoverStaleLocks bool        `json:"recover_stale_locks,omitempty"`
+}
+
+func (r Request) dualArguments(passwordFile, sourcePasswordFile, cache, rcloneConfig, rcloneProgram string, local bool) ([]string, []string, string, error) {
+	if r.Version != protocolVersion || r.SourceConnection == nil || r.Password == "" || r.SourcePassword == "" ||
+		strings.ContainsAny(r.Password+r.SourcePassword, "\r\n\x00") ||
+		r.TimeoutSeconds < 1 || r.TimeoutSeconds > 86400 || r.LockWaitSeconds < 0 || r.LockWaitSeconds > 300 || r.LockWaitSeconds >= r.TimeoutSeconds {
+		return nil, nil, "", errors.New("invalid dual repository request")
+	}
+
+	lockWait := time.Duration(r.LockWaitSeconds) * time.Second
+	arguments := []string{"--password-file", passwordFile, "--cache-dir", cache, "--retry-lock", lockWait.String()}
+	environment := []string{"PATH=/usr/bin:/bin", "HOME=" + cache, "TMPDIR=" + cache, "LANG=C", "RESTIC_PROGRESS_FPS=1"}
+
+	if r.Connection.Driver == "local" && r.SourceConnection.Driver == "local" {
+		if err := validateLocalConnection(r.Connection, local); err != nil {
+			return nil, nil, "", err
+		}
+		if err := validateLocalConnection(*r.SourceConnection, local); err != nil {
+			return nil, nil, "", err
+		}
+		arguments = append(arguments, "--repo", r.Connection.Path)
+		arguments = appendDualOperation(arguments, r.Operation, r.SourceConnection.Path, sourcePasswordFile)
+		return arguments, environment, "", nil
+	}
+	if !filepath.IsAbs(rcloneProgram) || strings.ContainsRune(rcloneProgram, 0) {
+		return nil, nil, "", errors.New("dual repository transport requires the bundled rclone executable")
+	}
+
+	sourceRepository, sourceSection, err := rcloneRepository("backupchief_source", *r.SourceConnection, local)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	destinationRepository, destinationSection, err := rcloneRepository("backupchief_destination", r.Connection, local)
+	if err != nil {
+		return nil, nil, "", err
+	}
+
+	arguments = append(arguments, "--repo", destinationRepository, "-o", "rclone.program="+rcloneProgram)
+	arguments = appendDualOperation(arguments, r.Operation, sourceRepository, sourcePasswordFile)
+	environment = append(environment, "RCLONE_CONFIG="+rcloneConfig)
+
+	return arguments, environment, sourceSection + destinationSection, nil
+}
+
+func appendDualOperation(arguments []string, operation, sourceRepository, sourcePasswordFile string) []string {
+	switch operation {
+	case "init_from":
+		return append(arguments, "init", "--repository-version", "2", "--copy-chunker-params", "--from-repo", sourceRepository, "--from-password-file", sourcePasswordFile, "--json")
+	case "copy":
+		return append(arguments, "copy", "--from-repo", sourceRepository, "--from-password-file", sourcePasswordFile, "--json")
+	default:
+		return append(arguments, "unsupported-dual-operation")
+	}
+}
+
+func validateLocalConnection(connection Connection, local bool) error {
+	if !local || !filepath.IsAbs(connection.Path) || strings.ContainsRune(connection.Path, 0) {
+		return errors.New("local repositories require an absolute path and local execution permission")
+	}
+	return nil
+}
+
+func rcloneRepository(name string, connection Connection, local bool) (string, string, error) {
+	switch connection.Driver {
+	case "local":
+		if err := validateLocalConnection(connection, local); err != nil {
+			return "", "", err
+		}
+		return "rclone:" + name + ":" + connection.Path, fmt.Sprintf("[%s]\ntype = local\n", name), nil
+	case "s3":
+		endpoint, err := canonicalS3Endpoint(connection)
+		if err != nil || !bucketPattern.MatchString(connection.Bucket) || connection.Region == "" ||
+			connection.AccessKey == "" || connection.SecretKey == "" || !safePrefix(connection.Prefix) ||
+			strings.ContainsAny(connection.AccessKey+connection.SecretKey+connection.Region, "\r\n\x00") {
+			return "", "", errors.New("invalid or missing S3 settings")
+		}
+		endpoint.Host = strings.TrimSuffix(endpoint.Host, ":443")
+		section := fmt.Sprintf(
+			"[%s]\ntype = s3\nprovider = Other\nenv_auth = false\naccess_key_id = %s\nsecret_access_key = %s\nendpoint = %s\nregion = %s\nforce_path_style = true\nno_check_bucket = true\n",
+			name, connection.AccessKey, connection.SecretKey, endpoint.String(), connection.Region,
+		)
+		return "rclone:" + name + ":" + connection.Bucket + "/" + connection.Prefix, section, nil
+	default:
+		return "", "", errors.New("unsupported repository driver")
+	}
 }
 
 type Retention struct {

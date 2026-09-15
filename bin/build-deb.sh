@@ -53,6 +53,7 @@ chmod 0750 "${DEB_DIR}/etc/backupchief"
 install -m 0644 packaging/backupchief.service "${DEB_DIR}/usr/lib/systemd/system/backupchief.service"
 install -m 0644 LICENSE "${DEB_DIR}/usr/share/doc/backupchief/copyright"
 install -m 0644 restic/LICENSE "${DEB_DIR}/usr/share/doc/backupchief/restic-LICENSE"
+install -m 0644 rclone/COPYING "${DEB_DIR}/usr/share/doc/backupchief/rclone-COPYING"
 install -m 0644 config.schema.json "${DEB_DIR}/usr/share/doc/backupchief/config.schema.json"
 
 echo "Creating package metadata..."

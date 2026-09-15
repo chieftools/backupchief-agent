@@ -1,0 +1,56 @@
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA1
+
+b33db81f432d32702d386d15e774610e45acb3c0df10af4f45efc113e21c0534  rclone-v1.75.1-aix-ppc64.zip
+cd86b83758fd2c8adcdca52af092b0bd71c7c5c4703dc5d82d4f2d7cbaa11ba4  rclone-v1.75.1-freebsd-386.zip
+ef2a9e8536126f21704e3e37d01f0969f79fa901a940812e7e8a06dd46aa4ae5  rclone-v1.75.1-freebsd-amd64.zip
+1de647b616755c980439877a332645d5540462a5bf537d96f6580941b47f4cfd  rclone-v1.75.1-freebsd-arm-v6.zip
+f4f02593984368f3cf10cca0b7993b6e0fd306f33a52e8d450ed8a27a6902404  rclone-v1.75.1-freebsd-arm-v7.zip
+185727b6136c7b32fa5b7fef196b953046d52e36854a87d13fefb784f89709ea  rclone-v1.75.1-freebsd-arm.zip
+58b387dec303ea7bde8bd557ada8bb3050fdcee9c057c1e97fef835a81a8557e  rclone-v1.75.1-linux-386.deb
+bfe352d4d74f3001c75167d99caf4570d6293e352204a8c7d5ffac78738c56c6  rclone-v1.75.1-linux-386.rpm
+9250a48ace446b32ad3f3cb26e0744f9245efb65ef4f51dfb416288950b84285  rclone-v1.75.1-linux-386.zip
+09c9f7606ed9e31eecc1eec26a89992cf2931a8d2d1a5f0ae2bb1c11630ffb15  rclone-v1.75.1-linux-amd64.deb
+812d2ded3cf63dea9aa3ed082f185d975c85e1dd0a12f931f7148fb115ba5509  rclone-v1.75.1-linux-amd64.rpm
+982b5aa772841168f8e380f139e9e787b2a105403e32b94da8676a0e1c0a13ab  rclone-v1.75.1-linux-amd64.zip
+773f3a76615f91f7d4654183a537afddce3343c8d99ac1d74984f060f2ade2d9  rclone-v1.75.1-linux-arm64.deb
+ce1cdfcf8083b9f6c6ff14457db3c7d3d365bb0a5d071cf6e2780310fe640514  rclone-v1.75.1-linux-arm64.rpm
+03f2504174034b6d004152ed7369251c9a9ec1f7e0836eda420f5c7a5ec0dff9  rclone-v1.75.1-linux-arm64.zip
+8b21c1002d349688c2b519df56b5cabc618ba51a961c71f4ccf228f46dbae56b  rclone-v1.75.1-linux-arm.deb
+c0db0ce36094b6fbb207e6c53d331e2d4c7cb9d809bf000c2469de1c6f896d35  rclone-v1.75.1-linux-arm.rpm
+3197b710107e8a811a13ffbdbe7ecc69d2c44a03c53e4e88dcb46b6d02de6dba  rclone-v1.75.1-linux-arm-v6.deb
+4c20304806453c6b103c87bcf375e63b00105c1ee4e5eca5249a74a80e395108  rclone-v1.75.1-linux-arm-v6.rpm
+d81d5c84326e4179ff5ddcb0ecff4c283cdd9a4e23a43a68f1c16d505fb859b8  rclone-v1.75.1-linux-arm-v6.zip
+fd55fef473a0645c98f0314e72936b3cc08283a511e3a89d74996a17ce6f51d7  rclone-v1.75.1-linux-arm-v7.deb
+90060839bcd70bcff741405881f39896e9a5136ac8cc129b45a9565c8cd21329  rclone-v1.75.1-linux-arm-v7.rpm
+33c683053b677d9a89d4a985e8a25cfed7c8a95dd8379e367a5c73d8745356c3  rclone-v1.75.1-linux-arm-v7.zip
+6ea78cafa96a55f94da6a644d5057e8dc8ecfff9df0ab4011ce77e1fc654d114  rclone-v1.75.1-linux-arm.zip
+9d14359a4cacfabe1e1717c67425c90eb1efee488e428bac6108b2a822a7a8b1  rclone-v1.75.1-linux-mips.deb
+cad0e97ee94162f96f26b9e532fd7bd9192b561a6f06ca6f7e39afcc617411fd  rclone-v1.75.1-linux-mipsle.deb
+eaf05110ed01f8bd39bac5724cd6a227c22317b752424770511f9ab13e276acc  rclone-v1.75.1-linux-mipsle.rpm
+dc1f2a3654ff63fc639af06ff50985dd9f33fb3f4315b3237ce07d95978f4a71  rclone-v1.75.1-linux-mipsle.zip
+6fb9aa533049b4478e76d999ee030739ee0b98f4cbf8ef67a437aae4917c1805  rclone-v1.75.1-linux-mips.rpm
+bf0609dc90645e3e60598e3e8204f92c8112df643ccb2f06483f3fe390a57b9f  rclone-v1.75.1-linux-mips.zip
+1ca162aba6a591b193edfa047863ddfd5143764577773494b376c31f9fd00b7b  rclone-v1.75.1-netbsd-386.zip
+df8546109281b831342a65d64a0ea7a3324c42d46014c8b25b7f26abf6bd5d99  rclone-v1.75.1-netbsd-amd64.zip
+f17b327b7a53aa15e78c338e8dadd5fc537d8a6e87feaea9f590d3c3281152f4  rclone-v1.75.1-netbsd-arm-v6.zip
+c8f837d8d346ef2253c7206825e80dacf500bba6d27ac0a636ba9bb830c8a67c  rclone-v1.75.1-netbsd-arm-v7.zip
+5170c7b5c60ad535ef9dd1272100fc89dbe7bdd7be7e2fbfa00385c70f7741b5  rclone-v1.75.1-netbsd-arm.zip
+d92f24c1d7d6a81bbd6c5298070c533930d34468a5641a4aa51d3620f9bafc6e  rclone-v1.75.1-openbsd-386.zip
+e5b396bacc5f320d950d702979e0d025fa623d3ccdca5f95a9d86428c8d9dfda  rclone-v1.75.1-openbsd-amd64.zip
+29253d0288b8fbbac46baad6e5f6add6cb01d462c79f10805bbd4631c4cdf82c  rclone-v1.75.1-osx-amd64.zip
+c61d7a371c62bcbbe882c3423aa4b8bf63485c248dd0f692997b8f0c3f6d0c6f  rclone-v1.75.1-osx-arm64.zip
+dc54020ee1642b9277e43f78b5790a0e7af6c7d99afa35ef29d0e1da61fae0c0  rclone-v1.75.1-plan9-386.zip
+5052136c0eb606d9884e9fb0369fbe48c547e5d9593b2685f702ff8c094f5c27  rclone-v1.75.1-plan9-amd64.zip
+188874a7950a40f88bdc6248137bcd77ba349dd927c84eb2507d4467fdd4797c  rclone-v1.75.1-solaris-amd64.zip
+6ada25ecda8b3c8d971ed0aae1167e44d257dbcbf0be6598bf6c127daca2e13f  rclone-v1.75.1.tar.gz
+a43cd21f71344ff96b3b00217196c069f2f28fa29835cd61cfa94edb1aa5b93b  rclone-v1.75.1-vendor.tar.gz
+42257481a961b39cdee3b3eea7b9945a1961825e332d07b3aa321808c0afc436  rclone-v1.75.1-windows-386.zip
+200eb602c126d82aa38b51e0f6b9ae837473ff99b51278d3f6f837574c494d6e  rclone-v1.75.1-windows-amd64.zip
+c3c6cd0424dd49076ad179c30c3f9e5cde2c004ec07ea9fe6911f23e32eafe0f  rclone-v1.75.1-windows-arm64.zip
+-----BEGIN PGP SIGNATURE-----
+
+iF0EARECAB0WIQT79zfs6firGGBL0qyTk14C/ztU+gUCapr0vQAKCRCTk14C/ztU
++qUfAJ9PyZ/eQfhsszb9+gOHXLycJGBBEQCgvvJdc+je9kkLaPMhiycaR4Dbg/U=
+=WNaw
+-----END PGP SIGNATURE-----

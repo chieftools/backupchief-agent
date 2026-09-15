@@ -17,6 +17,7 @@ import (
 
 func newExportCommand(configPath *string) *cobra.Command {
 	var snapshot string
+	var repositorySelector string
 	var kind string
 	var encodedPath string
 	var output string
@@ -37,6 +38,10 @@ func newExportCommand(configPath *string) *cobra.Command {
 			if !job.Enabled {
 				return errors.New("the selected backup job is not active")
 			}
+			repository, err := agent.SelectJobRepository(job, repositorySelector)
+			if err != nil {
+				return err
+			}
 			path, err := decodeSnapshotPath(encodedPath)
 			if err != nil {
 				return err
@@ -45,11 +50,12 @@ func newExportCommand(configPath *string) *cobra.Command {
 				return err
 			}
 
-			request := exportRequest(job, snapshot, kind, path)
+			request := exportRequest(job, repository, snapshot, kind, path)
 			return writeSnapshotExport(command, stateForConfig(*configPath), request, output)
 		},
 	}
 	command.Flags().StringVar(&snapshot, "snapshot", "", "Full snapshot ID")
+	command.Flags().StringVar(&repositorySelector, "repository", "", "Repository key (defaults to the primary)")
 	command.Flags().StringVar(&kind, "kind", "", "Selection kind: file, directory, or database")
 	command.Flags().StringVar(&encodedPath, "path-base64", "", "Base64url-encoded absolute snapshot path")
 	command.Flags().StringVarP(&output, "output", "o", "", "New .zip file to create")
@@ -61,16 +67,16 @@ func newExportCommand(configPath *string) *cobra.Command {
 	return command
 }
 
-func exportRequest(job agent.Job, snapshot, kind, path string) restic.ExportRequest {
+func exportRequest(job agent.Job, repository agent.JobRepository, snapshot, kind, path string) restic.ExportRequest {
 	return restic.ExportRequest{
 		Version: 1,
 		Connection: restic.Connection{
-			Driver: job.Repository.Connection.Driver, Path: job.Repository.Connection.Path,
-			Endpoint: job.Repository.Connection.Endpoint, Bucket: job.Repository.Connection.Bucket,
-			Prefix: job.Repository.Connection.Prefix, Region: job.Repository.Connection.Region,
-			AccessKey: job.Repository.Connection.AccessKey, SecretKey: job.Repository.Connection.SecretKey,
+			Driver: repository.Connection.Driver, Path: repository.Connection.Path,
+			Endpoint: repository.Connection.Endpoint, Bucket: repository.Connection.Bucket,
+			Prefix: repository.Connection.Prefix, Region: repository.Connection.Region,
+			AccessKey: repository.Connection.AccessKey, SecretKey: repository.Connection.SecretKey,
 		},
-		Password: job.Repository.ServicePassword, Snapshot: snapshot, Kind: kind, Path: path,
+		Password: repository.ServicePassword, Snapshot: snapshot, Kind: kind, Path: path,
 		ArchiveEntryName: exportEntryName(path), TimeoutSeconds: 6 * 60 * 60, LockWaitSeconds: 5 * 60,
 	}
 }

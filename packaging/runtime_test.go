@@ -24,6 +24,7 @@ type runtimeManifest struct {
 	Schema        int                                   `json:"schema"`
 	Version       string                                `json:"version"`
 	ResticVersion string                                `json:"restic_version"`
+	RcloneVersion string                                `json:"rclone_version"`
 	Platforms     map[string]map[string]runtimeArtifact `json:"platforms"`
 }
 
@@ -37,6 +38,7 @@ func TestRuntimeReleaseContents(t *testing.T) {
 		t.Fatal("RELEASE_VERSION is required with RUNTIME_TEST_DIR")
 	}
 	resticVersion := strings.TrimSpace(string(read(t, "../restic/VERSION")))
+	rcloneVersion := strings.TrimSpace(string(read(t, "../rclone/VERSION")))
 
 	var manifest runtimeManifest
 	decoder := json.NewDecoder(bytes.NewReader(read(t, filepath.Join(directory, "manifest.json"))))
@@ -44,7 +46,7 @@ func TestRuntimeReleaseContents(t *testing.T) {
 	if err := decoder.Decode(&manifest); err != nil {
 		t.Fatal(err)
 	}
-	if manifest.Schema != 1 || manifest.Version != version || manifest.ResticVersion != resticVersion {
+	if manifest.Schema != 1 || manifest.Version != version || manifest.ResticVersion != resticVersion || manifest.RcloneVersion != rcloneVersion {
 		t.Fatalf("unexpected runtime release metadata: %+v", manifest)
 	}
 
@@ -92,6 +94,9 @@ func TestRuntimeReleaseContents(t *testing.T) {
 	}
 	if !bytes.Equal(read(t, filepath.Join(directory, "restic-LICENSE")), read(t, "../restic/LICENSE")) {
 		t.Fatal("runtime release is missing the Restic license")
+	}
+	if !bytes.Equal(read(t, filepath.Join(directory, "rclone-COPYING")), read(t, "../rclone/COPYING")) {
+		t.Fatal("runtime release is missing the rclone license")
 	}
 	if !strings.Contains(string(read(t, filepath.Join(directory, "RELEASE_NOTES.md"))), "## ["+version+"]") {
 		t.Fatal("runtime release notes do not identify the release")
