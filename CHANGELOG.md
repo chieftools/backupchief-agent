@@ -4,6 +4,20 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.10.0]
+
+### Added
+
+- Added explicit initial replica synchronization on the agent. Provisioning replicas are copied and verified before they become available for ongoing replication, restore, export, or maintenance operations.
+- Added per-repository maintenance results with attempt counts, bounded diagnostics, repository sizes, and snapshot evidence so partial failures are visible and retryable.
+
+### Changed
+
+- Applied forget, prune, metadata checks, data checks, and snapshot inventories to the primary repository first and then to every attached replica.
+- Serialized replica copies and maintenance for each backup job, coalesced pending copy work, and retried transient repository failures with bounded backoff.
+- Used logical backup-run tags for holds and targeted expiration so the same recovery point is selected even when replica snapshot IDs differ from the primary.
+- Updated the agent protocol to 1.9 for provisioning replica configuration, replica synchronization commands, logical recovery-point identifiers, and per-repository maintenance results.
+
 ## [0.9.0]
 
 ### Added
@@ -141,7 +155,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/chieftools/backupchief-agent/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/chieftools/backupchief-agent/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/chieftools/backupchief-agent/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/chieftools/backupchief-agent/compare/v0.7.1...v0.7.2
