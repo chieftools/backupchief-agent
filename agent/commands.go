@@ -66,7 +66,7 @@ func (daemon *daemon) receiveCommand(command AgentCommand) error {
 	}
 
 	runID := command.Payload.RunID
-	if command.Kind == "run_backup" || command.Kind == "run_maintenance" || command.Kind == "inspect_source" {
+	if command.Kind == "run_backup" || command.Kind == "run_maintenance" || command.Kind == "inspect_source" || command.Kind == "sync_replica" {
 		var err error
 		runID, err = newULID(daemon.now())
 		if err != nil {
@@ -78,16 +78,19 @@ func (daemon *daemon) receiveCommand(command AgentCommand) error {
 		runKind = "backup"
 	} else if command.Kind == "inspect_source" {
 		runKind = "inspection"
+	} else if command.Kind == "sync_replica" {
+		runKind = "replica_sync"
 	}
 	daemon.journal.Commands[command.ID] = &JournalCommand{
-		Command:        command,
-		RunID:          runID,
-		RunKind:        runKind,
-		ConfigRevision: command.Payload.RequiredConfigRevision,
-		Trigger:        "manual",
-		ReceivedAt:     protocolTimestamp(daemon.now()),
-		State:          "received",
-		Events:         []AgentEvent{},
+		Command:         command,
+		RunID:           runID,
+		RunKind:         runKind,
+		ConfigRevision:  command.Payload.RequiredConfigRevision,
+		Trigger:         "manual",
+		ReceivedAt:      protocolTimestamp(daemon.now()),
+		State:           "received",
+		Events:          []AgentEvent{},
+		MaintenancePlan: command.Payload.MaintenancePlan,
 	}
 	if err := daemon.store.SaveCommandJournal(daemon.journal); err != nil {
 		delete(daemon.journal.Commands, command.ID)
@@ -170,7 +173,7 @@ func (daemon *daemon) advanceCommands(ctx context.Context) error {
 			daemon.mu.Unlock()
 			continue
 		}
-		if (!contains([]string{"run_backup", "run_maintenance"}, command.Kind) && !strings.HasPrefix(command.Kind, "scheduled_")) || state != "received" {
+		if (!contains([]string{"run_backup", "run_maintenance", "sync_replica"}, command.Kind) && !strings.HasPrefix(command.Kind, "scheduled_")) || state != "received" {
 			continue
 		}
 		if journaled.WaitForBackup {
@@ -178,7 +181,7 @@ func (daemon *daemon) advanceCommands(ctx context.Context) error {
 		}
 
 		expiresAt, _ := time.Parse("2006-01-02T15:04:05.000000Z", command.ExpiresAt)
-		if (command.Kind == "run_backup" || command.Kind == "run_maintenance") && !daemon.now().Before(expiresAt) {
+		if (command.Kind == "run_backup" || command.Kind == "run_maintenance" || command.Kind == "sync_replica") && !daemon.now().Before(expiresAt) {
 			daemon.mu.Lock()
 			configUnavailable := daemon.metadata.Revision < command.Payload.RequiredConfigRevision
 			daemon.mu.Unlock()
@@ -203,6 +206,12 @@ func (daemon *daemon) advanceCommands(ctx context.Context) error {
 		}
 		if job == nil || !job.Enabled {
 			if err := daemon.finishWithoutExecution(id, "skipped", "config_unavailable", "The required job configuration is unavailable."); err != nil {
+				return err
+			}
+			continue
+		}
+		if command.Kind == "sync_replica" {
+			if err := daemon.startReplicaSync(ctx, id, *job); err != nil {
 				return err
 			}
 			continue
@@ -277,7 +286,21 @@ func (daemon *daemon) startOperation(ctx context.Context, commandID string, job 
 	}
 	backups, maintenance := daemon.activeCountsLocked()
 	capacityReached := journaled.RunKind == "backup" && backups >= 2 || journaled.RunKind != "backup" && maintenance >= 1
-	if capacityReached || daemon.repositories[job.Repository.ID] {
+	repositoryIDs := []string{job.Repository.ID}
+	if journaled.RunKind != "backup" {
+		for _, replica := range job.Replicas {
+			repositoryIDs = append(repositoryIDs, replica.ID)
+		}
+		if daemon.replicationActive[job.ID] || daemon.hasPendingReplicationLocked(job.ID) {
+			daemon.mu.Unlock()
+			return nil
+		}
+	}
+	repositoryBusy := false
+	for _, repositoryID := range repositoryIDs {
+		repositoryBusy = repositoryBusy || daemon.repositories[repositoryID]
+	}
+	if capacityReached || repositoryBusy {
 		daemon.mu.Unlock()
 		return nil
 	}
@@ -333,7 +356,9 @@ func (daemon *daemon) startOperation(ctx context.Context, commandID string, job 
 	}
 	daemon.active[journaled.RunID] = cancel
 	daemon.activeRunKinds[journaled.RunID] = journaled.RunKind
-	daemon.repositories[job.Repository.ID] = true
+	for _, repositoryID := range repositoryIDs {
+		daemon.repositories[repositoryID] = true
+	}
 	daemon.activeWG.Add(1)
 	runID := journaled.RunID
 	runKind := journaled.RunKind
@@ -424,12 +449,10 @@ func (daemon *daemon) runMaintenance(ctx context.Context, commandID, runID strin
 		journaled.MaintenancePlan = &updated
 		return daemon.store.SaveCommandJournal(daemon.journal)
 	}
-	result, log, truncated, dropped := executeMaintenance(
-		ctx, daemon.executor, daemon.bootstrap.Generation, daemon.journalCommand(commandID), job, plan, persistPlan, daemon.now,
+	result, log, truncated, dropped := executeMaintenanceRepositories(
+		ctx, daemon.executor, daemon.bootstrap.Generation, daemon.journalCommand(commandID), job, plan,
+		persistPlan, daemon.now, daemon.maintenanceRetries,
 	)
-	if ctx.Err() == nil {
-		result.RepositoryBytes = measureRepositoryBytes(ctx, daemon.executor, job)
-	}
 	daemon.finishOperation(ctx, commandID, runID, job, result, log, truncated, dropped)
 }
 
@@ -450,6 +473,9 @@ func (daemon *daemon) finishOperation(ctx context.Context, commandID, runID stri
 	delete(daemon.active, runID)
 	delete(daemon.activeRunKinds, runID)
 	delete(daemon.repositories, job.Repository.ID)
+	for _, replica := range job.Replicas {
+		delete(daemon.repositories, replica.ID)
+	}
 	journaled := daemon.journal.Commands[commandID]
 	if journaled == nil {
 		daemon.mu.Unlock()
@@ -507,7 +533,7 @@ func (daemon *daemon) finishOperation(ctx context.Context, commandID, runID stri
 	if hasReplication {
 		daemon.startReplication(ctx, job)
 	}
-	if releaseMaintenance {
+	if releaseMaintenance && !hasReplication {
 		_ = daemon.startNextDeferredMaintenance(context.Background(), jobID, false)
 	}
 	if releaseCatchUp {
@@ -515,7 +541,22 @@ func (daemon *daemon) finishOperation(ctx context.Context, commandID, runID stri
 	}
 }
 
+func (daemon *daemon) hasPendingReplicationLocked(jobID string) bool {
+	for _, command := range daemon.journal.Commands {
+		if command.Result != nil && command.Result.JobID == jobID && len(command.ReplicationPending) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (daemon *daemon) appendSnapshotEvidenceEvents(command *JournalCommand, result CommandResult) {
+	if len(result.RepositoryResults) > 0 {
+		for _, repositoryResult := range result.RepositoryResults {
+			daemon.appendRepositorySnapshotEvidenceEvents(command, repositoryResult)
+		}
+		return
+	}
 	if result.SnapshotEvidence == nil || len(result.SnapshotEvidenceIDs) == 0 {
 		return
 	}
@@ -537,6 +578,28 @@ func (daemon *daemon) appendSnapshotEvidenceEvents(command *JournalCommand, resu
 	}
 }
 
+func (daemon *daemon) appendRepositorySnapshotEvidenceEvents(command *JournalCommand, result RepositoryResult) {
+	if result.SnapshotEvidence == nil || len(result.SnapshotEvidenceIDs) == 0 {
+		return
+	}
+	for offset := 0; offset < len(result.SnapshotEvidenceIDs); offset += snapshotEvidenceChunkSize {
+		end := min(offset+snapshotEvidenceChunkSize, len(result.SnapshotEvidenceIDs))
+		command.Sequence++
+		eventID, err := newULID(daemon.now())
+		if err != nil {
+			return
+		}
+		command.Events = append(command.Events, daemon.eventEnvelope(
+			command, eventID, command.Sequence, result.SnapshotEvidence.ObservedAt, "snapshot_inventory_chunk",
+			map[string]any{
+				"repository_key": result.RepositoryKey,
+				"scope":          result.SnapshotEvidence.Scope, "chunk_index": offset / snapshotEvidenceChunkSize,
+				"snapshot_ids": append([]string(nil), result.SnapshotEvidenceIDs[offset:end]...),
+			},
+		))
+	}
+}
+
 func (daemon *daemon) journalCommand(commandID string) *JournalCommand {
 	daemon.mu.Lock()
 	defer daemon.mu.Unlock()
@@ -552,6 +615,29 @@ func (daemon *daemon) finishWithoutExecution(commandID, status, resultCode, summ
 	}
 	now := protocolTimestamp(daemon.now())
 	journaled.State = "finished"
+	if journaled.Command.Kind == "sync_replica" {
+		if !contains([]string{"copy_failed", "cancelled", "timed_out", "execution_failed"}, resultCode) {
+			resultCode = "execution_failed"
+		}
+		status = "failed"
+		if resultCode == "cancelled" {
+			status = "cancelled"
+		}
+		journaled.Result = &CommandResult{
+			Generation:    daemon.bootstrap.Generation,
+			RunID:         journaled.RunID,
+			JobID:         journaled.Command.Payload.JobID,
+			RepositoryKey: journaled.Command.Payload.RepositoryKey,
+			Status:        status,
+			ResultCode:    resultCode,
+			StartedAt:     now,
+			FinishedAt:    now,
+			SnapshotIDs:   []string{},
+			Summary:       summary,
+		}
+		journaled.ResultReported = false
+		return daemon.store.SaveCommandJournal(daemon.journal)
+	}
 	journaled.Result = &CommandResult{
 		Generation:  daemon.bootstrap.Generation,
 		RunID:       journaled.RunID,

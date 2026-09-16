@@ -18,6 +18,8 @@ type MaintenancePlan struct {
 	Kind                 string   `json:"kind"`
 	CandidateSnapshotIDs []string `json:"candidate_snapshot_ids,omitempty"`
 	ProtectedSnapshotIDs []string `json:"protected_snapshot_ids,omitempty"`
+	CandidateRunIDs      []string `json:"candidate_run_ids,omitempty"`
+	ProtectedRunIDs      []string `json:"protected_run_ids,omitempty"`
 	DataSubsetPart       uint64   `json:"data_subset_part,omitempty"`
 	DataSubsetTotal      uint64   `json:"data_subset_total,omitempty"`
 	CombinedRetention    bool     `json:"combined_retention,omitempty"`
@@ -116,7 +118,7 @@ func executeMaintenance(
 			result.Summary = "Retention was skipped because no complete recovery point is available."
 			return finish(result)
 		}
-		return executeForget(runContext, run, request, result, job, proof, command.Command.Payload.SnapshotIDs, plan, persistPlan, finish, now)
+		return executeForget(runContext, run, request, result, job, proof, command.Command.Payload.SnapshotIDs, command.Command.Payload.RecoveryPointRunIDs, plan, persistPlan, finish, now)
 	case "snapshot_inventory":
 		request.Operation = "snapshots"
 		response := run(request)
@@ -197,6 +199,7 @@ func executeForget(
 	job Job,
 	proof *CompleteSnapshotProof,
 	targetSnapshotIDs []string,
+	targetRunIDs []string,
 	plan *MaintenancePlan,
 	persistPlan func(MaintenancePlan) error,
 	finish func(CommandResult) (CommandResult, []byte, bool, uint64),
@@ -210,8 +213,16 @@ func executeForget(
 		return finish(result)
 	}
 	inventoryObservedAt := now()
-	protected := stringSet(proof.SnapshotIDs)
+	records := snapshotRecords(inventoryResult)
+	proofSnapshotIDs := snapshotIDsForRunIDs(records, []string{proof.RunID})
+	if len(proofSnapshotIDs) == 0 {
+		proofSnapshotIDs = proof.SnapshotIDs
+	}
+	protected := stringSet(proofSnapshotIDs)
 	for _, snapshotID := range job.Retention.ProtectedSnapshotIDs {
+		protected[snapshotID] = true
+	}
+	for _, snapshotID := range snapshotIDsForRunIDs(records, job.Retention.ProtectedRunIDs) {
 		protected[snapshotID] = true
 	}
 	for snapshotID := range protected {
@@ -227,10 +238,16 @@ func executeForget(
 	candidateIDs := make([]string, 0)
 	forgetPlanned := plan != nil && (plan.ForgetPlanned || len(plan.CandidateSnapshotIDs) > 0 || len(plan.ProtectedSnapshotIDs) > 0)
 	if forgetPlanned {
-		candidateIDs = append(candidateIDs, plan.CandidateSnapshotIDs...)
+		if len(plan.CandidateRunIDs) > 0 {
+			candidateIDs = snapshotIDsForRunIDs(records, plan.CandidateRunIDs)
+		} else {
+			candidateIDs = append(candidateIDs, plan.CandidateSnapshotIDs...)
+		}
 	}
 	if !forgetPlanned {
-		if len(targetSnapshotIDs) > 0 {
+		if len(targetRunIDs) > 0 {
+			candidateIDs = snapshotIDsForRunIDs(records, targetRunIDs)
+		} else if len(targetSnapshotIDs) > 0 {
 			candidateIDs = append(candidateIDs, targetSnapshotIDs...)
 			if intersectsProtected(candidateIDs, protected) {
 				attachSnapshotEvidence(&result, "repository", snapshotIDs(inventory), inventoryObservedAt)
@@ -290,6 +307,8 @@ func executeForget(
 		persistedPlan := MaintenancePlan{
 			Kind: "forget", CandidateSnapshotIDs: candidateIDs,
 			ProtectedSnapshotIDs: snapshotIDs(protected),
+			CandidateRunIDs:      runIDsForSnapshots(records, candidateIDs),
+			ProtectedRunIDs:      append([]string{proof.RunID}, job.Retention.ProtectedRunIDs...),
 			ForgetPlanned:        true,
 		}
 		if plan != nil {
@@ -501,6 +520,48 @@ func expandDatabaseRunCandidates(snapshots []repositorySnapshot, anchors []strin
 	return result
 }
 
+func snapshotIDsForRunIDs(snapshots []repositorySnapshot, runIDs []string) []string {
+	runTags := make(map[string]bool, len(runIDs))
+	for _, runID := range runIDs {
+		runTags["backupchief-run:"+strings.TrimPrefix(runID, "run_")] = true
+	}
+	result := make([]string, 0)
+	for _, snapshot := range snapshots {
+		for _, tag := range snapshot.Tags {
+			if runTags[tag] {
+				result = append(result, snapshot.ID)
+				break
+			}
+		}
+	}
+	sort.Strings(result)
+	return result
+}
+
+func runIDsForSnapshots(snapshots []repositorySnapshot, snapshotIDs []string) []string {
+	selected := stringSet(snapshotIDs)
+	runIDs := map[string]bool{}
+	for _, snapshot := range snapshots {
+		if !selected[snapshot.ID] {
+			continue
+		}
+		for _, tag := range snapshot.Tags {
+			if strings.HasPrefix(tag, "backupchief-run:") {
+				runID := strings.TrimPrefix(tag, "backupchief-run:")
+				if ulidPattern.MatchString(runID) {
+					runIDs[runID] = true
+				}
+			}
+		}
+	}
+	result := make([]string, 0, len(runIDs))
+	for runID := range runIDs {
+		result = append(result, runID)
+	}
+	sort.Strings(result)
+	return result
+}
+
 func expandMySQLRunCandidates(snapshots []repositorySnapshot, anchors []string) []string {
 	return expandDatabaseRunCandidates(snapshots, anchors)
 }
@@ -550,6 +611,7 @@ func maintenanceResult(base CommandResult, response restic.Result, ctx context.C
 		return base
 	}
 	if response.Outcome == "cancelled" {
+		base.Diagnostic = boundedMaintenanceDiagnostic(response.Diagnostic)
 		if ctx.Err() == context.DeadlineExceeded {
 			base.Status = "failed"
 			base.ResultCode = "timed_out"
@@ -564,7 +626,22 @@ func maintenanceResult(base CommandResult, response restic.Result, ctx context.C
 	base.Status = "failed"
 	base.ResultCode = resultCodeForExit(response.ExitCode)
 	base.Summary = "Restic could not complete the maintenance operation."
+	base.Diagnostic = boundedMaintenanceDiagnostic(response.Diagnostic)
 	return base
+}
+
+func boundedMaintenanceDiagnostic(diagnostic string) string {
+	diagnostic = strings.TrimSpace(diagnostic)
+	if diagnostic == "" {
+		return "Restic did not provide more detail."
+	}
+
+	runes := []rune(diagnostic)
+	if len(runes) > 4096 {
+		diagnostic = string(runes[:4096])
+	}
+
+	return diagnostic
 }
 
 func parseSnapshotInventory(result restic.Result) (map[string]bool, bool) {

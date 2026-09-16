@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	ProtocolRevision          = "1.8.0"
+	ProtocolRevision          = "1.9.0"
 	ProtocolHeader            = "BackupChief-Protocol-Revision"
 	LatestProtocolHeader      = "BackupChief-Latest-Protocol-Revision"
 	DefaultEndpoint           = "https://backup.chief.app/agent/v1"
@@ -177,14 +177,19 @@ type AgentCommand struct {
 }
 
 type CommandPayload struct {
-	JobID                  string         `json:"job_id,omitempty"`
-	RunID                  string         `json:"run_id,omitempty"`
-	RequiredConfigRevision uint64         `json:"required_config_revision,omitempty"`
-	Maintenance            string         `json:"maintenance,omitempty"`
-	SnapshotIDs            []string       `json:"snapshot_ids,omitempty"`
-	Type                   string         `json:"type,omitempty"`
-	Source                 map[string]any `json:"source,omitempty"`
-	SourceDigest           string         `json:"source_digest,omitempty"`
+	JobID                  string           `json:"job_id,omitempty"`
+	RunID                  string           `json:"run_id,omitempty"`
+	RequiredConfigRevision uint64           `json:"required_config_revision,omitempty"`
+	Maintenance            string           `json:"maintenance,omitempty"`
+	SnapshotIDs            []string         `json:"snapshot_ids,omitempty"`
+	RecoveryPointRunIDs    []string         `json:"recovery_point_run_ids,omitempty"`
+	RepositoryKey          string           `json:"repository_key,omitempty"`
+	InitialSync            bool             `json:"initial_sync,omitempty"`
+	MaintenancePlan        *MaintenancePlan `json:"maintenance_plan,omitempty"`
+	RetryOfRunID           string           `json:"retry_of_run_id,omitempty"`
+	Type                   string           `json:"type,omitempty"`
+	Source                 map[string]any   `json:"source,omitempty"`
+	SourceDigest           string           `json:"source_digest,omitempty"`
 }
 
 type CommandAcknowledgement struct {
@@ -207,6 +212,7 @@ type CommandResult struct {
 	Generation          uint64                   `json:"generation"`
 	RunID               string                   `json:"run_id"`
 	JobID               string                   `json:"job_id,omitempty"`
+	RepositoryKey       string                   `json:"repository_key,omitempty"`
 	RunKind             string                   `json:"run_kind,omitempty"`
 	Status              string                   `json:"status"`
 	ResultCode          string                   `json:"result_code"`
@@ -215,6 +221,7 @@ type CommandResult struct {
 	SnapshotIDs         []string                 `json:"snapshot_ids"`
 	Statistics          *RunStatistics           `json:"statistics,omitempty"`
 	Summary             string                   `json:"summary,omitempty"`
+	Diagnostic          string                   `json:"diagnostic,omitempty"`
 	RepositoryBytes     *uint64                  `json:"repository_bytes,omitempty"`
 	Artifacts           []BackupArtifact         `json:"artifacts,omitempty"`
 	Databases           []string                 `json:"databases,omitempty"`
@@ -223,6 +230,24 @@ type CommandResult struct {
 	SnapshotEvidence    *SnapshotEvidence        `json:"snapshot_evidence,omitempty"`
 	SnapshotEvidenceIDs []string                 `json:"-"`
 	PruneCompleted      bool                     `json:"-"`
+	RepositoryResults   []RepositoryResult       `json:"repository_results,omitempty"`
+	MaintenancePlan     *MaintenancePlan         `json:"maintenance_plan,omitempty"`
+}
+
+type RepositoryResult struct {
+	RepositoryKey       string            `json:"repository_key"`
+	RepositoryID        string            `json:"repository_id"`
+	Status              string            `json:"status"`
+	ResultCode          string            `json:"result_code"`
+	AttemptCount        uint64            `json:"attempt_count"`
+	StartedAt           string            `json:"started_at"`
+	FinishedAt          string            `json:"finished_at"`
+	Summary             string            `json:"summary,omitempty"`
+	Diagnostic          string            `json:"diagnostic,omitempty"`
+	Statistics          *RunStatistics    `json:"statistics,omitempty"`
+	RepositoryBytes     *uint64           `json:"repository_bytes,omitempty"`
+	SnapshotEvidence    *SnapshotEvidence `json:"snapshot_evidence,omitempty"`
+	SnapshotEvidenceIDs []string          `json:"-"`
 }
 
 type SourceInspectionFailure struct {

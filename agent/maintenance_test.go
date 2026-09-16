@@ -19,6 +19,45 @@ type scriptedMaintenanceExecutor struct {
 	results  []restic.Result
 }
 
+func TestMaintenanceRunsPrimaryThenReplicaAndRetriesTransientFailures(t *testing.T) {
+	executor := &scriptedMaintenanceExecutor{results: []restic.Result{
+		{ExitCode: 0, Outcome: "complete"},
+		{ExitCode: 0, Outcome: "complete", Output: `{"total_size":1024}`},
+		{ExitCode: 11, Outcome: "failed", Diagnostic: "synthetic repository lock"},
+		{ExitCode: 0, Outcome: "complete"},
+		{ExitCode: 0, Outcome: "complete", Output: `{"total_size":2048}`},
+	}}
+	job := maintenanceExecutionJob(t)
+	job.Repository.Key = "repository_01k4p4f7m1r9d3t6v8w2x5y7ze"
+	job.Replicas = []JobRepository{{
+		Key: "repository_01k4p4f7m1r9d3t6v8w2x5y7zf", ID: strings.Repeat("d", 64),
+		ServicePassword: "synthetic-service-password", Source: job.Repository.Key, Status: "active",
+		Connection: RepositoryConnection{Driver: "local", Path: t.TempDir()},
+	}}
+
+	result, _, _, _ := executeMaintenanceRepositories(
+		context.Background(), executor, 1, maintenanceJournalCommand("prune", job.ID), job, nil,
+		func(MaintenancePlan) error { return nil }, time.Now, []time.Duration{0},
+	)
+
+	if result.Status != "complete" || result.ResultCode != "success" || len(result.RepositoryResults) != 2 {
+		t.Fatalf("maintenance result: %+v", result)
+	}
+	if result.RepositoryResults[0].AttemptCount != 1 || result.RepositoryResults[1].AttemptCount != 2 {
+		t.Fatalf("repository attempts: %+v", result.RepositoryResults)
+	}
+	if result.RepositoryResults[0].RepositoryBytes == nil || *result.RepositoryResults[0].RepositoryBytes != 1024 || result.RepositoryResults[1].RepositoryBytes == nil || *result.RepositoryResults[1].RepositoryBytes != 2048 {
+		t.Fatalf("repository sizes: %+v", result.RepositoryResults)
+	}
+	operations := make([]string, 0, len(executor.requests))
+	for _, request := range executor.requests {
+		operations = append(operations, request.Operation)
+	}
+	if !reflect.DeepEqual(operations, []string{"prune", "stats", "prune", "prune", "stats"}) {
+		t.Fatalf("operation order: %v", operations)
+	}
+}
+
 func (executor *scriptedMaintenanceExecutor) Run(_ context.Context, request restic.Request) restic.Result {
 	executor.requests = append(executor.requests, request)
 	if len(executor.results) == 0 {

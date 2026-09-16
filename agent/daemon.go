@@ -62,6 +62,8 @@ type daemon struct {
 	activeWG           sync.WaitGroup
 	repositories       map[string]bool
 	replicationActive  map[string]bool
+	maintenanceRetries []time.Duration
+	replicaSyncRetries []time.Duration
 	reconciled         bool
 	lastScheduleMinute time.Time
 }
@@ -155,6 +157,8 @@ func Run(ctx context.Context, options RunOptions) error {
 		activeRunKinds:     map[string]string{},
 		repositories:       map[string]bool{},
 		replicationActive:  map[string]bool{},
+		maintenanceRetries: []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute},
+		replicaSyncRetries: []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute},
 		heartbeatWake:      make(chan struct{}, 1),
 		configWake:         make(chan struct{}, 1),
 		commandWake:        make(chan struct{}, 1),

@@ -79,7 +79,7 @@
       "additionalProperties": false,
       "required": ["protocol_revision", "generation", "revision", "schema_version", "issued_at"],
       "properties": {
-		"protocol_revision": { "const": "1.8.0" },
+		"protocol_revision": { "const": "1.9.0" },
         "generation": { "type": "integer", "minimum": 1 },
         "revision": { "type": "integer", "minimum": 1 },
         "schema_version": { "const": 1 },
@@ -163,6 +163,7 @@
         "integrity": { "$ref": "#/$defs/integrity" },
         "safety": { "$ref": "#/$defs/safety" },
         "replicas": { "$ref": "#/$defs/replicas" },
+        "replica_setups": { "$ref": "#/$defs/replicas" },
         "replication": { "$ref": "#/$defs/replication" }
       }
     },
@@ -184,7 +185,7 @@
 		"enabled": { "type": "boolean", "default": true }, "source": { "allOf": [{ "$ref": "#/$defs/mysql_source" }, { "not": { "required": ["table_selection"] } }, { "properties": { "selection": { "properties": { "mode": { "enum": ["selected", "all_accessible"] } } } } }] },
 		"repository": { "$ref": "#/$defs/repository" }, "schedule": { "$ref": "#/$defs/cron" },
 		"maintenance": { "$ref": "#/$defs/maintenance" },
-		"retention": { "$ref": "#/$defs/retention" }, "integrity": { "$ref": "#/$defs/integrity" }, "safety": { "$ref": "#/$defs/safety" }, "replicas": { "$ref": "#/$defs/replicas" }, "replication": { "$ref": "#/$defs/replication" }
+		"retention": { "$ref": "#/$defs/retention" }, "integrity": { "$ref": "#/$defs/integrity" }, "safety": { "$ref": "#/$defs/safety" }, "replicas": { "$ref": "#/$defs/replicas" }, "replica_setups": { "$ref": "#/$defs/replicas" }, "replication": { "$ref": "#/$defs/replication" }
 	  }
 	},
 	"mysql_filtered_job": {
@@ -195,7 +196,7 @@
 		"enabled": { "type": "boolean", "default": true }, "source": { "allOf": [{ "$ref": "#/$defs/mysql_source" }, { "anyOf": [{ "properties": { "selection": { "properties": { "mode": { "const": "exclude" } } } } }, { "required": ["table_selection"] }] }, { "if": { "properties": { "table_selection": { "properties": { "mode": { "const": "include" } }, "required": ["mode"] } }, "required": ["table_selection"] }, "then": { "properties": { "selection": { "properties": { "mode": { "const": "selected" } }, "required": ["mode"] } } } }] },
 		"repository": { "$ref": "#/$defs/repository" }, "schedule": { "$ref": "#/$defs/cron" },
 		"maintenance": { "$ref": "#/$defs/maintenance" },
-		"retention": { "$ref": "#/$defs/retention" }, "integrity": { "$ref": "#/$defs/integrity" }, "safety": { "$ref": "#/$defs/safety" }, "replicas": { "$ref": "#/$defs/replicas" }, "replication": { "$ref": "#/$defs/replication" }
+		"retention": { "$ref": "#/$defs/retention" }, "integrity": { "$ref": "#/$defs/integrity" }, "safety": { "$ref": "#/$defs/safety" }, "replicas": { "$ref": "#/$defs/replicas" }, "replica_setups": { "$ref": "#/$defs/replicas" }, "replication": { "$ref": "#/$defs/replication" }
 	  }
 	},
 	"mysql_source": {
@@ -224,7 +225,7 @@
 		"enabled": { "type": "boolean", "default": true }, "source": { "allOf": [{ "$ref": "#/$defs/postgresql_source" }, { "not": { "required": ["table_selection"] } }, { "properties": { "selection": { "properties": { "mode": { "enum": ["selected", "all_accessible"] } } } } }] },
 		"repository": { "$ref": "#/$defs/repository" }, "schedule": { "$ref": "#/$defs/cron" },
 		"maintenance": { "$ref": "#/$defs/maintenance" },
-		"retention": { "$ref": "#/$defs/retention" }, "integrity": { "$ref": "#/$defs/integrity" }, "safety": { "$ref": "#/$defs/safety" }, "replicas": { "$ref": "#/$defs/replicas" }, "replication": { "$ref": "#/$defs/replication" }
+		"retention": { "$ref": "#/$defs/retention" }, "integrity": { "$ref": "#/$defs/integrity" }, "safety": { "$ref": "#/$defs/safety" }, "replicas": { "$ref": "#/$defs/replicas" }, "replica_setups": { "$ref": "#/$defs/replicas" }, "replication": { "$ref": "#/$defs/replication" }
 	  }
 	},
 	"postgresql_filtered_job": {
@@ -235,7 +236,7 @@
 		"enabled": { "type": "boolean", "default": true }, "source": { "allOf": [{ "$ref": "#/$defs/postgresql_source" }, { "anyOf": [{ "properties": { "selection": { "properties": { "mode": { "const": "exclude" } } } } }, { "required": ["table_selection"] }] }, { "if": { "properties": { "table_selection": { "properties": { "mode": { "const": "include" } }, "required": ["mode"] } }, "required": ["table_selection"] }, "then": { "properties": { "selection": { "properties": { "mode": { "const": "selected" } }, "required": ["mode"] } } } }] },
 		"repository": { "$ref": "#/$defs/repository" }, "schedule": { "$ref": "#/$defs/cron" },
 		"maintenance": { "$ref": "#/$defs/maintenance" },
-		"retention": { "$ref": "#/$defs/retention" }, "integrity": { "$ref": "#/$defs/integrity" }, "safety": { "$ref": "#/$defs/safety" }, "replicas": { "$ref": "#/$defs/replicas" }, "replication": { "$ref": "#/$defs/replication" }
+		"retention": { "$ref": "#/$defs/retention" }, "integrity": { "$ref": "#/$defs/integrity" }, "safety": { "$ref": "#/$defs/safety" }, "replicas": { "$ref": "#/$defs/replicas" }, "replica_setups": { "$ref": "#/$defs/replicas" }, "replication": { "$ref": "#/$defs/replication" }
 	  }
 	},
 	"postgresql_source": {
@@ -298,7 +299,7 @@
       "properties": {
         "mode": { "const": "attached" },
         "coalesce": { "const": true },
-        "safety_hold_seconds": { "type": "integer", "minimum": 86400, "maximum": 2592000 }
+        "safety_hold_seconds": { "type": "integer", "minimum": 0, "maximum": 2592000 }
       }
     },
     "maintenance": {
@@ -361,6 +362,12 @@
           "maxItems": 1000,
           "uniqueItems": true,
           "items": { "$ref": "#/$defs/digest" }
+        },
+        "protected_run_ids": {
+          "type": "array",
+          "maxItems": 1000,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/run_id" }
         }
       }
     }

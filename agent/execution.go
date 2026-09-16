@@ -243,6 +243,12 @@ func terminalEventPayload(result CommandResult) map[string]any {
 	if result.SnapshotEvidence != nil {
 		payload["snapshot_evidence"] = result.SnapshotEvidence
 	}
+	if len(result.RepositoryResults) > 0 {
+		payload["repository_results"] = result.RepositoryResults
+	}
+	if result.MaintenancePlan != nil {
+		payload["maintenance_plan"] = result.MaintenancePlan
+	}
 	return payload
 }
 

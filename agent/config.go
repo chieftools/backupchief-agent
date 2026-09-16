@@ -107,18 +107,19 @@ type Destination struct {
 }
 
 type Job struct {
-	Key         string
-	ID          string
-	Name        string
-	Type        JobType
-	Enabled     bool
-	Source      JobSource
-	Repository  JobRepository
-	Replicas    []JobRepository
-	Schedule    JobSchedule
-	Maintenance JobMaintenance
-	Retention   JobRetention
-	Integrity   JobIntegrity
+	Key           string
+	ID            string
+	Name          string
+	Type          JobType
+	Enabled       bool
+	Source        JobSource
+	Repository    JobRepository
+	Replicas      []JobRepository
+	ReplicaSetups []JobRepository
+	Schedule      JobSchedule
+	Maintenance   JobMaintenance
+	Retention     JobRetention
+	Integrity     JobIntegrity
 }
 
 type JobMaintenance struct {
@@ -214,6 +215,7 @@ type JobRetention struct {
 	LatestComplete       *CompleteSnapshotProof
 	HasUnresolvedRuns    bool
 	ProtectedSnapshotIDs []string
+	ProtectedRunIDs      []string
 }
 
 type JobIntegrity struct {
@@ -258,18 +260,19 @@ type destinationDocument struct {
 }
 
 type jobDocument struct {
-	Name        string               `json:"name,omitempty"`
-	Type        JobType              `json:"type"`
-	Enabled     *bool                `json:"enabled,omitempty"`
-	Source      sourceDocument       `json:"source"`
-	Repository  repositoryDocument   `json:"repository"`
-	Replicas    []repositoryDocument `json:"replicas,omitempty"`
-	Replication *replicationDocument `json:"replication,omitempty"`
-	Schedule    string               `json:"schedule"`
-	Maintenance *maintenanceDocument `json:"maintenance,omitempty"`
-	Retention   *retentionDocument   `json:"retention,omitempty"`
-	Integrity   *integrityDocument   `json:"integrity,omitempty"`
-	Safety      *repositorySafety    `json:"safety,omitempty"`
+	Name          string               `json:"name,omitempty"`
+	Type          JobType              `json:"type"`
+	Enabled       *bool                `json:"enabled,omitempty"`
+	Source        sourceDocument       `json:"source"`
+	Repository    repositoryDocument   `json:"repository"`
+	Replicas      []repositoryDocument `json:"replicas,omitempty"`
+	ReplicaSetups []repositoryDocument `json:"replica_setups,omitempty"`
+	Replication   *replicationDocument `json:"replication,omitempty"`
+	Schedule      string               `json:"schedule"`
+	Maintenance   *maintenanceDocument `json:"maintenance,omitempty"`
+	Retention     *retentionDocument   `json:"retention,omitempty"`
+	Integrity     *integrityDocument   `json:"integrity,omitempty"`
+	Safety        *repositorySafety    `json:"safety,omitempty"`
 }
 
 type maintenanceDocument struct {
@@ -351,6 +354,7 @@ type repositorySafety struct {
 	LatestComplete       *completeSnapshotProofDocument `json:"latest_complete,omitempty"`
 	HasUnresolvedRuns    bool                           `json:"has_unresolved_runs,omitempty"`
 	ProtectedSnapshotIDs []string                       `json:"protected_snapshot_ids,omitempty"`
+	ProtectedRunIDs      []string                       `json:"protected_run_ids,omitempty"`
 }
 
 type completeSnapshotProofDocument struct {
@@ -649,30 +653,40 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 		primaryKey = "repository_" + strings.ToLower(jobID)
 	}
 	replicas := make([]JobRepository, 0, len(raw.Replicas))
+	replicaSetups := make([]JobRepository, 0, len(raw.ReplicaSetups))
 	seenRepositories := map[string]bool{primaryKey: true}
-	for _, replica := range raw.Replicas {
-		if !repositoryConfigKeyPattern.MatchString(replica.RepositoryKey) || !digestPattern.MatchString(replica.ID) || seenRepositories[replica.RepositoryKey] || replica.Source != primaryKey || !slices.Contains([]string{"provisioning", "active", "failed"}, replica.Status) {
-			return Job{}, fmt.Errorf("replica repository identity is invalid")
+	normalizeReplicas := func(documents []repositoryDocument, target *[]JobRepository) error {
+		for _, replica := range documents {
+			if !repositoryConfigKeyPattern.MatchString(replica.RepositoryKey) || !digestPattern.MatchString(replica.ID) || seenRepositories[replica.RepositoryKey] || replica.Source != primaryKey || !slices.Contains([]string{"provisioning", "active", "failed"}, replica.Status) {
+				return fmt.Errorf("replica repository identity is invalid")
+			}
+			replicaDestination, exists := destinations[replica.Destination]
+			if !exists {
+				return fmt.Errorf("replica references unknown destination %q", replica.Destination)
+			}
+			replicaConnection, replicaLocation, err := resolveRepository(replicaDestination, replica.Path)
+			if err != nil {
+				return fmt.Errorf("replica repository: %w", err)
+			}
+			if replica.Password == "" || runeLength(replica.Password) > 1024 || strings.ContainsAny(replica.Password, "\r\n\x00") {
+				return fmt.Errorf("replica repository password is invalid")
+			}
+			seenRepositories[replica.RepositoryKey] = true
+			*target = append(*target, JobRepository{
+				Key: replica.RepositoryKey, ID: replica.ID, Destination: replica.Destination, Path: replica.Path,
+				Location: replicaLocation, ServicePassword: replica.Password, Status: replica.Status, Source: replica.Source,
+				Connection: replicaConnection,
+			})
 		}
-		replicaDestination, exists := destinations[replica.Destination]
-		if !exists {
-			return Job{}, fmt.Errorf("replica references unknown destination %q", replica.Destination)
-		}
-		replicaConnection, replicaLocation, err := resolveRepository(replicaDestination, replica.Path)
-		if err != nil {
-			return Job{}, fmt.Errorf("replica repository: %w", err)
-		}
-		if replica.Password == "" || runeLength(replica.Password) > 1024 || strings.ContainsAny(replica.Password, "\r\n\x00") {
-			return Job{}, fmt.Errorf("replica repository password is invalid")
-		}
-		seenRepositories[replica.RepositoryKey] = true
-		replicas = append(replicas, JobRepository{
-			Key: replica.RepositoryKey, ID: replica.ID, Destination: replica.Destination, Path: replica.Path,
-			Location: replicaLocation, ServicePassword: replica.Password, Status: replica.Status, Source: replica.Source,
-			Connection: replicaConnection,
-		})
+		return nil
 	}
-	if len(replicas) > 0 && (raw.Replication == nil || raw.Replication.Mode != "attached" || !raw.Replication.Coalesce || raw.Replication.SafetyHoldSeconds != 604800) {
+	if err := normalizeReplicas(raw.Replicas, &replicas); err != nil {
+		return Job{}, err
+	}
+	if err := normalizeReplicas(raw.ReplicaSetups, &replicaSetups); err != nil {
+		return Job{}, err
+	}
+	if len(replicas)+len(replicaSetups) > 0 && (raw.Replication == nil || raw.Replication.Mode != "attached" || !raw.Replication.Coalesce || !slices.Contains([]uint64{0, 604800}, raw.Replication.SafetyHoldSeconds)) {
 		return Job{}, fmt.Errorf("replication policy is invalid")
 	}
 	retention := defaultRetention(key)
@@ -706,6 +720,13 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 		}
 		retention.HasUnresolvedRuns = raw.Safety.HasUnresolvedRuns
 		retention.ProtectedSnapshotIDs = append([]string{}, raw.Safety.ProtectedSnapshotIDs...)
+		for _, runID := range raw.Safety.ProtectedRunIDs {
+			parsed, err := parsePrefixedULID(runID, "run_")
+			if err != nil {
+				return Job{}, fmt.Errorf("protected run id is invalid")
+			}
+			retention.ProtectedRunIDs = append(retention.ProtectedRunIDs, parsed)
+		}
 	}
 	jobSource := JobSource{
 		Root:          raw.Source.Root,
@@ -759,10 +780,11 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 			ServicePassword: raw.Repository.Password,
 			Connection:      connection,
 		},
-		Replicas:  replicas,
-		Schedule:  JobSchedule{Kind: "cron", Expression: raw.Schedule, Timezone: "UTC"},
-		Retention: retention,
-		Integrity: integrity,
+		Replicas:      replicas,
+		ReplicaSetups: replicaSetups,
+		Schedule:      JobSchedule{Kind: "cron", Expression: raw.Schedule, Timezone: "UTC"},
+		Retention:     retention,
+		Integrity:     integrity,
 	}
 	if raw.Maintenance != nil {
 		job.Maintenance = JobMaintenance{
@@ -1066,6 +1088,7 @@ func encodeConfig(config Config, managedDigest string) ([]byte, error) {
 				LatestComplete:       latestComplete,
 				HasUnresolvedRuns:    job.Retention.HasUnresolvedRuns,
 				ProtectedSnapshotIDs: append([]string{}, job.Retention.ProtectedSnapshotIDs...),
+				ProtectedRunIDs:      prefixedIDs(job.Retention.ProtectedRunIDs, "run_"),
 			},
 		}
 		if len(job.Replicas) > 0 {
@@ -1081,7 +1104,23 @@ func encodeConfig(config Config, managedDigest string) ([]byte, error) {
 					Password: replica.ServicePassword, Status: replica.Status, Source: replica.Source,
 				})
 			}
-			documentJob.Replication = &replicationDocument{Mode: "attached", Coalesce: true, SafetyHoldSeconds: 604800}
+		}
+		if len(job.ReplicaSetups) > 0 {
+			documentJob.ReplicaSetups = make([]repositoryDocument, 0, len(job.ReplicaSetups))
+			for _, replica := range job.ReplicaSetups {
+				replicaDestinationKey := destinationKeys[replica.Destination]
+				if replicaDestinationKey == "" {
+					replicaDestinationKey = prefixConfigKey(replica.Destination, "storage_")
+				}
+				documentJob.ReplicaSetups = append(documentJob.ReplicaSetups, repositoryDocument{
+					RepositoryKey: replica.Key,
+					ID:            replica.ID, Destination: replicaDestinationKey, Path: replica.Path,
+					Password: replica.ServicePassword, Status: replica.Status, Source: replica.Source,
+				})
+			}
+		}
+		if len(job.Replicas)+len(job.ReplicaSetups) > 0 {
+			documentJob.Replication = &replicationDocument{Mode: "attached", Coalesce: true, SafetyHoldSeconds: 0}
 		}
 		if job.Maintenance.Strategy != "" {
 			documentJob.Maintenance = &maintenanceDocument{
@@ -1192,6 +1231,11 @@ func validateJob(job Job) error {
 			return fmt.Errorf("replica repository is invalid")
 		}
 	}
+	for _, replica := range job.ReplicaSetups {
+		if !repositoryConfigKeyPattern.MatchString(replica.Key) || !digestPattern.MatchString(replica.ID) || replica.Source != job.Repository.Key || replica.Location == "" || runeLength(replica.Location) > 2048 || replica.Status != "provisioning" {
+			return fmt.Errorf("replica setup repository is invalid")
+		}
+	}
 	if _, err := parseFixedUTCSchedule(job.Schedule.Expression); err != nil {
 		return fmt.Errorf("schedule is invalid: %w", err)
 	}
@@ -1229,6 +1273,14 @@ func validateJob(job Job) error {
 			return fmt.Errorf("protected snapshot identities are invalid")
 		}
 		seenProtected[snapshotID] = true
+	}
+	if len(retention.ProtectedRunIDs) > 1000 {
+		return fmt.Errorf("protected run identities are invalid")
+	}
+	for index, runID := range retention.ProtectedRunIDs {
+		if !ulidPattern.MatchString(runID) || index > 0 && retention.ProtectedRunIDs[index-1] >= runID {
+			return fmt.Errorf("protected run identities are invalid")
+		}
 	}
 	integrity := job.Integrity
 	if !slices.Contains([]string{"auto", "custom"}, integrity.DataMode) || integrity.DataParts < 2 || integrity.DataParts > 12 {
@@ -1426,6 +1478,14 @@ func prefixID(value, prefix string) string {
 		return value
 	}
 	return prefix + value
+}
+
+func prefixedIDs(values []string, prefix string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		result = append(result, prefixID(value, prefix))
+	}
+	return result
 }
 
 func prefixConfigKey(value, prefix string) string {

@@ -56,6 +56,7 @@ func (daemon *daemon) replicateJob(ctx context.Context, job Job) {
 		daemon.mu.Lock()
 		delete(daemon.replicationActive, job.ID)
 		daemon.mu.Unlock()
+		_ = daemon.startNextDeferredMaintenance(context.Background(), job.ID, false)
 	}()
 
 	for {
@@ -63,6 +64,17 @@ func (daemon *daemon) replicateJob(ctx context.Context, job Job) {
 		if target == nil || len(commands) == 0 {
 			return
 		}
+		daemon.mu.Lock()
+		if daemon.repositories == nil {
+			daemon.repositories = make(map[string]bool)
+		}
+		if daemon.repositories[job.Repository.ID] || daemon.repositories[target.ID] {
+			daemon.mu.Unlock()
+			return
+		}
+		daemon.repositories[job.Repository.ID] = true
+		daemon.repositories[target.ID] = true
+		daemon.mu.Unlock()
 
 		startedAt := daemon.now()
 		copyResult := daemon.executor.Run(ctx, restic.Request{
@@ -72,6 +84,10 @@ func (daemon *daemon) replicateJob(ctx context.Context, job Job) {
 			TimeoutSeconds: 24 * 60 * 60, LockWaitSeconds: 5 * 60,
 		})
 		finishedAt := daemon.now()
+		daemon.mu.Lock()
+		delete(daemon.repositories, job.Repository.ID)
+		delete(daemon.repositories, target.ID)
+		daemon.mu.Unlock()
 
 		status, resultCode := "complete", "success"
 		diagnostic := ""

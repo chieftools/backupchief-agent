@@ -101,7 +101,12 @@ func TestReplicaConfigurationRoundTrips(t *testing.T) {
 		"destination": "storage_01k4p4f7m1r9d3t6v8w2x5y7zd", "path": "copies/repository",
 		"password": "synthetic-service-password", "status": "active", "source": primary["repository_key"],
 	}}
-	job["replication"] = map[string]any{"mode": "attached", "coalesce": true, "safety_hold_seconds": float64(604800)}
+	job["replica_setups"] = []map[string]any{{
+		"repository_key": "repository_01k4p4f7m1r9d3t6v8w2x5y7zg", "id": strings.Repeat("c", 64),
+		"destination": "storage_01k4p4f7m1r9d3t6v8w2x5y7zd", "path": "pending/repository",
+		"password": "synthetic-service-password", "status": "provisioning", "source": primary["repository_key"],
+	}}
+	job["replication"] = map[string]any{"mode": "attached", "coalesce": true, "safety_hold_seconds": float64(0)}
 	body, err := json.Marshal(document)
 	if err != nil {
 		t.Fatal(err)
@@ -111,11 +116,11 @@ func TestReplicaConfigurationRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(config.Jobs) != 1 || len(config.Jobs[0].Replicas) != 1 || config.Jobs[0].Replicas[0].Source != config.Jobs[0].Repository.Key {
+	if len(config.Jobs) != 1 || len(config.Jobs[0].Replicas) != 1 || len(config.Jobs[0].ReplicaSetups) != 1 || config.Jobs[0].Replicas[0].Source != config.Jobs[0].Repository.Key {
 		t.Fatalf("replicas: %+v", config.Jobs)
 	}
 	encoded, err := encodeConfig(config, strings.Repeat("e", 64))
-	if err != nil || !bytes.Contains(encoded, []byte(`"replicas": [`)) || !bytes.Contains(encoded, []byte(`"safety_hold_seconds": 604800`)) {
+	if err != nil || !bytes.Contains(encoded, []byte(`"replicas": [`)) || !bytes.Contains(encoded, []byte(`"replica_setups": [`)) || !bytes.Contains(encoded, []byte(`"safety_hold_seconds": 0`)) {
 		t.Fatalf("encoded replicas: %v %s", err, encoded)
 	}
 }

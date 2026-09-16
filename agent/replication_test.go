@@ -94,3 +94,45 @@ func TestReplicationReportsABoundedFailureDiagnostic(t *testing.T) {
 		t.Fatalf("replication result: %+v", command)
 	}
 }
+
+func TestInitialReplicaSyncUsesProvisioningConfigurationAndReportsItsTarget(t *testing.T) {
+	store := newAgentTestStore(t)
+	commandID := "01k4p4f7m1r9d3t6v8w2x5y7zn"
+	replicaKey := "repository_01k4p4f7m1r9d3t6v8w2x5y7zp"
+	journal := newCommandJournal()
+	journal.Commands[commandID] = &JournalCommand{
+		Command: AgentCommand{ID: commandID, Kind: "sync_replica", Payload: CommandPayload{
+			JobID: "01k4p4f7m1r9d3t6v8w2x5y7zq", RepositoryKey: replicaKey,
+		}},
+		RunID: "01k4p4f7m1r9d3t6v8w2x5y7zr", RunKind: "replica_sync", State: "received", Events: []AgentEvent{},
+	}
+	executor := &sequentialExecutor{results: []restic.Result{
+		{ExitCode: 0, Outcome: "complete"},
+		{ExitCode: 0, Outcome: "complete", Output: `[]`},
+		{ExitCode: 0, Outcome: "complete", Output: `{"total_size":4096}`},
+	}}
+	job := executionJob(t.TempDir())
+	job.ID = journal.Commands[commandID].Command.Payload.JobID
+	job.Repository.Key = "repository_01k4p4f7m1r9d3t6v8w2x5y7zs"
+	job.ReplicaSetups = []JobRepository{{
+		Key: replicaKey, ID: strings.Repeat("e", 64), ServicePassword: "synthetic-service-password",
+		Source: job.Repository.Key, Status: "provisioning", Connection: RepositoryConnection{Driver: "local", Path: t.TempDir()},
+	}}
+	runtime := &daemon{
+		store: store, bootstrap: Bootstrap{Generation: 1}, now: time.Now, journal: journal, executor: executor,
+		replicationActive: map[string]bool{}, repositories: map[string]bool{}, reportWake: make(chan struct{}, 1),
+	}
+
+	if err := runtime.startReplicaSync(context.Background(), commandID, job); err != nil {
+		t.Fatal(err)
+	}
+	runtime.activeWG.Wait()
+
+	result := runtime.journal.Commands[commandID].Result
+	if result == nil || result.Status != "complete" || result.RepositoryKey != replicaKey || result.RepositoryBytes == nil || *result.RepositoryBytes != 4096 {
+		t.Fatalf("replica sync result: %+v", result)
+	}
+	if len(executor.requests) != 3 || executor.requests[0].Operation != "copy" || executor.requests[1].Operation != "snapshots" || executor.requests[2].Operation != "stats" {
+		t.Fatalf("replica sync requests: %+v", executor.requests)
+	}
+}
