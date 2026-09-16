@@ -4,6 +4,12 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.10.1]
+
+### Fixed
+
+- Included symbolic link targets in non-recursive snapshot directory listings so file explorers can show where links point.
+
 ## [0.10.0]
 
 ### Added
@@ -155,7 +161,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/chieftools/backupchief-agent/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/chieftools/backupchief-agent/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/chieftools/backupchief-agent/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/chieftools/backupchief-agent/compare/v0.7.2...v0.8.0
