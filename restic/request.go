@@ -267,7 +267,7 @@ func (r Request) arguments(passwordFile, newPasswordFile, cache string, local bo
 			return nil, nil, errors.New("directory listing requires a full snapshot ID and normalized absolute path")
 		}
 
-		arguments = append(arguments, "ls", "--json", r.Snapshot, r.Path)
+		arguments = append(arguments, "cat", "tree", r.Snapshot+":"+r.Path)
 	case "stats":
 		arguments = append(arguments, "stats", "--mode", "raw-data", "--json")
 	case "check":

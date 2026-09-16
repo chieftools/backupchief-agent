@@ -143,15 +143,12 @@ func (runner Runner) exportCommand(ctx context.Context, request ExportRequest, m
 
 	baseRequest := Request{
 		Version:         request.Version,
-		Operation:       "ls",
 		Connection:      request.Connection,
 		Password:        request.Password,
-		Snapshot:        request.Snapshot,
-		Path:            request.Path,
 		TimeoutSeconds:  request.TimeoutSeconds,
 		LockWaitSeconds: request.LockWaitSeconds,
 	}
-	if !validExportSelection(request) {
+	if !validExportSelection(request) || !snapshotPattern.MatchString(request.Snapshot) {
 		return fail(errors.New("invalid snapshot export request"))
 	}
 	if err := privateDirectory(runner.State); err != nil {
@@ -189,12 +186,11 @@ func (runner Runner) exportCommand(ctx context.Context, request ExportRequest, m
 		return nil, nil, errors.New("cannot write private password input")
 	}
 
-	args, env, err := baseRequest.arguments(passwordFile, "", cache, runner.AllowLocal)
+	args, env, err := baseRequest.baseArguments(passwordFile, cache, runner.AllowLocal)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	args = args[:len(args)-4]
 
 	if mode == "inspect" {
 		args = append(args, "ls", "--recursive", "--json", request.Snapshot, request.Path)

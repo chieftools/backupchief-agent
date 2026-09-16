@@ -355,7 +355,7 @@ func TestRequestBoundaries(t *testing.T) {
 	request.Snapshot = strings.Repeat("d", 64)
 	request.Path = "/srv/synthetic files"
 	args, _, err = request.arguments("password", "new-password", "cache", true)
-	if err != nil || !reflect.DeepEqual(args[len(args)-4:], []string{"ls", "--json", request.Snapshot, request.Path}) {
+	if err != nil || !reflect.DeepEqual(args[len(args)-3:], []string{"cat", "tree", request.Snapshot + ":" + request.Path}) {
 		t.Fatalf("ls arguments: %v %v", args, err)
 	}
 
@@ -397,6 +397,9 @@ func TestDirectoryListingIsNonRecursive(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := os.Symlink("nested", filepath.Join(root, "current")); err != nil {
+		t.Fatal(err)
+	}
 
 	request.Operation = "backup"
 	request.Root = root
@@ -418,22 +421,34 @@ func TestDirectoryListingIsNonRecursive(t *testing.T) {
 	request.Path = root
 	result = requireComplete(t, runner, request)
 
-	paths := []string{}
-	for _, line := range strings.Split(strings.TrimSpace(result.Output), "\n") {
-		var node struct {
-			StructType string `json:"struct_type"`
-			Path       string `json:"path"`
-		}
-		if json.Unmarshal([]byte(line), &node) == nil && node.StructType == "node" {
-			paths = append(paths, node.Path)
-		}
+	type listedNode struct {
+		Name       string `json:"name"`
+		Type       string `json:"type"`
+		LinkTarget string `json:"linktarget"`
+	}
+	var tree struct {
+		Nodes []listedNode `json:"nodes"`
+	}
+	if err := json.Unmarshal([]byte(result.Output), &tree); err != nil {
+		t.Fatalf("directory listing: %v %s", err, result.Output)
 	}
 
-	if !slices.Contains(paths, filepath.Join(root, "visible.txt")) || !slices.Contains(paths, filepath.Join(root, "nested")) {
-		t.Fatalf("directory children missing: %v", paths)
+	nodes := make(map[string]listedNode, len(tree.Nodes))
+	for _, node := range tree.Nodes {
+		nodes[node.Name] = node
 	}
-	if slices.Contains(paths, filepath.Join(root, "nested", "child.txt")) {
-		t.Fatalf("directory listing was recursive: %v", paths)
+
+	if _, exists := nodes["visible.txt"]; !exists {
+		t.Fatalf("file missing from directory children: %v", nodes)
+	}
+	if _, exists := nodes["nested"]; !exists {
+		t.Fatalf("folder missing from directory children: %v", nodes)
+	}
+	if _, exists := nodes["child.txt"]; exists {
+		t.Fatalf("directory listing was recursive: %v", nodes)
+	}
+	if current := nodes["current"]; current.Type != "symlink" || current.LinkTarget != "nested" {
+		t.Fatalf("symlink target missing from directory listing: %v", current)
 	}
 }
 
