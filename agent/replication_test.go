@@ -95,6 +95,47 @@ func TestReplicationReportsABoundedFailureDiagnostic(t *testing.T) {
 	}
 }
 
+func TestPendingReplicationBlocksDeferredMaintenance(t *testing.T) {
+	store := newAgentTestStore(t)
+	job := maintenanceExecutionJob(t)
+	maintenanceID := "01k4p4f7m1r9d3t6v8w2x5y7zj"
+	backupID := "01k4p4f7m1r9d3t6v8w2x5y7zk"
+	maintenance := maintenanceJournalCommand("check_metadata", job.ID)
+	maintenance.Command.ID = maintenanceID
+	maintenance.State = "received"
+	journal := newCommandJournal()
+	journal.Commands[maintenanceID] = maintenance
+	journal.Commands[backupID] = &JournalCommand{
+		Command: AgentCommand{ID: backupID, Payload: CommandPayload{JobID: job.ID}},
+		RunID:   "01k4p4f7m1r9d3t6v8w2x5y7zm", RunKind: "backup", State: "finished",
+		Result: &CommandResult{JobID: job.ID}, ReplicationPending: []string{"repository_01k4p4f7m1r9d3t6v8w2x5y7zn"},
+	}
+	executor := &schedulerExecutor{}
+	runtime := &daemon{
+		store: store, bootstrap: testBootstrap(), now: time.Now, journal: journal, executor: executor,
+		active: map[string]context.CancelFunc{}, activeRunKinds: map[string]string{}, repositories: map[string]bool{},
+		replicationActive: map[string]bool{}, state: RuntimeState{Maintenance: map[string]MaintenanceRuntime{}},
+	}
+
+	if err := runtime.startOperation(context.Background(), maintenanceID, job); err != nil {
+		t.Fatal(err)
+	}
+	if executor.count() != 0 || runtime.journal.Commands[maintenanceID].State != "received" {
+		t.Fatalf("maintenance started with replication pending: %+v", runtime.journal.Commands[maintenanceID])
+	}
+
+	runtime.mu.Lock()
+	runtime.journal.Commands[backupID].ReplicationPending = nil
+	runtime.mu.Unlock()
+	if err := runtime.startOperation(context.Background(), maintenanceID, job); err != nil {
+		t.Fatal(err)
+	}
+	runtime.activeWG.Wait()
+	if executor.count() != 1 || runtime.journal.Commands[maintenanceID].Result == nil || runtime.journal.Commands[maintenanceID].Result.Status != "complete" {
+		t.Fatalf("maintenance did not start after replication completed: %+v", runtime.journal.Commands[maintenanceID])
+	}
+}
+
 func TestInitialReplicaSyncUsesProvisioningConfigurationAndReportsItsTarget(t *testing.T) {
 	store := newAgentTestStore(t)
 	commandID := "01k4p4f7m1r9d3t6v8w2x5y7zn"

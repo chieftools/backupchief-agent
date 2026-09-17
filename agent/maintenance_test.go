@@ -58,6 +58,95 @@ func TestMaintenanceRunsPrimaryThenReplicaAndRetriesTransientFailures(t *testing
 	}
 }
 
+func TestRetentionResolvesProtectedSnapshotsToReplicaLocalIDs(t *testing.T) {
+	latestRunID := "01k4p4f7m1r9d3t6v8w2x5y7za"
+	heldRunID := "01k4p4f7m1r9d3t6v8w2x5y7zb"
+	primaryLatest := strings.Repeat("a", 64)
+	primaryHeld := strings.Repeat("b", 64)
+	replicaLatest := strings.Repeat("c", 64)
+	replicaHeld := strings.Repeat("d", 64)
+	executor := &scriptedMaintenanceExecutor{results: []restic.Result{
+		{ExitCode: 0, Outcome: "complete", Output: `[{"id":"` + primaryLatest + `","tags":["backupchief-run:` + latestRunID + `"]},{"id":"` + primaryHeld + `","tags":["backupchief-run:` + heldRunID + `"]}]`},
+		{ExitCode: 0, Outcome: "complete", Output: `{"total_size":1024}`},
+		{ExitCode: 0, Outcome: "complete", Output: `[{"id":"` + replicaLatest + `","original":"` + primaryLatest + `","tags":["backupchief-run:` + latestRunID + `"]},{"id":"` + replicaHeld + `","original":"` + primaryHeld + `","tags":["backupchief-run:` + heldRunID + `"]}]`},
+		{ExitCode: 0, Outcome: "complete", Output: `{"total_size":2048}`},
+	}}
+	job := maintenanceExecutionJob(t)
+	job.Repository.Key = "repository_01k4p4f7m1r9d3t6v8w2x5y7zc"
+	job.Replicas = []JobRepository{{
+		Key: "repository_01k4p4f7m1r9d3t6v8w2x5y7zd", ID: strings.Repeat("e", 64),
+		ServicePassword: "synthetic-service-password", Source: job.Repository.Key, Status: "active",
+		Connection: RepositoryConnection{Driver: "local", Path: t.TempDir()},
+	}}
+	job.Retention.LatestComplete = &CompleteSnapshotProof{
+		RunID: latestRunID, FinishedAt: "2026-09-10T08:00:00.000000Z", SnapshotIDs: []string{primaryLatest},
+	}
+	job.Retention.ProtectedSnapshotIDs = []string{primaryHeld}
+	job.Retention.ProtectedRunIDs = []string{heldRunID}
+
+	result, _, _, _ := executeMaintenanceRepositories(
+		context.Background(), executor, 1, maintenanceJournalCommand("forget", job.ID), job, nil,
+		func(MaintenancePlan) error { return nil }, time.Now, nil,
+	)
+
+	if result.Status != "complete" || result.ResultCode != "success" || len(result.RepositoryResults) != 2 {
+		t.Fatalf("retention result: %+v", result)
+	}
+	if result.RepositoryResults[1].Status != "complete" || !reflect.DeepEqual(result.RepositoryResults[1].SnapshotEvidenceIDs, []string{replicaLatest, replicaHeld}) {
+		t.Fatalf("replica result: %+v", result.RepositoryResults[1])
+	}
+	operations := make([]string, 0, len(executor.requests))
+	for _, request := range executor.requests {
+		operations = append(operations, request.Operation)
+	}
+	if !reflect.DeepEqual(operations, []string{"snapshots", "stats", "snapshots", "stats"}) {
+		t.Fatalf("operation order: %v", operations)
+	}
+}
+
+func TestRetentionFailsClosedWhenAProtectedReplicaSnapshotIsMissing(t *testing.T) {
+	latestRunID := "01k4p4f7m1r9d3t6v8w2x5y7ze"
+	heldRunID := "01k4p4f7m1r9d3t6v8w2x5y7zf"
+	primaryLatest := strings.Repeat("1", 64)
+	primaryHeld := strings.Repeat("2", 64)
+	replicaLatest := strings.Repeat("3", 64)
+	executor := &scriptedMaintenanceExecutor{results: []restic.Result{
+		{ExitCode: 0, Outcome: "complete", Output: `[{"id":"` + primaryLatest + `","tags":["backupchief-run:` + latestRunID + `"]},{"id":"` + primaryHeld + `","tags":["backupchief-run:` + heldRunID + `"]}]`},
+		{ExitCode: 0, Outcome: "complete", Output: `{"total_size":1024}`},
+		{ExitCode: 0, Outcome: "complete", Output: `[{"id":"` + replicaLatest + `","original":"` + primaryLatest + `","tags":["backupchief-run:` + latestRunID + `"]}]`},
+		{ExitCode: 0, Outcome: "complete", Output: `{"total_size":2048}`},
+	}}
+	job := maintenanceExecutionJob(t)
+	job.Repository.Key = "repository_01k4p4f7m1r9d3t6v8w2x5y7zg"
+	job.Replicas = []JobRepository{{
+		Key: "repository_01k4p4f7m1r9d3t6v8w2x5y7zh", ID: strings.Repeat("4", 64),
+		ServicePassword: "synthetic-service-password", Source: job.Repository.Key, Status: "active",
+		Connection: RepositoryConnection{Driver: "local", Path: t.TempDir()},
+	}}
+	job.Retention.LatestComplete = &CompleteSnapshotProof{
+		RunID: latestRunID, FinishedAt: "2026-09-10T08:00:00.000000Z", SnapshotIDs: []string{primaryLatest},
+	}
+	job.Retention.ProtectedSnapshotIDs = []string{primaryHeld}
+	job.Retention.ProtectedRunIDs = []string{heldRunID}
+
+	result, _, _, _ := executeMaintenanceRepositories(
+		context.Background(), executor, 1, maintenanceJournalCommand("forget", job.ID), job, nil,
+		func(MaintenancePlan) error { return nil }, time.Now, nil,
+	)
+
+	if result.Status != "partial" || result.ResultCode != "repository_operations_incomplete" || len(result.RepositoryResults) != 2 {
+		t.Fatalf("retention result: %+v", result)
+	}
+	if result.RepositoryResults[1].Status != "skipped" || result.RepositoryResults[1].ResultCode != "recovery_point_unavailable" {
+		t.Fatalf("replica result: %+v", result.RepositoryResults[1])
+	}
+	for _, request := range executor.requests {
+		if request.Operation == "forget" || request.Operation == "forget_plan" {
+			t.Fatalf("unsafe mutation requested: %+v", request)
+		}
+	}
+}
+
 func (executor *scriptedMaintenanceExecutor) Run(_ context.Context, request restic.Request) restic.Result {
 	executor.requests = append(executor.requests, request)
 	if len(executor.results) == 0 {

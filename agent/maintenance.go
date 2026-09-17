@@ -30,8 +30,9 @@ type MaintenancePlan struct {
 }
 
 type repositorySnapshot struct {
-	ID   string   `json:"id"`
-	Tags []string `json:"tags"`
+	ID       string   `json:"id"`
+	Original string   `json:"original"`
+	Tags     []string `json:"tags"`
 }
 
 type forgetGroup struct {
@@ -216,10 +217,10 @@ func executeForget(
 	records := snapshotRecords(inventoryResult)
 	proofSnapshotIDs := snapshotIDsForRunIDs(records, []string{proof.RunID})
 	if len(proofSnapshotIDs) == 0 {
-		proofSnapshotIDs = proof.SnapshotIDs
+		proofSnapshotIDs = repositorySnapshotIDs(records, proof.SnapshotIDs)
 	}
 	protected := stringSet(proofSnapshotIDs)
-	for _, snapshotID := range job.Retention.ProtectedSnapshotIDs {
+	for _, snapshotID := range repositorySnapshotIDs(records, job.Retention.ProtectedSnapshotIDs) {
 		protected[snapshotID] = true
 	}
 	for _, snapshotID := range snapshotIDsForRunIDs(records, job.Retention.ProtectedRunIDs) {
@@ -468,6 +469,26 @@ func snapshotIDs(inventory map[string]bool) []string {
 		result = append(result, snapshotID)
 	}
 	sort.Strings(result)
+	return result
+}
+
+func repositorySnapshotIDs(snapshots []repositorySnapshot, snapshotIDs []string) []string {
+	localIDs := make(map[string]string, len(snapshots)*2)
+	for _, snapshot := range snapshots {
+		localIDs[snapshot.ID] = snapshot.ID
+		if digestPattern.MatchString(snapshot.Original) {
+			localIDs[snapshot.Original] = snapshot.ID
+		}
+	}
+
+	result := make([]string, 0, len(snapshotIDs))
+	for _, snapshotID := range snapshotIDs {
+		if localID := localIDs[snapshotID]; localID != "" {
+			result = append(result, localID)
+		} else {
+			result = append(result, snapshotID)
+		}
+	}
 	return result
 }
 
