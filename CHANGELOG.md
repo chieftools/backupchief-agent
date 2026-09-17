@@ -4,6 +4,19 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.11.0]
+
+### Added
+
+- Added control-plane-triggered agent updates that wait for active backups, maintenance, source inspections, and replica transfers to finish before changing the installed package.
+- Added a root-only systemd updater for APT, DNF, and YUM installations, with exact-version preflight checks, restart readiness verification, durable recovery, and automatic rollback when the updated agent does not become ready.
+- Reported update availability and terminal update outcomes to the control plane so updates can be scheduled, monitored, and retried without granting package-manager privileges to the backup daemon.
+
+### Changed
+
+- Kept newly received commands and scheduled occurrences durable while an update is draining, then resumed them after the agent returned online.
+- Updated the agent protocol to 1.10 for update capability discovery, update commands, acknowledgements, and structured results.
+
 ## [0.10.2]
 
 ### Fixed
@@ -167,7 +180,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.10.2...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/chieftools/backupchief-agent/compare/v0.10.2...v0.11.0
 [0.10.2]: https://github.com/chieftools/backupchief-agent/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/chieftools/backupchief-agent/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/chieftools/backupchief-agent/compare/v0.9.0...v0.10.0
