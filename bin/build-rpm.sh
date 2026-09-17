@@ -53,6 +53,8 @@ install -m 0755 "backupchief-linux-${GOARCH}" "${RPMBUILD_DIR}/SOURCES/backupchi
 echo "Installing configuration, service unit, and license..."
 cp packaging/config.json "${RPMBUILD_DIR}/SOURCES/"
 cp packaging/backupchief.service "${RPMBUILD_DIR}/SOURCES/"
+cp packaging/backupchief-updater.service "${RPMBUILD_DIR}/SOURCES/"
+cp packaging/backupchief-updater.path "${RPMBUILD_DIR}/SOURCES/"
 cp packaging/postinstall.sh "${RPMBUILD_DIR}/SOURCES/"
 install -m 0644 LICENSE "${RPMBUILD_DIR}/SOURCES/LICENSE"
 install -m 0644 restic/LICENSE "${RPMBUILD_DIR}/SOURCES/restic-LICENSE"
@@ -75,6 +77,8 @@ Source2:        LICENSE
 Source3:        restic-LICENSE
 Source4:        rclone-COPYING
 Source5:        config.schema.json
+Source6:        backupchief-updater.service
+Source7:        backupchief-updater.path
 
 %global debug_package %{nil}
 %global _build_id_links none
@@ -96,6 +100,8 @@ mkdir -p %{buildroot}/usr/share/licenses/backupchief
 install -m 0755 %{_sourcedir}/backupchief %{buildroot}/usr/bin/backupchief
 install -m 0640 %{SOURCE0} %{buildroot}/etc/backupchief/config.json
 install -m 0644 %{SOURCE1} %{buildroot}/usr/lib/systemd/system/backupchief.service
+install -m 0644 %{SOURCE6} %{buildroot}/usr/lib/systemd/system/backupchief-updater.service
+install -m 0644 %{SOURCE7} %{buildroot}/usr/lib/systemd/system/backupchief-updater.path
 install -m 0644 %{SOURCE2} %{buildroot}/usr/share/licenses/backupchief/LICENSE
 install -m 0644 %{SOURCE3} %{buildroot}/usr/share/licenses/backupchief/restic-LICENSE
 install -m 0644 %{SOURCE4} %{buildroot}/usr/share/licenses/backupchief/rclone-COPYING
@@ -110,6 +116,8 @@ install -m 0644 %{SOURCE5} %{buildroot}/usr/share/licenses/backupchief/config.sc
 %config(noreplace) %attr(0640, root, root) /etc/backupchief/config.json
 %attr(0750, root, root) %dir /etc/backupchief
 %attr(0644, root, root) /usr/lib/systemd/system/backupchief.service
+%attr(0644, root, root) /usr/lib/systemd/system/backupchief-updater.service
+%attr(0644, root, root) /usr/lib/systemd/system/backupchief-updater.path
 
 %post -f %{_sourcedir}/postinstall.sh
 
@@ -117,6 +125,8 @@ install -m 0644 %{SOURCE5} %{buildroot}/usr/share/licenses/backupchief/config.sc
 set -eu
 
 if [ "\$1" -eq 0 ] && [ -d /run/systemd/system ]; then
+    systemctl disable --now backupchief-updater.path
+    systemctl stop backupchief-updater.service
     systemctl stop backupchief.service
     systemctl disable backupchief.service
 fi

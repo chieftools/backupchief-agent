@@ -349,6 +349,10 @@ func (client *Client) SubmitResult(ctx context.Context, commandID string, result
 	return client.postJSON(ctx, "/commands/"+commandID+"/result", result)
 }
 
+func (client *Client) SubmitAgentUpdateResult(ctx context.Context, commandID string, result AgentUpdateResult) error {
+	return client.postJSON(ctx, "/commands/"+commandID+"/result", result)
+}
+
 func (client *Client) SubmitInspectionResult(ctx context.Context, commandID string, result CommandResult) error {
 	failure := result.Failure
 	if result.Status != "failed" || !protocolRevisionSupports(client.selectedProtocolRevision(), "1.2.0") {
@@ -617,6 +621,11 @@ func requestBodyForProtocol(path string, body []byte, protocolRevision string) (
 					delete(tools, "snapshot_restore")
 				}
 			}
+			if !protocolRevisionSupports(protocolRevision, "1.10.0") {
+				if tools, ok := capabilities["tools"].(map[string]any); ok {
+					delete(tools, "agent_update")
+				}
+			}
 			encodedCapabilities, err := json.Marshal(capabilities)
 			if err != nil {
 				return nil, fmt.Errorf("rewrite heartbeat capabilities: %w", err)
@@ -682,6 +691,12 @@ func validateCommand(command AgentCommand, expectedGeneration uint64, protocolRe
 		jobType := JobType(command.Payload.Type)
 		if !isSupportedJobType(jobType) || !protocolRevisionSupports(protocolRevision, jobTypeIntroducedIn(jobType)) || len(command.Payload.Source) == 0 || !digestPattern.MatchString(command.Payload.SourceDigest) || command.Payload.JobID != "" || command.Payload.RunID != "" || command.Payload.RequiredConfigRevision != 0 || command.Payload.Maintenance != "" || command.Payload.SnapshotIDs != nil {
 			return fmt.Errorf("source inspection command payload is invalid")
+		}
+	case "update_agent":
+		if !protocolRevisionSupports(protocolRevision, "1.10.0") || !protocolRevisionPattern.MatchString(command.Payload.TargetVersion) ||
+			command.Payload.JobID != "" || command.Payload.RunID != "" || command.Payload.RequiredConfigRevision != 0 ||
+			command.Payload.Maintenance != "" || command.Payload.SnapshotIDs != nil || len(command.Payload.Source) > 0 || command.Payload.SourceDigest != "" {
+			return fmt.Errorf("agent update command payload is invalid")
 		}
 	default:
 		return fmt.Errorf("unsupported command kind %q", command.Kind)

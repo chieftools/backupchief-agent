@@ -51,6 +51,8 @@ echo "Installing configuration, service unit, and license..."
 install -m 0640 packaging/config.json "${DEB_DIR}/etc/backupchief/config.json"
 chmod 0750 "${DEB_DIR}/etc/backupchief"
 install -m 0644 packaging/backupchief.service "${DEB_DIR}/usr/lib/systemd/system/backupchief.service"
+install -m 0644 packaging/backupchief-updater.service "${DEB_DIR}/usr/lib/systemd/system/backupchief-updater.service"
+install -m 0644 packaging/backupchief-updater.path "${DEB_DIR}/usr/lib/systemd/system/backupchief-updater.path"
 install -m 0644 LICENSE "${DEB_DIR}/usr/share/doc/backupchief/copyright"
 install -m 0644 restic/LICENSE "${DEB_DIR}/usr/share/doc/backupchief/restic-LICENSE"
 install -m 0644 rclone/COPYING "${DEB_DIR}/usr/share/doc/backupchief/rclone-COPYING"
@@ -82,6 +84,8 @@ cat > "${DEB_DIR}/DEBIAN/prerm" << 'EOF'
 set -eu
 
 if [ "$1" = "remove" ] && [ -d /run/systemd/system ]; then
+    systemctl disable --now backupchief-updater.path
+    systemctl stop backupchief-updater.service
     systemctl stop backupchief.service
     systemctl disable backupchief.service
 fi

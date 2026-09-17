@@ -18,6 +18,10 @@ type copiedSnapshot struct {
 
 func (daemon *daemon) resumeReplications(ctx context.Context) {
 	daemon.mu.Lock()
+	if daemon.state.AgentUpdate != nil {
+		daemon.mu.Unlock()
+		return
+	}
 	pendingJobs := make(map[string]bool)
 	for _, command := range daemon.journal.Commands {
 		if command.Result != nil && len(command.ReplicationPending) > 0 {
@@ -36,6 +40,10 @@ func (daemon *daemon) resumeReplications(ctx context.Context) {
 
 func (daemon *daemon) startReplication(ctx context.Context, job Job) {
 	daemon.mu.Lock()
+	if daemon.state.AgentUpdate != nil {
+		daemon.mu.Unlock()
+		return
+	}
 	if daemon.replicationActive == nil {
 		daemon.replicationActive = make(map[string]bool)
 	}

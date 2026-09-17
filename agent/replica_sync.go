@@ -9,6 +9,10 @@ import (
 
 func (daemon *daemon) startReplicaSync(ctx context.Context, commandID string, job Job) error {
 	daemon.mu.Lock()
+	if daemon.state.AgentUpdate != nil {
+		daemon.mu.Unlock()
+		return nil
+	}
 	journaled := daemon.journal.Commands[commandID]
 	if journaled == nil || journaled.State != "received" {
 		daemon.mu.Unlock()

@@ -1,0 +1,17 @@
+[Unit]
+Description=Install a scheduled Backup Chief agent update
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/bin/backupchief internal-update
+UMask=0077
+NoNewPrivileges=false
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/backupchief
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true

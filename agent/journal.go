@@ -18,33 +18,34 @@ type CommandJournal struct {
 }
 
 type JournalCommand struct {
-	Command            AgentCommand      `json:"command"`
-	RunID              string            `json:"run_id"`
-	ConfigRevision     uint64            `json:"config_revision"`
-	RunKind            string            `json:"run_kind"`
-	Trigger            string            `json:"trigger"`
-	ScheduledFor       string            `json:"scheduled_for,omitempty"`
-	JobSnapshot        string            `json:"job_snapshot,omitempty"`
-	ReceivedAt         string            `json:"received_at"`
-	Acknowledged       bool              `json:"acknowledged"`
-	State              string            `json:"state"`
-	Sequence           uint64            `json:"sequence"`
-	Events             []AgentEvent      `json:"events"`
-	Result             *CommandResult    `json:"result,omitempty"`
-	ResultReported     bool              `json:"result_reported"`
-	LogID              string            `json:"log_id,omitempty"`
-	LogBytes           int               `json:"log_bytes,omitempty"`
-	LogSHA256          string            `json:"log_sha256,omitempty"`
-	LogTruncated       bool              `json:"log_truncated,omitempty"`
-	LogDroppedBytes    uint64            `json:"log_dropped_bytes,omitempty"`
-	NextLogChunk       int               `json:"next_log_chunk,omitempty"`
-	LogCompleted       bool              `json:"log_completed,omitempty"`
-	MaintenancePlan    *MaintenancePlan  `json:"maintenance_plan,omitempty"`
-	WaitForBackup      bool              `json:"wait_for_backup,omitempty"`
-	MaxDeferralAt      string            `json:"max_deferral_at,omitempty"`
-	CatchUpBackup      bool              `json:"catch_up_backup,omitempty"`
-	ReplicationPending []string          `json:"replication_pending,omitempty"`
-	ReplicationRetryAt map[string]string `json:"replication_retry_at,omitempty"`
+	Command            AgentCommand       `json:"command"`
+	RunID              string             `json:"run_id"`
+	ConfigRevision     uint64             `json:"config_revision"`
+	RunKind            string             `json:"run_kind"`
+	Trigger            string             `json:"trigger"`
+	ScheduledFor       string             `json:"scheduled_for,omitempty"`
+	JobSnapshot        string             `json:"job_snapshot,omitempty"`
+	ReceivedAt         string             `json:"received_at"`
+	Acknowledged       bool               `json:"acknowledged"`
+	State              string             `json:"state"`
+	Sequence           uint64             `json:"sequence"`
+	Events             []AgentEvent       `json:"events"`
+	Result             *CommandResult     `json:"result,omitempty"`
+	UpdateResult       *AgentUpdateResult `json:"update_result,omitempty"`
+	ResultReported     bool               `json:"result_reported"`
+	LogID              string             `json:"log_id,omitempty"`
+	LogBytes           int                `json:"log_bytes,omitempty"`
+	LogSHA256          string             `json:"log_sha256,omitempty"`
+	LogTruncated       bool               `json:"log_truncated,omitempty"`
+	LogDroppedBytes    uint64             `json:"log_dropped_bytes,omitempty"`
+	NextLogChunk       int                `json:"next_log_chunk,omitempty"`
+	LogCompleted       bool               `json:"log_completed,omitempty"`
+	MaintenancePlan    *MaintenancePlan   `json:"maintenance_plan,omitempty"`
+	WaitForBackup      bool               `json:"wait_for_backup,omitempty"`
+	MaxDeferralAt      string             `json:"max_deferral_at,omitempty"`
+	CatchUpBackup      bool               `json:"catch_up_backup,omitempty"`
+	ReplicationPending []string           `json:"replication_pending,omitempty"`
+	ReplicationRetryAt map[string]string  `json:"replication_retry_at,omitempty"`
 }
 
 func (store *FileStore) LoadCommandJournal() (CommandJournal, error) {

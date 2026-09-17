@@ -70,7 +70,16 @@ func (daemon *daemon) scheduleBackups(ctx context.Context) error {
 		daemon.mu.Unlock()
 		return nil
 	}
+	previousMinute := daemon.lastScheduleMinute
 	daemon.lastScheduleMinute = minute
+	draining := daemon.state.AgentUpdate != nil
+	if draining {
+		daemon.state.AgentUpdate.LastScheduleMinute = protocolTimestamp(minute)
+		if err := daemon.store.SaveRuntimeState(daemon.state); err != nil {
+			daemon.mu.Unlock()
+			return err
+		}
+	}
 	if daemon.state.AuthenticationPaused {
 		daemon.mu.Unlock()
 		return nil
@@ -141,19 +150,29 @@ func (daemon *daemon) scheduleBackups(ctx context.Context) error {
 	})
 
 	for _, operation := range operations {
-		due, err := scheduleIsDue(operation.Expression, minute)
+		scheduleAfter := minute.Add(-time.Minute)
+		if draining {
+			scheduleAfter = previousMinute
+		}
+		scheduledMinute, due, err := firstDueSchedule(operation.Expression, scheduleAfter, minute)
 		if err != nil {
 			return err
 		}
 		if !due {
 			continue
 		}
-		scheduledFor := protocolTimestamp(minute)
+		scheduledFor := protocolTimestamp(scheduledMinute)
 		exists, err := daemon.store.occurrenceExists(operation.Job.ID, operation.RunKind, scheduledFor)
 		if err != nil {
 			return err
 		}
 		if exists {
+			continue
+		}
+		if draining && daemon.hasQueuedScheduledOperation(operation.Job.ID, operation.RunKind, false) {
+			if err := daemon.store.recordSkippedOccurrence(operation.Job.ID, operation.RunKind, scheduledFor); err != nil {
+				return err
+			}
 			continue
 		}
 		if operation.Deferred && daemon.hasQueuedScheduledOperation(operation.Job.ID, operation.RunKind, false) {
@@ -213,7 +232,7 @@ func (daemon *daemon) scheduleBackups(ctx context.Context) error {
 			journaled.CatchUpBackup = true
 			overlap = false
 		}
-		if overlap && !operation.Deferred {
+		if overlap && !operation.Deferred && !draining {
 			daemon.finishScheduledOverlap(journaled, now)
 		}
 		daemon.mu.Lock()
@@ -232,7 +251,7 @@ func (daemon *daemon) scheduleBackups(ctx context.Context) error {
 			}
 			return err
 		}
-		if overlap || operation.Deferred || catchUp {
+		if draining || overlap || operation.Deferred || catchUp {
 			continue
 		}
 		busyRepositories[operation.Job.Repository.ID] = true
@@ -245,7 +264,19 @@ func (daemon *daemon) scheduleBackups(ctx context.Context) error {
 			return err
 		}
 	}
+	if draining {
+		return nil
+	}
 	return daemon.startNextDeferredMaintenance(ctx, "", true)
+}
+
+func firstDueSchedule(expression string, after, through time.Time) (time.Time, bool, error) {
+	schedule, err := parseFixedUTCSchedule(expression)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	next := schedule.Next(after.UTC().Truncate(time.Minute))
+	return next, !next.After(through.UTC().Truncate(time.Minute)), nil
 }
 
 func (daemon *daemon) hasQueuedScheduledOperation(jobID, runKind string, catchUpOnly bool) bool {
@@ -276,6 +307,10 @@ func (daemon *daemon) hasActiveMaintenance(jobID string) bool {
 
 func (daemon *daemon) startNextDeferredMaintenance(ctx context.Context, jobID string, expiredOnly bool) error {
 	daemon.mu.Lock()
+	if daemon.state.AgentUpdate != nil {
+		daemon.mu.Unlock()
+		return nil
+	}
 	now := daemon.now()
 	commandID := ""
 	priority := 100
@@ -341,6 +376,10 @@ func maintenancePriority(runKind string) int {
 
 func (daemon *daemon) startCatchUpBackup(ctx context.Context, jobID string) error {
 	daemon.mu.Lock()
+	if daemon.state.AgentUpdate != nil {
+		daemon.mu.Unlock()
+		return nil
+	}
 	commandID := ""
 	var command *JournalCommand
 	for id, candidate := range daemon.journal.Commands {

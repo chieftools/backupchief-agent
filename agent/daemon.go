@@ -14,6 +14,7 @@ import (
 
 	"github.com/chieftools/backupchief-agent/pusher"
 	"github.com/chieftools/backupchief-agent/restic"
+	"github.com/chieftools/backupchief-agent/updater"
 )
 
 var ErrPermanentlyStopped = errors.New("agent execution is permanently stopped")
@@ -39,6 +40,7 @@ type daemon struct {
 	client    *Client
 	bootstrap Bootstrap
 	bootID    string
+	version   string
 	now       func() time.Time
 
 	mu       sync.Mutex
@@ -146,6 +148,7 @@ func Run(ctx context.Context, options RunOptions) error {
 		client:             client,
 		bootstrap:          bootstrap,
 		bootID:             bootID,
+		version:            normalizeVersion(options.Version),
 		now:                options.Now,
 		metadata:           metadata,
 		config:             config,
@@ -165,6 +168,18 @@ func Run(ctx context.Context, options RunOptions) error {
 		dispatchWake:       make(chan struct{}, 1),
 		reportWake:         make(chan struct{}, 1),
 		lastScheduleMinute: options.Now().UTC().Truncate(time.Minute),
+	}
+	if err := runtime.restoreAgentUpdateState(); err != nil {
+		return err
+	}
+	if runtime.state.AgentUpdate != nil {
+		if err := updater.WriteReadiness(runtime.store.stateDirectory(), updater.Readiness{
+			CommandID: runtime.state.AgentUpdate.CommandID,
+			RunID:     runtime.state.AgentUpdate.RunID,
+			Version:   runtime.version,
+		}); err != nil {
+			return fmt.Errorf("write updater readiness: %w", err)
+		}
 	}
 	client.ObserveServerTime = runtime.observeServerTime
 	runtime.replaceRealtime(config.Realtime, config.ProtocolRevision)

@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch for Backup Chief agent update requests
+
+[Path]
+PathExists=/var/lib/backupchief/updater-request.json
+Unit=backupchief-updater.service
+
+[Install]
+WantedBy=multi-user.target

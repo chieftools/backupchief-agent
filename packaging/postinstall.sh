@@ -18,6 +18,7 @@ install -d -m 0700 -o backupchief -g backupchief \
 
 if [ -d /run/systemd/system ]; then
     systemctl daemon-reload
+    systemctl enable --now backupchief-updater.path
 
     case "${1:-}" in
         configure)

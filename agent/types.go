@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	ProtocolRevision          = "1.9.0"
+	ProtocolRevision          = "1.10.0"
 	ProtocolHeader            = "BackupChief-Protocol-Revision"
 	LatestProtocolHeader      = "BackupChief-Latest-Protocol-Revision"
 	DefaultEndpoint           = "https://backup.chief.app/agent/v1"
@@ -100,6 +100,15 @@ type RuntimeState struct {
 	ClockOffsetSeconds     int64                         `json:"clock_offset_seconds,omitempty"`
 	ClockOffsetObservedAt  string                        `json:"clock_offset_observed_at,omitempty"`
 	Maintenance            map[string]MaintenanceRuntime `json:"maintenance,omitempty"`
+	AgentUpdate            *AgentUpdateRuntime           `json:"agent_update,omitempty"`
+}
+
+type AgentUpdateRuntime struct {
+	CommandID          string `json:"command_id"`
+	RunID              string `json:"run_id"`
+	TargetVersion      string `json:"target_version"`
+	StartedAt          string `json:"started_at"`
+	LastScheduleMinute string `json:"last_schedule_minute,omitempty"`
 }
 
 type CompleteSnapshotProof struct {
@@ -190,6 +199,7 @@ type CommandPayload struct {
 	Type                   string           `json:"type,omitempty"`
 	Source                 map[string]any   `json:"source,omitempty"`
 	SourceDigest           string           `json:"source_digest,omitempty"`
+	TargetVersion          string           `json:"target_version,omitempty"`
 }
 
 type CommandAcknowledgement struct {
@@ -232,6 +242,19 @@ type CommandResult struct {
 	PruneCompleted      bool                     `json:"-"`
 	RepositoryResults   []RepositoryResult       `json:"repository_results,omitempty"`
 	MaintenancePlan     *MaintenancePlan         `json:"maintenance_plan,omitempty"`
+}
+
+type AgentUpdateResult struct {
+	Generation       uint64 `json:"generation"`
+	RunID            string `json:"run_id"`
+	Status           string `json:"status"`
+	ResultCode       string `json:"result_code"`
+	PreviousVersion  string `json:"previous_version"`
+	TargetVersion    string `json:"target_version"`
+	InstalledVersion string `json:"installed_version"`
+	StartedAt        string `json:"started_at"`
+	FinishedAt       string `json:"finished_at"`
+	Diagnostic       string `json:"diagnostic,omitempty"`
 }
 
 type RepositoryResult struct {

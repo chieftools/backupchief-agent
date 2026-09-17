@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/chieftools/backupchief-agent/agent"
+	"github.com/chieftools/backupchief-agent/updater"
 	"github.com/spf13/cobra"
 )
 
@@ -49,9 +51,33 @@ func NewRootCommand(version string) *cobra.Command {
 	root.AddCommand(newExportCommand(&configPath))
 	root.AddCommand(newRestoreCommand(&configPath))
 	root.AddCommand(newRepositoryCommand(&configPath))
+	root.AddCommand(newInternalUpdateCommand())
 	addDevelopmentCommands(root, version)
 
 	return root
+}
+
+func newInternalUpdateCommand() *cobra.Command {
+	command := &cobra.Command{
+		Use:    "internal-update",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			if os.Geteuid() != 0 {
+				return fmt.Errorf("internal updater must run as root")
+			}
+			store, err := agent.NewSystemFileStore(agent.DefaultPaths())
+			if err != nil {
+				return err
+			}
+			return updater.Run(command.Context(), updater.Options{
+				StateDirectory: filepath.Dir(agent.DefaultPaths().State),
+				ServiceUID:     store.ServiceUID,
+				ServiceGID:     store.ServiceGID,
+			})
+		},
+	}
+	return command
 }
 
 func newSetupCommand(version string, configPath *string) *cobra.Command {

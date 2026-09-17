@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -46,12 +47,29 @@ func probeCapabilities() map[string]any {
 				"rclone":           map[string]any{"available": true, "bundled": true, "version": rclone.Version},
 				"snapshot_export":  map[string]any{"available": true, "archive": "zip"},
 				"snapshot_restore": map[string]any{"available": true, "target": "empty_directory"},
+				"agent_update":     probeAgentUpdate(),
 				"mysql":            mysql, "mysqldump": mysqldump, "psql": psql, "pg_dump": pgDump,
 			},
 		}
 	})
 
 	return capabilities
+}
+
+func probeAgentUpdate() map[string]any {
+	if runtime.GOOS != "linux" {
+		return map[string]any{"available": false, "reason": "unsupported_platform"}
+	}
+	if _, err := os.Stat("/usr/lib/systemd/system/backupchief-updater.service"); err != nil {
+		return map[string]any{"available": false, "reason": "updater_not_installed"}
+	}
+	for _, manager := range []string{"dnf", "yum", "apt-get"} {
+		if _, err := exec.LookPath(manager); err == nil {
+			name := strings.TrimSuffix(manager, "-get")
+			return map[string]any{"available": true, "package_manager": name}
+		}
+	}
+	return map[string]any{"available": false, "reason": "package_manager_unavailable"}
 }
 
 func probeExternalTool(name string) map[string]any {

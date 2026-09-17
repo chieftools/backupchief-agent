@@ -36,6 +36,53 @@ func TestTargetedForgetCommandsRequireProtocolFifteenAndUniqueSnapshotIDs(t *tes
 	}
 }
 
+func TestAgentUpdateCommandsRequireProtocolOneTenAndOneStableTarget(t *testing.T) {
+	command := AgentCommand{
+		ID: "01k4p4h5n8d2r6t7v9w3x1yabe", Generation: 2, Kind: "update_agent",
+		IssuedAt: "2026-09-17T08:20:00.000000Z", ExpiresAt: "2026-09-18T08:20:00.000000Z",
+		Payload: CommandPayload{TargetVersion: "4.8.0"},
+	}
+	if err := validateCommand(command, 2, "1.10.0"); err != nil {
+		t.Fatalf("valid agent update: %v", err)
+	}
+	if err := validateCommand(command, 2, "1.9.0"); err == nil {
+		t.Fatal("agent update was accepted before protocol 1.10")
+	}
+	command.Payload.TargetVersion = "4.8.0-rc.1"
+	if err := validateCommand(command, 2, "1.10.0"); err == nil {
+		t.Fatal("prerelease update target was accepted")
+	}
+}
+
+func TestHeartbeatOmitsAgentUpdateCapabilityBeforeProtocolOneTen(t *testing.T) {
+	body, err := json.Marshal(HeartbeatRequest{
+		Config: HeartbeatConfig{ProtocolRevision: ProtocolRevision},
+		Capabilities: map[string]any{"tools": map[string]any{
+			"snapshot_restore": map[string]any{"available": true},
+			"agent_update":     map[string]any{"available": true},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewritten, err := requestBodyForProtocol("/heartbeat", body, "1.9.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var heartbeat map[string]any
+	if err := json.Unmarshal(rewritten, &heartbeat); err != nil {
+		t.Fatal(err)
+	}
+	capabilities := heartbeat["capabilities"].(map[string]any)
+	tools := capabilities["tools"].(map[string]any)
+	if _, exists := tools["agent_update"]; exists {
+		t.Fatal("legacy heartbeat retained agent update capability")
+	}
+	if _, exists := tools["snapshot_restore"]; !exists {
+		t.Fatal("legacy heartbeat removed an earlier supported capability")
+	}
+}
+
 func TestClientNegotiatesDownAfterRollbackAndBackUpAfterUpgrade(t *testing.T) {
 	var requests atomic.Int32
 	var upgraded atomic.Bool

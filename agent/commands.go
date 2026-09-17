@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/chieftools/backupchief-agent/restic"
+	"github.com/chieftools/backupchief-agent/updater"
 )
 
 func (daemon *daemon) processCommands(ctx context.Context) error {
@@ -34,6 +35,9 @@ func (daemon *daemon) processCommands(ctx context.Context) error {
 }
 
 func (daemon *daemon) dispatchCommands(ctx context.Context) error {
+	if err := daemon.consumeAgentUpdateResult(); err != nil {
+		return err
+	}
 	if err := daemon.reconcileInterrupted(ctx); err != nil {
 		return daemon.handleRequestError(err)
 	}
@@ -66,7 +70,7 @@ func (daemon *daemon) receiveCommand(command AgentCommand) error {
 	}
 
 	runID := command.Payload.RunID
-	if command.Kind == "run_backup" || command.Kind == "run_maintenance" || command.Kind == "inspect_source" || command.Kind == "sync_replica" {
+	if command.Kind == "run_backup" || command.Kind == "run_maintenance" || command.Kind == "inspect_source" || command.Kind == "sync_replica" || command.Kind == "update_agent" {
 		var err error
 		runID, err = newULID(daemon.now())
 		if err != nil {
@@ -80,6 +84,8 @@ func (daemon *daemon) receiveCommand(command AgentCommand) error {
 		runKind = "inspection"
 	} else if command.Kind == "sync_replica" {
 		runKind = "replica_sync"
+	} else if command.Kind == "update_agent" {
+		runKind = "agent_update"
 	}
 	daemon.journal.Commands[command.ID] = &JournalCommand{
 		Command:         command,
@@ -95,6 +101,22 @@ func (daemon *daemon) receiveCommand(command AgentCommand) error {
 	if err := daemon.store.SaveCommandJournal(daemon.journal); err != nil {
 		delete(daemon.journal.Commands, command.ID)
 		return err
+	}
+	if command.Kind == "update_agent" {
+		previous := daemon.state.AgentUpdate
+		daemon.state.AgentUpdate = &AgentUpdateRuntime{
+			CommandID:          command.ID,
+			RunID:              command.ID,
+			TargetVersion:      command.Payload.TargetVersion,
+			StartedAt:          protocolTimestamp(daemon.now()),
+			LastScheduleMinute: protocolTimestamp(daemon.lastScheduleMinute),
+		}
+		if err := daemon.store.SaveRuntimeState(daemon.state); err != nil {
+			daemon.state.AgentUpdate = previous
+			delete(daemon.journal.Commands, command.ID)
+			_ = daemon.store.SaveCommandJournal(daemon.journal)
+			return err
+		}
 	}
 	notifyLoop(daemon.dispatchWake)
 	return nil
@@ -154,6 +176,20 @@ func (daemon *daemon) advanceCommands(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
+			continue
+		}
+		if command.Kind == "update_agent" {
+			if state == "received" {
+				if err := daemon.startAgentUpdate(id); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		daemon.mu.Lock()
+		draining := daemon.state.AgentUpdate != nil
+		daemon.mu.Unlock()
+		if draining {
 			continue
 		}
 		if command.Kind == "inspect_source" && state == "received" {
@@ -267,6 +303,10 @@ func (daemon *daemon) startOperation(ctx context.Context, commandID string, job 
 		return nil
 	}
 	daemon.mu.Lock()
+	if daemon.state.AgentUpdate != nil {
+		daemon.mu.Unlock()
+		return nil
+	}
 	journaled := daemon.journal.Commands[commandID]
 	if journaled == nil || journaled.State != "received" {
 		daemon.mu.Unlock()
@@ -721,6 +761,7 @@ func (daemon *daemon) flushCommand(ctx context.Context, commandID string) error 
 	nextChunk := journaled.NextLogChunk
 	logCompleted := journaled.LogCompleted
 	result := journaled.Result
+	updateResult := journaled.UpdateResult
 	resultReported := journaled.ResultReported
 	command := journaled.Command
 	daemon.mu.Unlock()
@@ -818,7 +859,20 @@ func (daemon *daemon) flushCommand(ctx context.Context, commandID string) error 
 		}
 	}
 
-	if result != nil && !resultReported {
+	if updateResult != nil && !resultReported {
+		if err := daemon.client.SubmitAgentUpdateResult(ctx, command.ID, *updateResult); err != nil {
+			return err
+		}
+		daemon.mu.Lock()
+		if current := daemon.journal.Commands[commandID]; current != nil {
+			current.ResultReported = true
+			if err := daemon.store.SaveCommandJournal(daemon.journal); err != nil {
+				daemon.mu.Unlock()
+				return err
+			}
+		}
+		daemon.mu.Unlock()
+	} else if result != nil && !resultReported {
 		var err error
 		if command.Kind == "inspect_source" {
 			err = daemon.client.SubmitInspectionResult(ctx, command.ID, *result)
@@ -868,7 +922,7 @@ func (daemon *daemon) reconcileInterrupted(ctx context.Context) error {
 	ids := make([]string, 0)
 	replicationJobs := make(map[string]Job)
 	for id, command := range daemon.journal.Commands {
-		if command.State == "running" {
+		if command.State == "running" && command.Command.Kind != "update_agent" {
 			ids = append(ids, id)
 		}
 		if command.State == "finished" && len(command.ReplicationPending) > 0 && command.JobSnapshot != "" {
@@ -893,6 +947,107 @@ func (daemon *daemon) reconcileInterrupted(ctx context.Context) error {
 		daemon.startReplication(ctx, job)
 	}
 	return nil
+}
+
+func (daemon *daemon) restoreAgentUpdateState() error {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	for id, command := range daemon.journal.Commands {
+		if command.Command.Kind != "update_agent" || command.State == "finished" {
+			continue
+		}
+		if daemon.state.AgentUpdate == nil {
+			daemon.state.AgentUpdate = &AgentUpdateRuntime{
+				CommandID: id, RunID: command.RunID, TargetVersion: command.Command.Payload.TargetVersion,
+				StartedAt: command.ReceivedAt,
+			}
+		}
+		if daemon.state.AgentUpdate.LastScheduleMinute != "" {
+			if minute, err := time.Parse("2006-01-02T15:04:05.000000Z", daemon.state.AgentUpdate.LastScheduleMinute); err == nil {
+				daemon.lastScheduleMinute = minute
+			}
+		}
+		return daemon.store.SaveRuntimeState(daemon.state)
+	}
+	return nil
+}
+
+func (daemon *daemon) startAgentUpdate(commandID string) error {
+	daemon.mu.Lock()
+	command := daemon.journal.Commands[commandID]
+	if command == nil || command.State != "received" || daemon.state.AgentUpdate == nil ||
+		len(daemon.active) > 0 || len(daemon.repositories) > 0 || len(daemon.replicationActive) > 0 {
+		daemon.mu.Unlock()
+		return nil
+	}
+	target := command.Command.Payload.TargetVersion
+	command.State = "running"
+	request := updater.Request{
+		CommandID: commandID, RunID: command.RunID, Generation: daemon.bootstrap.Generation,
+		PreviousVersion: daemon.version, TargetVersion: target, StartedAt: daemon.state.AgentUpdate.StartedAt,
+	}
+	if err := daemon.store.SaveCommandJournal(daemon.journal); err != nil {
+		command.State = "received"
+		daemon.mu.Unlock()
+		return err
+	}
+	daemon.mu.Unlock()
+	if err := updater.WriteRequest(daemon.store.stateDirectory(), request); err != nil {
+		daemon.mu.Lock()
+		if current := daemon.journal.Commands[commandID]; current != nil {
+			current.State = "received"
+			_ = daemon.store.SaveCommandJournal(daemon.journal)
+		}
+		daemon.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+func (daemon *daemon) consumeAgentUpdateResult() error {
+	result, err := updater.ReadResult(daemon.store.stateDirectory())
+	if err != nil || result == nil {
+		return err
+	}
+	daemon.mu.Lock()
+	runtime := daemon.state.AgentUpdate
+	if runtime == nil {
+		for _, command := range daemon.journal.Commands {
+			if command.UpdateResult != nil && command.UpdateResult.RunID == result.RunID && command.UpdateResult.TargetVersion == result.TargetVersion {
+				daemon.mu.Unlock()
+				return updater.RemoveResult(daemon.store.stateDirectory())
+			}
+		}
+		daemon.mu.Unlock()
+		return fmt.Errorf("updater result has no active update")
+	}
+	if result.Generation != daemon.bootstrap.Generation || result.RunID != runtime.RunID || result.TargetVersion != runtime.TargetVersion {
+		daemon.mu.Unlock()
+		return fmt.Errorf("updater result does not match the active update")
+	}
+	command := daemon.journal.Commands[runtime.CommandID]
+	if command == nil || command.Command.Kind != "update_agent" {
+		daemon.mu.Unlock()
+		return fmt.Errorf("updater result command is unavailable")
+	}
+	command.State = "finished"
+	command.UpdateResult = &AgentUpdateResult{
+		Generation: result.Generation, RunID: result.RunID, Status: result.Status, ResultCode: result.ResultCode,
+		PreviousVersion: result.PreviousVersion, TargetVersion: result.TargetVersion, InstalledVersion: result.InstalledVersion,
+		StartedAt: result.StartedAt, FinishedAt: result.FinishedAt, Diagnostic: result.Diagnostic,
+	}
+	command.ResultReported = false
+	daemon.state.AgentUpdate = nil
+	if err := daemon.store.SaveCommandJournal(daemon.journal); err != nil {
+		daemon.mu.Unlock()
+		return err
+	}
+	if err := daemon.store.SaveRuntimeState(daemon.state); err != nil {
+		daemon.mu.Unlock()
+		return err
+	}
+	daemon.mu.Unlock()
+	return updater.RemoveResult(daemon.store.stateDirectory())
 }
 
 func (daemon *daemon) reconcileOne(ctx context.Context, commandID string) error {

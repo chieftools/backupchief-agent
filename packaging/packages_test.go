@@ -124,6 +124,8 @@ func TestPackageContents(t *testing.T) {
 			}{
 				{"usr/bin/backupchief", 0755},
 				{"usr/lib/systemd/system/backupchief.service", 0644},
+				{"usr/lib/systemd/system/backupchief-updater.service", 0644},
+				{"usr/lib/systemd/system/backupchief-updater.path", 0644},
 				{"etc/backupchief/config.json", 0640},
 				{"etc/backupchief", 0750},
 			} {
@@ -151,6 +153,12 @@ func TestPackageContents(t *testing.T) {
 					t.Fatalf("packaged service is missing %q", setting)
 				}
 			}
+			updaterUnit := string(read(t, filepath.Join(root, "usr/lib/systemd/system/backupchief-updater.service")))
+			for _, setting := range []string{"User=root", "ExecStart=/usr/bin/backupchief internal-update", "ReadWritePaths=/var/lib/backupchief"} {
+				if !strings.Contains(updaterUnit, "\n"+setting+"\n") {
+					t.Fatalf("packaged updater service is missing %q", setting)
+				}
+			}
 		})
 	}
 }
@@ -162,6 +170,7 @@ func TestPostinstallRestartsOnlyAnActiveServiceDuringUpgrade(t *testing.T) {
 		`if [ -n "${2:-}" ]; then`,
 		`2|3|4|5|6|7|8|9)`,
 		`systemctl try-restart backupchief.service`,
+		`systemctl enable --now backupchief-updater.path`,
 	} {
 		if !strings.Contains(hook, expected) {
 			t.Fatalf("postinstall hook is missing %q", expected)
@@ -169,6 +178,23 @@ func TestPostinstallRestartsOnlyAnActiveServiceDuringUpgrade(t *testing.T) {
 	}
 	if strings.Contains(hook, "systemctl restart backupchief.service") {
 		t.Fatal("postinstall unconditionally restarts the service")
+	}
+}
+
+func TestUpdaterUnitUsesTheFixedRootOnlyPackageBoundary(t *testing.T) {
+	service := string(read(t, "backupchief-updater.service"))
+	for _, expected := range []string{
+		"\nUser=root\n",
+		"\nExecStart=/usr/bin/backupchief internal-update\n",
+		"\nReadWritePaths=/var/lib/backupchief\n",
+	} {
+		if !strings.Contains(service, expected) {
+			t.Fatalf("updater service is missing %q", expected)
+		}
+	}
+	path := string(read(t, "backupchief-updater.path"))
+	if !strings.Contains(path, "\nPathExists=/var/lib/backupchief/updater-request.json\n") {
+		t.Fatal("updater path does not watch the fixed request file")
 	}
 }
 
