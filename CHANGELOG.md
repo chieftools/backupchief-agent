@@ -4,6 +4,12 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.10.2]
+
+### Fixed
+
+- Resolved protected snapshots to each repository's local snapshot IDs before retention, preventing successful replica copies from being reported as missing.
+
 ## [0.10.1]
 
 ### Fixed
@@ -161,7 +167,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.10.1...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.10.2...HEAD
+[0.10.2]: https://github.com/chieftools/backupchief-agent/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/chieftools/backupchief-agent/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/chieftools/backupchief-agent/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/chieftools/backupchief-agent/compare/v0.8.0...v0.9.0
