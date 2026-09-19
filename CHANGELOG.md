@@ -4,6 +4,13 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.14.0]
+
+### Changed
+
+- Limited the packaged agent service to one CPU core and lowered its CPU and I/O scheduling priority so backups, maintenance, replication, and child processes have less impact on host workloads.
+- Limited Restic to one Go worker and one concurrent file read, and removed the filesystem progress pre-scan to reduce CPU and I/O work during backups.
+
 ## [0.13.0]
 
 ### Changed
@@ -209,7 +216,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/chieftools/backupchief-agent/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/chieftools/backupchief-agent/compare/v0.12.1...v0.13.0
 [0.12.1]: https://github.com/chieftools/backupchief-agent/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/chieftools/backupchief-agent/compare/v0.11.0...v0.12.0
