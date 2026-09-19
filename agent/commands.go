@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"time"
@@ -109,7 +110,7 @@ func (daemon *daemon) receiveCommand(command AgentCommand) error {
 		previous := daemon.state.AgentUpdate
 		daemon.state.AgentUpdate = &AgentUpdateRuntime{
 			CommandID:          command.ID,
-			RunID:              command.ID,
+			RunID:              runID,
 			TargetVersion:      command.Payload.TargetVersion,
 			StartedAt:          protocolTimestamp(daemon.now()),
 			LastScheduleMinute: protocolTimestamp(daemon.lastScheduleMinute),
@@ -150,7 +151,15 @@ func (daemon *daemon) advanceCommands(ctx context.Context) error {
 		daemon.mu.Unlock()
 
 		if !acknowledged {
-			err := daemon.client.AcknowledgeCommand(ctx, command.ID, CommandAcknowledgement{
+			discarded, err := daemon.discardExpiredUnacknowledgedCommand(id)
+			if err != nil {
+				return err
+			}
+			if discarded {
+				continue
+			}
+
+			err = daemon.client.AcknowledgeCommand(ctx, command.ID, CommandAcknowledgement{
 				Generation: command.Generation,
 				RunID:      runID,
 				ReceivedAt: receivedAt,
@@ -261,6 +270,36 @@ func (daemon *daemon) advanceCommands(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (daemon *daemon) discardExpiredUnacknowledgedCommand(commandID string) (bool, error) {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+
+	journaled := daemon.journal.Commands[commandID]
+	if journaled == nil || journaled.Acknowledged || journaled.Trigger != "manual" {
+		return false, nil
+	}
+	expiresAt, err := time.Parse("2006-01-02T15:04:05.000000Z", journaled.Command.ExpiresAt)
+	if err != nil || daemon.now().Before(expiresAt) {
+		return false, nil
+	}
+
+	delete(daemon.journal.Commands, commandID)
+	if err := daemon.store.SaveCommandJournal(daemon.journal); err != nil {
+		daemon.journal.Commands[commandID] = journaled
+		return false, err
+	}
+
+	if daemon.state.AgentUpdate != nil && daemon.state.AgentUpdate.CommandID == commandID {
+		daemon.state.AgentUpdate = nil
+		if err := daemon.store.SaveRuntimeState(daemon.state); err != nil {
+			return false, err
+		}
+	}
+
+	log.Printf("backupchief: discarded expired unacknowledged command %s", commandID)
+	return true, nil
 }
 
 func (daemon *daemon) configuredJob(ctx context.Context, jobID string, requiredRevision uint64) (*Job, bool, error) {
@@ -979,23 +1018,64 @@ func (daemon *daemon) reconcileInterrupted(ctx context.Context) error {
 func (daemon *daemon) restoreAgentUpdateState() error {
 	daemon.mu.Lock()
 	defer daemon.mu.Unlock()
+
+	commandIDs := make([]string, 0)
 	for id, command := range daemon.journal.Commands {
-		if command.Command.Kind != "update_agent" || command.State == "finished" {
-			continue
+		if command.Command.Kind == "update_agent" && command.State != "finished" {
+			commandIDs = append(commandIDs, id)
 		}
-		if daemon.state.AgentUpdate == nil {
-			daemon.state.AgentUpdate = &AgentUpdateRuntime{
-				CommandID: id, RunID: command.RunID, TargetVersion: command.Command.Payload.TargetVersion,
-				StartedAt: command.ReceivedAt,
-			}
-		}
-		if daemon.state.AgentUpdate.LastScheduleMinute != "" {
-			if minute, err := time.Parse("2006-01-02T15:04:05.000000Z", daemon.state.AgentUpdate.LastScheduleMinute); err == nil {
-				daemon.lastScheduleMinute = minute
-			}
-		}
-		return daemon.store.SaveRuntimeState(daemon.state)
 	}
+	sort.Strings(commandIDs)
+
+	if len(commandIDs) == 0 {
+		if daemon.state.AgentUpdate == nil {
+			return nil
+		}
+		orphanedCommandID := daemon.state.AgentUpdate.CommandID
+		daemon.state.AgentUpdate = nil
+		if err := daemon.store.SaveRuntimeState(daemon.state); err != nil {
+			return err
+		}
+		log.Printf("backupchief: cleared orphaned agent update state for command %s", orphanedCommandID)
+		return nil
+	}
+
+	commandID := commandIDs[0]
+	if current := daemon.state.AgentUpdate; current != nil {
+		if command := daemon.journal.Commands[current.CommandID]; command != nil && command.Command.Kind == "update_agent" && command.State != "finished" {
+			commandID = current.CommandID
+		}
+	}
+	command := daemon.journal.Commands[commandID]
+	startedAt := command.ReceivedAt
+	lastScheduleMinute := ""
+	if current := daemon.state.AgentUpdate; current != nil {
+		if current.CommandID == commandID && current.StartedAt != "" {
+			startedAt = current.StartedAt
+		}
+		lastScheduleMinute = current.LastScheduleMinute
+	}
+	restored := &AgentUpdateRuntime{
+		CommandID:          commandID,
+		RunID:              command.RunID,
+		TargetVersion:      command.Command.Payload.TargetVersion,
+		StartedAt:          startedAt,
+		LastScheduleMinute: lastScheduleMinute,
+	}
+	repaired := daemon.state.AgentUpdate == nil || *daemon.state.AgentUpdate != *restored
+	daemon.state.AgentUpdate = restored
+	if restored.LastScheduleMinute != "" {
+		if minute, err := time.Parse("2006-01-02T15:04:05.000000Z", restored.LastScheduleMinute); err == nil {
+			daemon.lastScheduleMinute = minute
+		}
+	}
+	if !repaired {
+		return nil
+	}
+	if err := daemon.store.SaveRuntimeState(daemon.state); err != nil {
+		return err
+	}
+	log.Printf("backupchief: restored agent update state for command %s", commandID)
 	return nil
 }
 
