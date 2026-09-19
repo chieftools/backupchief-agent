@@ -4,6 +4,17 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.12.0]
+
+### Added
+
+- Added SFTP storage destinations for primary and replica repositories, including backups, maintenance, replication, restores, and exports.
+- Added password and Ed25519 authentication for SFTP, with pinned host-key verification and guarded connections through the bundled rclone transport.
+
+### Changed
+
+- Updated the agent protocol to 1.11 for SFTP storage configuration.
+
 ## [0.11.0]
 
 ### Added
@@ -180,7 +191,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/chieftools/backupchief-agent/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/chieftools/backupchief-agent/compare/v0.10.2...v0.11.0
 [0.10.2]: https://github.com/chieftools/backupchief-agent/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/chieftools/backupchief-agent/compare/v0.10.0...v0.10.1
