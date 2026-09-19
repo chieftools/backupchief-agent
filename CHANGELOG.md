@@ -4,6 +4,12 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.14.1]
+
+### Changed
+
+- Adjusted the packaged agent CPU quota at boot to half of the machine's online processors, with a minimum of one core and a maximum of four, while retaining its lowered CPU scheduling priority.
+
 ## [0.14.0]
 
 ### Changed
@@ -216,7 +222,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.14.1...HEAD
+[0.14.1]: https://github.com/chieftools/backupchief-agent/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/chieftools/backupchief-agent/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/chieftools/backupchief-agent/compare/v0.12.1...v0.13.0
 [0.12.1]: https://github.com/chieftools/backupchief-agent/compare/v0.12.0...v0.12.1
