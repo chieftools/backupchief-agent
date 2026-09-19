@@ -311,6 +311,7 @@ func (daemon *daemon) startNextDeferredMaintenance(ctx context.Context, jobID st
 		daemon.mu.Unlock()
 		return nil
 	}
+
 	now := daemon.now()
 	commandID := ""
 	priority := 100
@@ -336,6 +337,7 @@ func (daemon *daemon) startNextDeferredMaintenance(ctx context.Context, jobID st
 		daemon.mu.Unlock()
 		return nil
 	}
+
 	command := daemon.journal.Commands[commandID]
 	wasWaiting := command.WaitForBackup
 	command.WaitForBackup = false
@@ -353,9 +355,11 @@ func (daemon *daemon) startNextDeferredMaintenance(ctx context.Context, jobID st
 	if !ready {
 		return nil
 	}
+
 	if job == nil || !job.Enabled {
 		return daemon.finishWithoutExecution(commandID, "skipped", "config_unavailable", "The required job configuration is unavailable.")
 	}
+
 	return daemon.startOperation(ctx, commandID, *job)
 }
 

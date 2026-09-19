@@ -308,13 +308,17 @@ func (store *FileStore) importLegacyState(database *bolt.DB) error {
 	if stateErr != nil && !errors.Is(stateErr, os.ErrNotExist) {
 		return fmt.Errorf("read legacy runtime state: %w", stateErr)
 	}
+
 	stateFound := stateErr == nil
+
 	var journal CommandJournal
 	journalErr := readJSON(store.commandsPath(), &journal)
 	if journalErr != nil && !errors.Is(journalErr, os.ErrNotExist) {
 		return fmt.Errorf("read legacy command state: %w", journalErr)
 	}
+
 	journalFound := journalErr == nil
+
 	err := database.Update(func(transaction *bolt.Tx) error {
 		if stateFound {
 			data, marshalErr := json.Marshal(state)
@@ -325,6 +329,7 @@ func (store *FileStore) importLegacyState(database *bolt.DB) error {
 				return err
 			}
 		}
+
 		if journalFound {
 			for id, command := range journal.Commands {
 				if command == nil || id != command.Command.ID {
@@ -338,6 +343,7 @@ func (store *FileStore) importLegacyState(database *bolt.DB) error {
 				if err := transaction.Bucket(commandsBucket).Put([]byte(id), commandData); err != nil {
 					return err
 				}
+
 				run := *command
 				run.Events = nil
 				runData, marshalErr := json.Marshal(run)
@@ -347,6 +353,7 @@ func (store *FileStore) importLegacyState(database *bolt.DB) error {
 				if err := transaction.Bucket(runsBucket).Put([]byte(command.Command.ID), runData); err != nil {
 					return err
 				}
+
 				for _, event := range command.Events {
 					eventData, marshalErr := json.Marshal(event)
 					if marshalErr != nil {
@@ -359,16 +366,19 @@ func (store *FileStore) importLegacyState(database *bolt.DB) error {
 				}
 			}
 		}
+
 		return transaction.Bucket(metadataBucket).Put(legacyImportedKey, []byte("1"))
 	})
 	if err != nil {
 		return fmt.Errorf("import legacy state: %w", err)
 	}
+
 	for _, path := range []string{store.Paths.State, store.commandsPath()} {
 		if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			return fmt.Errorf("remove imported legacy state: %w", removeErr)
 		}
 	}
+
 	return nil
 }
 
@@ -461,6 +471,7 @@ func (store *FileStore) compactStateDatabase() error {
 	if err != nil {
 		return err
 	}
+
 	temporary, err := os.CreateTemp(filepath.Dir(store.databasePath()), ".state-compact-*")
 	if err != nil {
 		_ = source.Close()
@@ -476,6 +487,7 @@ func (store *FileStore) compactStateDatabase() error {
 		_ = source.Close()
 		return err
 	}
+
 	target, err := bolt.Open(temporaryPath, 0o600, nil)
 	if err != nil {
 		_ = source.Close()
@@ -488,10 +500,12 @@ func (store *FileStore) compactStateDatabase() error {
 		_ = os.Remove(temporaryPath)
 		return errors.Join(compactErr, closeTargetErr, closeSourceErr)
 	}
+
 	if err := os.Rename(temporaryPath, store.databasePath()); err != nil {
 		_ = os.Remove(temporaryPath)
 		return fmt.Errorf("replace compacted state database: %w", err)
 	}
+
 	directory, err := os.Open(filepath.Dir(store.databasePath()))
 	if err != nil {
 		return fmt.Errorf("open compacted state directory: %w", err)
@@ -500,6 +514,7 @@ func (store *FileStore) compactStateDatabase() error {
 	if err := directory.Sync(); err != nil {
 		return fmt.Errorf("sync compacted state directory: %w", err)
 	}
+
 	return nil
 }
 

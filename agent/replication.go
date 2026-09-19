@@ -200,12 +200,14 @@ func (daemon *daemon) finishReplicationBatch(job Job, repository JobRepository, 
 		if command == nil || command.Result == nil || !slices.Contains(command.ReplicationPending, repository.Key) {
 			continue
 		}
+
 		snapshots := make([]map[string]any, 0, len(command.Result.SnapshotIDs))
 		if status == "complete" {
 			for _, original := range command.Result.SnapshotIDs {
 				snapshots = append(snapshots, map[string]any{"original_snapshot_id": original, "snapshot_id": mappings[original]})
 			}
 		}
+
 		payload := map[string]any{
 			"repository_key": repository.Key, "repository_id": repository.ID, "status": status,
 			"result_code": resultCode, "started_at": protocolTimestamp(startedAt), "finished_at": protocolTimestamp(finishedAt),
@@ -217,10 +219,12 @@ func (daemon *daemon) finishReplicationBatch(job Job, repository JobRepository, 
 		if status == "failed" {
 			payload["diagnostic"] = boundedReplicationDiagnostic(diagnostic)
 		}
+
 		command.Sequence++
 		if eventID, err := newULID(daemon.now()); err == nil {
 			command.Events = append(command.Events, daemon.eventEnvelope(command, eventID, command.Sequence, protocolTimestamp(finishedAt), "replication_finished", payload))
 		}
+
 		if status == "complete" {
 			command.ReplicationPending = removeString(command.ReplicationPending, repository.Key)
 			delete(command.ReplicationRetryAt, repository.Key)
@@ -231,6 +235,7 @@ func (daemon *daemon) finishReplicationBatch(job Job, repository JobRepository, 
 			command.ReplicationRetryAt[repository.Key] = protocolTimestamp(daemon.now().Add(15 * time.Minute))
 		}
 	}
+
 	_ = daemon.store.SaveCommandJournal(daemon.journal)
 	notifyLoop(daemon.reportWake)
 }

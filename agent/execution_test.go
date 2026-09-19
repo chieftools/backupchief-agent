@@ -521,6 +521,7 @@ func TestCancelRunStopsTheActiveExecutionAndPersistsItsResult(t *testing.T) {
 		RunID: runID, ConfigRevision: 1, Trigger: "manual", ReceivedAt: protocolTimestamp(time.Now()), Acknowledged: true,
 		State: "received", Events: []AgentEvent{},
 	}
+
 	bootstrap := testBootstrap()
 	bootstrap.ServerID = runID
 	daemon := &daemon{
@@ -528,6 +529,7 @@ func TestCancelRunStopsTheActiveExecutionAndPersistsItsResult(t *testing.T) {
 		journal:  CommandJournal{Version: commandJournalVersion, Commands: map[string]*JournalCommand{commandID: journaled}},
 		executor: executor, active: map[string]context.CancelFunc{}, repositories: map[string]bool{},
 	}
+
 	if err := daemon.startBackup(context.Background(), commandID, job); err != nil {
 		t.Fatal(err)
 	}
@@ -536,6 +538,7 @@ func TestCancelRunStopsTheActiveExecutionAndPersistsItsResult(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("backup did not start")
 	}
+
 	if err := daemon.cancelRun(runID); err != nil {
 		t.Fatal(err)
 	}
@@ -544,6 +547,7 @@ func TestCancelRunStopsTheActiveExecutionAndPersistsItsResult(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("backup did not stop")
 	}
+
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		daemon.mu.Lock()
@@ -557,6 +561,7 @@ func TestCancelRunStopsTheActiveExecutionAndPersistsItsResult(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
+
 	t.Fatal("cancelled result was not persisted")
 }
 

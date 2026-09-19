@@ -18,6 +18,7 @@ func TestReenrollAdvancesGenerationAndRetiresOldWork(t *testing.T) {
 	oldTokenHash := old.SetupTokenHash
 	newToken := "bcenr_syntheticReplacementToken1234567890ABCDE"
 	now := time.Date(2026, 9, 11, 10, 30, 0, 0, time.UTC)
+
 	var newCredential string
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set(ProtocolHeader, ProtocolRevision)
@@ -42,6 +43,7 @@ func TestReenrollAdvancesGenerationAndRetiresOldWork(t *testing.T) {
 		}
 	}))
 	defer server.Close()
+
 	old.Endpoint = server.URL + "/agent/v1"
 	if err := store.SaveBootstrap(old); err != nil {
 		t.Fatal(err)
@@ -49,6 +51,7 @@ func TestReenrollAdvancesGenerationAndRetiresOldWork(t *testing.T) {
 	if _, err := store.SaveConfig(old, testConfigBody(1, 1, ProtocolRevision), nil); err != nil {
 		t.Fatal(err)
 	}
+
 	receivedID := "01k4p4f7m1r9d3t6v8w2x5y7zb"
 	runningID := "01k4p4f7m1r9d3t6v8w2x5y7zc"
 	journal := CommandJournal{Version: commandJournalVersion, Commands: map[string]*JournalCommand{
@@ -72,6 +75,7 @@ func TestReenrollAdvancesGenerationAndRetiresOldWork(t *testing.T) {
 	if manager.stopCount() != 1 || manager.callCount() != 1 {
 		t.Fatalf("service transitions: stop=%d start=%d", manager.stopCount(), manager.callCount())
 	}
+
 	persisted, err := store.LoadCommandJournal()
 	if err != nil {
 		t.Fatal(err)
@@ -87,10 +91,12 @@ func TestReenrollAdvancesGenerationAndRetiresOldWork(t *testing.T) {
 	if persisted.Commands[receivedID].Result.ResultCode != "cancelled" || persisted.Commands[runningID].Result.ResultCode != "outcome_unresolved" {
 		t.Fatalf("retired results: %+v", persisted.Commands)
 	}
+
 	records, err := store.loadRetiredEnrollments("")
 	if err != nil || len(records) != 1 || records[0].Credential != old.Credential || records[0].Generation != 1 {
 		t.Fatalf("retired enrollment: %+v %v", records, err)
 	}
+
 	state, err := store.LoadRuntimeState()
 	if err != nil || !reflect.DeepEqual(state, RuntimeState{}) {
 		t.Fatalf("runtime state was not reset: %+v %v", state, err)
@@ -102,6 +108,7 @@ func TestReenrollReplaysIdentityAfterResponseLoss(t *testing.T) {
 	old := testBootstrap()
 	token := "bcenr_syntheticReenrollmentReplay123456789ABCDE"
 	now := time.Date(2026, 9, 11, 11, 30, 0, 0, time.UTC)
+
 	var requests []EnrollmentRequest
 	var credential string
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
@@ -128,6 +135,7 @@ func TestReenrollReplaysIdentityAfterResponseLoss(t *testing.T) {
 		}
 	}))
 	defer server.Close()
+
 	old.Endpoint = server.URL + "/agent/v1"
 	if err := store.SaveBootstrap(old); err != nil {
 		t.Fatal(err)
@@ -156,6 +164,7 @@ func TestReenrollReplaysIdentityAfterResponseLoss(t *testing.T) {
 	if err != nil || len(before) != 1 {
 		t.Fatalf("retired identity after response loss: %+v %v", before, err)
 	}
+
 	options.HTTPClient = server.Client()
 	bootstrap, err := Enroll(context.Background(), token, options)
 	if err != nil {
@@ -165,6 +174,7 @@ func TestReenrollReplaysIdentityAfterResponseLoss(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if len(requests) != 2 || requests[0].AttemptID != requests[1].AttemptID || requests[0].Credential != requests[1].Credential {
 		t.Fatalf("re-enrollment replay changed identity: %+v", requests)
 	}
@@ -192,6 +202,7 @@ func TestRetiredReporterUsesOnlyTerminalEndpoints(t *testing.T) {
 		ConfigRevision: 1, Trigger: "manual", Sequence: 1, OccurredAt: protocolTimestamp(time.Now()),
 		Kind: "run_finished", Payload: terminalEventPayload(*command.Result),
 	}}
+
 	log := []byte("synthetic retired generation log")
 	if err := store.WriteRunLog(logID, log); err != nil {
 		t.Fatal(err)
@@ -203,6 +214,7 @@ func TestRetiredReporterUsesOnlyTerminalEndpoints(t *testing.T) {
 	if err := store.SaveCommandJournal(journal); err != nil {
 		t.Fatal(err)
 	}
+
 	var paths []string
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set(ProtocolHeader, ProtocolRevision)
@@ -223,6 +235,7 @@ func TestRetiredReporterUsesOnlyTerminalEndpoints(t *testing.T) {
 		}
 	}))
 	defer server.Close()
+
 	if err := store.saveRetiredEnrollments("", []retiredEnrollment{{
 		Endpoint: server.URL + "/agent/v1", ServerID: current.ServerID, Generation: 1,
 		Credential: oldCredential, ExpiresAt: protocolTimestamp(time.Now().Add(time.Hour)),
@@ -241,10 +254,12 @@ func TestRetiredReporterUsesOnlyTerminalEndpoints(t *testing.T) {
 	if len(paths) != 3 {
 		t.Fatalf("terminal request paths: %v", paths)
 	}
+
 	persisted, err := store.LoadCommandJournal()
 	if err != nil || len(persisted.Commands) != 0 {
 		t.Fatalf("retired journal remains: %+v %v", persisted, err)
 	}
+
 	records, err := store.loadRetiredEnrollments("")
 	if err != nil || len(records) != 0 {
 		t.Fatalf("retired identity remains: %+v %v", records, err)
@@ -269,12 +284,14 @@ func TestRetiredReporterDropsOnlyTheUnknownRun(t *testing.T) {
 		ConfigRevision: 1, Trigger: "manual", Sequence: 1, OccurredAt: protocolTimestamp(time.Now()),
 		Kind: "run_finished", Payload: map[string]any{},
 	}}
+
 	journal := CommandJournal{Version: commandJournalVersion, Commands: map[string]*JournalCommand{
 		firstID: first, secondID: second,
 	}}
 	if err := store.SaveCommandJournal(journal); err != nil {
 		t.Fatal(err)
 	}
+
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set(ProtocolHeader, ProtocolRevision)
@@ -287,6 +304,7 @@ func TestRetiredReporterDropsOnlyTheUnknownRun(t *testing.T) {
 		_, _ = io.WriteString(response, `{"protocol_revision":"`+ProtocolRevision+`","results":[{"id":"01k4p4f7m1r9d3t6v8w2x5y7zg","status":"accepted"}]}`)
 	}))
 	defer server.Close()
+
 	if err := store.saveRetiredEnrollments("", []retiredEnrollment{{
 		Endpoint: server.URL + "/agent/v1", ServerID: current.ServerID, Generation: 1,
 		Credential: testBootstrap().Credential, ExpiresAt: protocolTimestamp(time.Now().Add(time.Hour)),
@@ -305,6 +323,7 @@ func TestRetiredReporterDropsOnlyTheUnknownRun(t *testing.T) {
 	if requests != 2 {
 		t.Fatalf("terminal requests: %d", requests)
 	}
+
 	persisted, err := store.LoadCommandJournal()
 	if err != nil || len(persisted.Commands) != 0 {
 		t.Fatalf("retired journal remains: %+v %v", persisted, err)

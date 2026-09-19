@@ -775,17 +775,21 @@ func validRealtimeConfigBody(t *testing.T) []byte {
 
 func forwardCompatibleConfigBody(t *testing.T) []byte {
 	t.Helper()
+
 	var document map[string]any
 	if err := json.Unmarshal(validJobConfigBody(), &document); err != nil {
 		t.Fatal(err)
 	}
+
 	document["future_settings"] = map[string]any{"mode": "synthetic"}
+
 	destinations := document["destinations"].(map[string]any)
 	destinations["storage_01k4p4f7m1r9d3t6v8w2x5y7zc"].(map[string]any)["future_region_mode"] = true
 	destinations["storage_01k4p4f7m1r9d3t6v8w2x5y7zd"] = map[string]any{
 		"driver": "archive-vault",
 		"vault":  map[string]any{"endpoint": "https://vault.example.invalid"},
 	}
+
 	jobs := document["jobs"].(map[string]any)
 	knownJob := jobs["job_01k4p4f7m1r9d3t6v8w2x5y7za"].(map[string]any)
 	knownJob["future_policy"] = map[string]any{"enabled": true}
@@ -809,6 +813,7 @@ func forwardCompatibleConfigBody(t *testing.T) []byte {
 		},
 		"schedule": "0 4 * * *",
 	}
+
 	body, err := json.Marshal(document)
 	if err != nil {
 		t.Fatal(err)

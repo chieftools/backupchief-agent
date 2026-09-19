@@ -46,15 +46,18 @@ type authenticationWire struct {
 	PrivateKey string `json:"private_key,omitempty"`
 }
 
+// DecodeDestination tolerates additive fields so managed configurations remain forward-compatible.
 func DecodeDestination(data []byte) (Destination, error) {
 	var document destinationDocument
 	if err := json.Unmarshal(data, &document); err != nil {
 		return Destination{}, err
 	}
+
 	destination, err := destinationFromDocument(document)
 	if err != nil {
 		return Destination{}, err
 	}
+
 	return destination, destination.Validate()
 }
 
@@ -63,6 +66,7 @@ func (destination Destination) MarshalJSON() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	return json.Marshal(document)
 }
 
@@ -71,6 +75,7 @@ func (destination *Destination) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
+
 	*destination = decoded
 	return nil
 }
@@ -89,6 +94,7 @@ func (destination Destination) document() (destinationDocument, error) {
 		if err != nil {
 			return destinationDocument{}, err
 		}
+
 		return destinationDocument{
 			Driver: DriverSFTP, Host: value.Host, Port: value.Port, Username: value.Username,
 			RootPath: value.RootPath, HostKeys: append([]string(nil), value.HostKeys...), Auth: &auth,
@@ -104,11 +110,13 @@ func destinationFromDocument(document destinationDocument) (Destination, error) 
 		if document.Endpoint != "" || document.Region != "" || document.Bucket != "" || document.Prefix != "" || document.AccessKey != "" || document.SecretKey != "" || hasSFTPDocument(document) {
 			return Destination{}, errors.New("local settings are invalid")
 		}
+
 		return NewLocalDestination(document.Path), nil
 	case DriverS3:
 		if document.Path != "" || hasSFTPDocument(document) {
 			return Destination{}, errors.New("S3 settings are invalid")
 		}
+
 		return NewS3Destination(S3Destination{
 			Endpoint: document.Endpoint, Region: document.Region, Bucket: document.Bucket, Prefix: document.Prefix,
 			AccessKey: document.AccessKey, SecretKey: document.SecretKey,
@@ -121,6 +129,7 @@ func destinationFromDocument(document destinationDocument) (Destination, error) 
 		if err != nil {
 			return Destination{}, err
 		}
+
 		return NewSFTPDestination(SFTPDestination{
 			Host: document.Host, Port: document.Port, Username: document.Username, RootPath: document.RootPath,
 			HostKeys: document.HostKeys, Authentication: auth,
@@ -139,20 +148,25 @@ func (connection Connection) MarshalJSON() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	return json.Marshal(document)
 }
 
 func (connection *Connection) UnmarshalJSON(data []byte) error {
+	// Helper request payloads are a trust boundary, so unknown fields must fail closed.
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
+
 	var document connectionDocument
 	if err := decoder.Decode(&document); err != nil {
 		return err
 	}
+
 	decoded, err := connectionFromDocument(document)
 	if err != nil {
 		return err
 	}
+
 	*connection = decoded
 	return nil
 }
@@ -171,6 +185,7 @@ func (connection Connection) document() (connectionDocument, error) {
 		if err != nil {
 			return connectionDocument{}, err
 		}
+
 		return connectionDocument{
 			Driver: DriverSFTP, Path: value.Path, Host: value.Host, Port: value.Port, Username: value.Username,
 			HostKeys: append([]string(nil), value.HostKeys...), Auth: &auth,
@@ -186,11 +201,13 @@ func connectionFromDocument(document connectionDocument) (Connection, error) {
 		if document.Endpoint != "" || document.Bucket != "" || document.Prefix != "" || document.Region != "" || document.AccessKey != "" || document.SecretKey != "" || hasSFTPConnectionDocument(document) {
 			return Connection{}, errors.New("invalid local connection")
 		}
+
 		return NewLocalConnection(document.Path), nil
 	case DriverS3:
 		if document.Path != "" || hasSFTPConnectionDocument(document) {
 			return Connection{}, errors.New("invalid S3 connection")
 		}
+
 		return NewS3Connection(S3Connection{
 			Endpoint: document.Endpoint, Bucket: document.Bucket, Prefix: document.Prefix, Region: document.Region,
 			AccessKey: document.AccessKey, SecretKey: document.SecretKey,
@@ -203,6 +220,7 @@ func connectionFromDocument(document connectionDocument) (Connection, error) {
 		if err != nil {
 			return Connection{}, err
 		}
+
 		return NewSFTPConnection(SFTPConnection{
 			Host: document.Host, Port: document.Port, Username: document.Username, Path: document.Path,
 			HostKeys: document.HostKeys, Authentication: auth,
@@ -233,11 +251,13 @@ func authenticationFromDocument(document authenticationWire) (SFTPAuthentication
 		if document.PrivateKey != "" {
 			return SFTPAuthentication{}, errors.New("SFTP password authentication is invalid")
 		}
+
 		return PasswordAuthentication(document.Password), nil
 	case "ed25519":
 		if document.Password != "" {
 			return SFTPAuthentication{}, errors.New("SFTP Ed25519 authentication is invalid")
 		}
+
 		return Ed25519Authentication(document.PrivateKey), nil
 	default:
 		return SFTPAuthentication{}, errors.New("SFTP authentication method is invalid")

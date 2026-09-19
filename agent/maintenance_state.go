@@ -22,6 +22,7 @@ func (daemon *daemon) prepareMaintenanceLocked(job Job, journaled *JournalComman
 	if daemon.state.Maintenance == nil {
 		daemon.state.Maintenance = make(map[string]MaintenanceRuntime)
 	}
+
 	runtimeState := daemon.state.Maintenance[job.Repository.ID]
 	if newerCompleteProof(job.Retention.LatestComplete, runtimeState.LatestComplete) {
 		runtimeState.LatestComplete = cloneCompleteProof(job.Retention.LatestComplete)
@@ -36,6 +37,7 @@ func (daemon *daemon) prepareMaintenanceLocked(job Job, journaled *JournalComman
 		persisted := *journaled.MaintenancePlan
 		plan = &persisted
 	}
+
 	if journaled.RunKind == "forget" && len(journaled.Command.Payload.SnapshotIDs) == 0 && job.Maintenance.Strategy == "after_scheduled_backup" && plan == nil {
 		pruneDue := true
 		if lastPrune, err := time.Parse("2006-01-02T15:04:05.000000Z", runtimeState.LastPruneCompletedAt); err == nil {
@@ -44,6 +46,7 @@ func (daemon *daemon) prepareMaintenanceLocked(job Job, journaled *JournalComman
 		plan = &MaintenancePlan{Kind: "forget", CombinedRetention: true, PruneAfterForget: pruneDue}
 		journaled.MaintenancePlan = plan
 	}
+
 	if journaled.RunKind == "check_data" && plan == nil {
 		if runtimeState.DataParts != job.Integrity.DataParts {
 			runtimeState.DataParts = job.Integrity.DataParts
@@ -57,10 +60,12 @@ func (daemon *daemon) prepareMaintenanceLocked(job Job, journaled *JournalComman
 		}
 		journaled.MaintenancePlan = plan
 	}
+
 	if job.Retention.HasUnresolvedRuns {
 		runtimeState.Unresolved = true
 	}
 	daemon.state.Maintenance[job.Repository.ID] = runtimeState
+
 	return job, plan
 }
 
@@ -68,22 +73,26 @@ func (daemon *daemon) recordOutcomeLocked(job Job, result CommandResult) {
 	if daemon.state.Maintenance == nil {
 		daemon.state.Maintenance = make(map[string]MaintenanceRuntime)
 	}
+
 	runtimeState := daemon.state.Maintenance[job.Repository.ID]
 	if result.RunKind == "backup" && result.Status == "complete" && len(result.SnapshotIDs) > 0 {
 		runtimeState.LatestComplete = &CompleteSnapshotProof{
 			RunID: result.RunID, FinishedAt: result.FinishedAt, SnapshotIDs: append([]string(nil), result.SnapshotIDs...),
 		}
 	}
+
 	if result.Status == "unresolved" {
 		runtimeState.Unresolved = true
 		runtimeState.UnresolvedConfirmed = false
 		runtimeState.UnresolvedAtRevision = daemon.metadata.Revision
 	}
+
 	if result.RunKind == "snapshot_inventory" && result.Status == "complete" && result.ResultCode == "success" && result.SnapshotEvidence != nil && result.SnapshotEvidence.Scope == "repository" {
 		runtimeState.Unresolved = false
 		runtimeState.UnresolvedConfirmed = false
 		runtimeState.UnresolvedAtRevision = 0
 	}
+
 	if result.RunKind == "check_data" && result.Status == "complete" && result.ResultCode == "success" {
 		parts := job.Integrity.DataParts
 		part := uint64(1)
@@ -93,9 +102,11 @@ func (daemon *daemon) recordOutcomeLocked(job Job, result CommandResult) {
 		runtimeState.DataParts = parts
 		runtimeState.NextDataPart = part%parts + 1
 	}
+
 	if result.RunKind == "forget" && result.PruneCompleted {
 		runtimeState.LastPruneCompletedAt = result.FinishedAt
 	}
+
 	daemon.state.Maintenance[job.Repository.ID] = runtimeState
 	_ = daemon.store.SaveRuntimeState(daemon.state)
 }
@@ -126,17 +137,20 @@ func (daemon *daemon) acceptMaintenanceConfigLocked(config Config) ([]context.Ca
 	if daemon.state.Maintenance == nil {
 		daemon.state.Maintenance = make(map[string]MaintenanceRuntime)
 	}
+
 	availableJobs := make(map[string]bool, len(config.Jobs))
 	for index := range config.Jobs {
 		job := &config.Jobs[index]
 		if !job.Enabled {
 			continue
 		}
+
 		availableJobs[job.ID] = true
 		runtimeState := daemon.state.Maintenance[job.Repository.ID]
 		if newerCompleteProof(job.Retention.LatestComplete, runtimeState.LatestComplete) {
 			runtimeState.LatestComplete = cloneCompleteProof(job.Retention.LatestComplete)
 		}
+
 		if job.Retention.HasUnresolvedRuns {
 			runtimeState.Unresolved = true
 			runtimeState.UnresolvedConfirmed = true
@@ -150,6 +164,7 @@ func (daemon *daemon) acceptMaintenanceConfigLocked(config Config) ([]context.Ca
 			runtimeState.DataParts = job.Integrity.DataParts
 			runtimeState.NextDataPart = 1
 		}
+
 		daemon.state.Maintenance[job.Repository.ID] = runtimeState
 	}
 
@@ -165,6 +180,7 @@ func (daemon *daemon) acceptMaintenanceConfigLocked(config Config) ([]context.Ca
 		if command.RunKind == "" || availableJobs[command.Command.Payload.JobID] {
 			continue
 		}
+
 		if command.State == "running" {
 			if cancel := daemon.active[command.RunID]; cancel != nil {
 				cancellations = append(cancellations, cancel)
@@ -173,5 +189,6 @@ func (daemon *daemon) acceptMaintenanceConfigLocked(config Config) ([]context.Ca
 			queued = append(queued, commandID)
 		}
 	}
+
 	return cancellations, queued
 }

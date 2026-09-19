@@ -372,6 +372,7 @@ func DecodeConfig(data []byte, expectedGeneration uint64) (Config, ConfigMetadat
 
 func normalizeConfig(document configDocument, expectedGeneration uint64) (Config, error) {
 	managed := document.Metadata.Generation != 0 || expectedGeneration != 0
+
 	if managed {
 		if !compatibleProtocolRevision(document.Metadata.ProtocolRevision) || document.Metadata.SchemaVersion != ConfigSchemaVersion ||
 			document.Metadata.Generation == 0 || document.Metadata.Revision == 0 || !validateTimestamp(document.Metadata.IssuedAt) {
@@ -385,12 +386,14 @@ func normalizeConfig(document configDocument, expectedGeneration uint64) (Config
 			return Config{}, fmt.Errorf("standalone configuration cannot contain managed metadata")
 		}
 	}
+
 	if document.Schema != "" && document.Schema != ConfigSchemaURL {
 		return Config{}, fmt.Errorf("configuration schema URL is unsupported")
 	}
 	if runeLength(document.Host.Name) > 255 || strings.ContainsRune(document.Host.Name, 0) {
 		return Config{}, fmt.Errorf("host name is invalid")
 	}
+
 	hostID := ""
 	if document.Host.ID != "" {
 		var err error
@@ -405,6 +408,7 @@ func normalizeConfig(document configDocument, expectedGeneration uint64) (Config
 	if err := validateRealtime(document.Realtime, hostID, document.Metadata.Generation); err != nil {
 		return Config{}, err
 	}
+
 	if document.Destinations == nil || len(document.Destinations) > 1000 {
 		return Config{}, fmt.Errorf("configuration must define destinations")
 	}
@@ -429,17 +433,20 @@ func normalizeConfig(document configDocument, expectedGeneration uint64) (Config
 		unsupportedDestinations: make(map[string]json.RawMessage),
 		unsupportedJobs:         make(map[string]json.RawMessage),
 	}
+
 	destinationKeys := sortedRawMessageKeys(document.Destinations)
 	for _, key := range destinationKeys {
 		raw := document.Destinations[key]
 		if !storageConfigKeyPattern.MatchString(key) || managed && !ulidPattern.MatchString(strings.TrimPrefix(key, "storage_")) {
 			return Config{}, fmt.Errorf("destination %q has an invalid key", key)
 		}
+
 		driver, err := decodeResourceDiscriminator(raw, "driver")
 		if err != nil {
 			return Config{}, fmt.Errorf("destination %q: %w", key, err)
 		}
 		if !slices.Contains([]string{"local", "s3", "sftp"}, driver) {
+			// Preserve unknown resources so an older agent does not erase newer config.
 			config.unsupportedDestinations[key] = cloneRawMessage(raw)
 			config.addWarning(fmt.Sprintf("destination %q uses unsupported driver %q; skipped", key, driver))
 			continue
@@ -450,12 +457,14 @@ func normalizeConfig(document configDocument, expectedGeneration uint64) (Config
 		}
 		config.Destinations[key] = destination
 	}
+
 	jobKeys := sortedRawMessageKeys(document.Jobs)
 	for _, key := range jobKeys {
 		raw := document.Jobs[key]
 		if !jobConfigKeyPattern.MatchString(key) || managed && !ulidPattern.MatchString(strings.TrimPrefix(key, "job_")) {
 			return Config{}, fmt.Errorf("job %q: key is invalid", key)
 		}
+
 		jobType, err := decodeResourceDiscriminator(raw, "type")
 		if err != nil {
 			return Config{}, fmt.Errorf("job %q: %w", key, err)
@@ -470,6 +479,7 @@ func normalizeConfig(document configDocument, expectedGeneration uint64) (Config
 			config.addWarning(fmt.Sprintf("job %q requires protocol revision %s; skipped", key, jobTypeIntroducedIn(JobType(jobType))))
 			continue
 		}
+
 		var document jobDocument
 		if err := json.Unmarshal(raw, &document); err != nil {
 			return Config{}, fmt.Errorf("job %q: decode: %w", key, err)
@@ -479,12 +489,14 @@ func normalizeConfig(document configDocument, expectedGeneration uint64) (Config
 			config.addWarning(fmt.Sprintf("job %q references unsupported destination %q; skipped", key, document.Repository.Destination))
 			continue
 		}
+
 		job, err := normalizeJob(key, document, config.Destinations, managed)
 		if err != nil {
 			return Config{}, fmt.Errorf("job %q: %w", key, err)
 		}
 		config.Jobs = append(config.Jobs, job)
 	}
+
 	slices.SortFunc(config.Jobs, func(left, right Job) int { return strings.Compare(left.Key, right.Key) })
 	return config, nil
 }
@@ -582,6 +594,7 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 	if !jobConfigKeyPattern.MatchString(key) {
 		return Job{}, fmt.Errorf("key is invalid")
 	}
+
 	keyID := strings.TrimPrefix(key, "job_")
 	if managed && !ulidPattern.MatchString(keyID) {
 		return Job{}, fmt.Errorf("key is invalid")
@@ -592,6 +605,7 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 	if raw.Name != "" && (runeLength(raw.Name) > 255 || strings.ContainsRune(raw.Name, 0)) {
 		return Job{}, fmt.Errorf("name is invalid")
 	}
+
 	oneFileSystem := true
 	if raw.Source.OneFileSystem != nil {
 		oneFileSystem = *raw.Source.OneFileSystem
@@ -600,10 +614,12 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 	if raw.Enabled != nil {
 		enabled = *raw.Enabled
 	}
+
 	jobID := keyID
 	if !ulidPattern.MatchString(jobID) {
 		jobID = derivedID("job:" + key)
 	}
+
 	destination, exists := destinations[raw.Repository.Destination]
 	if !exists {
 		return Job{}, fmt.Errorf("repository references unknown destination %q", raw.Repository.Destination)
@@ -612,6 +628,7 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 	if err != nil {
 		return Job{}, err
 	}
+
 	repositoryID := raw.Repository.ID
 	if repositoryID == "" {
 		repositoryID = fmt.Sprintf("%x", sha256.Sum256([]byte(location)))
@@ -620,6 +637,7 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 	if primaryKey == "" && ulidPattern.MatchString(jobID) {
 		primaryKey = "repository_" + strings.ToLower(jobID)
 	}
+
 	replicas := make([]JobRepository, 0, len(raw.Replicas))
 	replicaSetups := make([]JobRepository, 0, len(raw.ReplicaSetups))
 	seenRepositories := map[string]bool{primaryKey: true}
@@ -628,6 +646,7 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 			if !repositoryConfigKeyPattern.MatchString(replica.RepositoryKey) || !digestPattern.MatchString(replica.ID) || seenRepositories[replica.RepositoryKey] || replica.Source != primaryKey || !slices.Contains([]string{"provisioning", "active", "failed"}, replica.Status) {
 				return fmt.Errorf("replica repository identity is invalid")
 			}
+
 			replicaDestination, exists := destinations[replica.Destination]
 			if !exists {
 				return fmt.Errorf("replica references unknown destination %q", replica.Destination)
@@ -636,6 +655,7 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 			if err != nil {
 				return fmt.Errorf("replica repository: %w", err)
 			}
+
 			if replica.Password == "" || runeLength(replica.Password) > 1024 || strings.ContainsAny(replica.Password, "\r\n\x00") {
 				return fmt.Errorf("replica repository password is invalid")
 			}
@@ -646,8 +666,10 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 				Connection: replicaConnection,
 			})
 		}
+
 		return nil
 	}
+
 	if err := normalizeReplicas(raw.Replicas, &replicas); err != nil {
 		return Job{}, err
 	}
@@ -657,10 +679,12 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 	if len(replicas)+len(replicaSetups) > 0 && (raw.Replication == nil || raw.Replication.Mode != "attached" || !raw.Replication.Coalesce || !slices.Contains([]uint64{0, 604800}, raw.Replication.SafetyHoldSeconds)) {
 		return Job{}, fmt.Errorf("replication policy is invalid")
 	}
+
 	retention := defaultRetention(key)
 	if raw.Retention != nil {
 		applyRetention(&retention, *raw.Retention)
 	}
+
 	integrity := defaultIntegrity(key, retention)
 	if raw.Integrity != nil {
 		if raw.Integrity.MetadataSchedule != "" {
@@ -674,6 +698,7 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 			integrity.DataParts = raw.Integrity.DataParts
 		}
 	}
+
 	if raw.Safety != nil {
 		if raw.Safety.LatestComplete != nil {
 			runID, err := parsePrefixedULID(raw.Safety.LatestComplete.RunID, "run_")
@@ -688,6 +713,7 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 		}
 		retention.HasUnresolvedRuns = raw.Safety.HasUnresolvedRuns
 		retention.ProtectedSnapshotIDs = append([]string{}, raw.Safety.ProtectedSnapshotIDs...)
+
 		for _, runID := range raw.Safety.ProtectedRunIDs {
 			parsed, err := parsePrefixedULID(runID, "run_")
 			if err != nil {
@@ -696,6 +722,7 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 			retention.ProtectedRunIDs = append(retention.ProtectedRunIDs, parsed)
 		}
 	}
+
 	jobSource := JobSource{
 		Root:          raw.Source.Root,
 		OneFileSystem: oneFileSystem,
@@ -732,6 +759,7 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 			TableSelection:     normalizeTableSelection(raw.Source.TableSelection),
 		}}
 	}
+
 	job := Job{
 		Key:     key,
 		ID:      jobID,
@@ -761,9 +789,11 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 			PruneIntervalSeconds: raw.Maintenance.PruneIntervalSeconds,
 		}
 	}
+
 	if err := validateJob(job); err != nil {
 		return Job{}, err
 	}
+
 	return job, nil
 }
 
@@ -929,11 +959,15 @@ func encodeConfig(config Config, managedDigest string) ([]byte, error) {
 		Destinations: map[string]json.RawMessage{},
 		Jobs:         map[string]json.RawMessage{},
 	}
+
 	if config.Generation == 0 {
 		document.Metadata.ProtocolRevision = ""
 		document.Metadata.Digest = ""
 	}
+
 	destinationKeys := make(map[string]string, len(config.Destinations))
+
+	// Unknown resources are round-tripped verbatim for forward compatibility.
 	for key, raw := range config.unsupportedDestinations {
 		document.Destinations[key] = cloneRawMessage(raw)
 	}
@@ -946,9 +980,11 @@ func encodeConfig(config Config, managedDigest string) ([]byte, error) {
 		}
 		document.Destinations[prefixedKey] = raw
 	}
+
 	for key, raw := range config.unsupportedJobs {
 		document.Jobs[key] = cloneRawMessage(raw)
 	}
+
 	for _, job := range config.Jobs {
 		enabled := job.Enabled
 		oneFileSystem := job.Source.OneFileSystem
@@ -956,6 +992,7 @@ func encodeConfig(config Config, managedDigest string) ([]byte, error) {
 		if destinationKey == "" {
 			destinationKey = prefixConfigKey(job.Repository.Destination, "storage_")
 		}
+
 		var latestComplete *completeSnapshotProofDocument
 		if job.Retention.LatestComplete != nil {
 			latestComplete = &completeSnapshotProofDocument{
@@ -964,6 +1001,7 @@ func encodeConfig(config Config, managedDigest string) ([]byte, error) {
 				SnapshotIDs: append([]string{}, job.Retention.LatestComplete.SnapshotIDs...),
 			}
 		}
+
 		jobKey := prefixConfigKey(job.Key, "job_")
 		source := sourceDocument{
 			Root: job.Source.Root, OneFileSystem: &oneFileSystem, Excludes: job.Source.Excludes,
@@ -985,6 +1023,7 @@ func encodeConfig(config Config, managedDigest string) ([]byte, error) {
 				TableSelection:     encodeTableSelection(postgresql.TableSelection),
 			}
 		}
+
 		documentJob := jobDocument{
 			Name:    job.Name,
 			Type:    job.Type,
@@ -1034,6 +1073,7 @@ func encodeConfig(config Config, managedDigest string) ([]byte, error) {
 				})
 			}
 		}
+
 		if len(job.ReplicaSetups) > 0 {
 			documentJob.ReplicaSetups = make([]repositoryDocument, 0, len(job.ReplicaSetups))
 			for _, replica := range job.ReplicaSetups {
@@ -1058,16 +1098,19 @@ func encodeConfig(config Config, managedDigest string) ([]byte, error) {
 				PruneIntervalSeconds: job.Maintenance.PruneIntervalSeconds,
 			}
 		}
+
 		raw, err := json.Marshal(documentJob)
 		if err != nil {
 			return nil, fmt.Errorf("encode job %q: %w", jobKey, err)
 		}
 		document.Jobs[jobKey] = raw
 	}
+
 	encoded, err := json.MarshalIndent(document, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("encode configuration: %w", err)
 	}
+
 	return append(encoded, '\n'), nil
 }
 
@@ -1115,6 +1158,7 @@ func validateJob(job Job) error {
 	if job.ID == "" || !digestPattern.MatchString(job.ID) && !ulidPattern.MatchString(job.ID) {
 		return fmt.Errorf("id is invalid")
 	}
+
 	if job.Type == JobTypeFile {
 		if !filepath.IsAbs(job.Source.Root) || runeLength(job.Source.Root) > 4096 || !job.Source.OneFileSystem || len(job.Source.Excludes) > 100 || job.Source.MySQL != nil || job.Source.PostgreSQL != nil {
 			return fmt.Errorf("source is invalid")
@@ -1139,12 +1183,14 @@ func validateJob(job Job) error {
 			return err
 		}
 	}
+
 	if job.Repository.Location == "" || runeLength(job.Repository.Location) > 2048 || !digestPattern.MatchString(job.Repository.ID) || job.Repository.Key != "" && !repositoryConfigKeyPattern.MatchString(job.Repository.Key) {
 		return fmt.Errorf("repository identity is invalid")
 	}
 	if job.Repository.ServicePassword == "" || runeLength(job.Repository.ServicePassword) > 1024 || strings.ContainsAny(job.Repository.ServicePassword, "\r\n\x00") {
 		return fmt.Errorf("repository password is invalid")
 	}
+
 	for _, replica := range job.Replicas {
 		if !repositoryConfigKeyPattern.MatchString(replica.Key) || !digestPattern.MatchString(replica.ID) || replica.Source != job.Repository.Key || replica.Location == "" || runeLength(replica.Location) > 2048 || !slices.Contains([]string{"provisioning", "active", "failed"}, replica.Status) {
 			return fmt.Errorf("replica repository is invalid")
@@ -1155,12 +1201,14 @@ func validateJob(job Job) error {
 			return fmt.Errorf("replica setup repository is invalid")
 		}
 	}
+
 	if _, err := parseFixedUTCSchedule(job.Schedule.Expression); err != nil {
 		return fmt.Errorf("schedule is invalid: %w", err)
 	}
 	if job.Maintenance.Strategy != "" && (job.Maintenance.Strategy != "after_scheduled_backup" || job.Maintenance.MaxDeferralSeconds < 3600 || job.Maintenance.MaxDeferralSeconds > 604800 || job.Maintenance.PruneIntervalSeconds < 86400 || job.Maintenance.PruneIntervalSeconds > 2678400) {
 		return fmt.Errorf("maintenance policy is invalid")
 	}
+
 	retention := job.Retention
 	if retention.Last > 8760 || retention.Hourly > 8760 || retention.Daily > 3660 || retention.Weekly > 520 || retention.Monthly > 120 || retention.Yearly > 100 || !retention.KeepLatestComplete || retention.GroupBy != "" {
 		return fmt.Errorf("retention is invalid")
@@ -1307,6 +1355,7 @@ func validateTableSelection(selection *TableSelection, selectionMode string, dat
 	for _, database := range databases {
 		selected[database] = true
 	}
+
 	covered := make(map[string]bool, len(databases))
 	seen := make(map[string]bool, len(selection.Tables))
 	for _, table := range selection.Tables {
@@ -1314,6 +1363,7 @@ func validateTableSelection(selection *TableSelection, selectionMode string, dat
 		if postgresql {
 			maximum = 63
 		}
+
 		if table.Database == "" || table.Table == "" || runeLength(table.Database) > maximum || runeLength(table.Table) > maximum || containsControl(table.Database) || containsControl(table.Table) {
 			return fmt.Errorf("table selection is invalid")
 		}
@@ -1330,6 +1380,7 @@ func validateTableSelection(selection *TableSelection, selectionMode string, dat
 		if selectionMode == "exclude" && selected[table.Database] {
 			return fmt.Errorf("table selection is invalid")
 		}
+
 		key := table.Database + "\x00" + table.Schema + "\x00" + table.Table
 		if seen[key] {
 			return fmt.Errorf("table selection is invalid")
@@ -1337,6 +1388,7 @@ func validateTableSelection(selection *TableSelection, selectionMode string, dat
 		seen[key] = true
 		covered[table.Database] = true
 	}
+
 	if selection.Mode == "include" {
 		for _, database := range databases {
 			if !covered[database] {
@@ -1438,10 +1490,12 @@ func walkJSONValue(decoder *json.Decoder) error {
 	if err != nil {
 		return err
 	}
+
 	delimiter, ok := token.(json.Delim)
 	if !ok {
 		return nil
 	}
+
 	switch delimiter {
 	case '{':
 		keys := map[string]struct{}{}
@@ -1450,6 +1504,7 @@ func walkJSONValue(decoder *json.Decoder) error {
 			if err != nil {
 				return err
 			}
+
 			key, ok := keyToken.(string)
 			if !ok {
 				return fmt.Errorf("object key is not a string")
@@ -1457,11 +1512,13 @@ func walkJSONValue(decoder *json.Decoder) error {
 			if _, exists := keys[key]; exists {
 				return fmt.Errorf("duplicate object key %q", key)
 			}
+
 			keys[key] = struct{}{}
 			if err := walkJSONValue(decoder); err != nil {
 				return err
 			}
 		}
+
 		_, err = decoder.Token()
 		return err
 	case '[':
@@ -1470,6 +1527,7 @@ func walkJSONValue(decoder *json.Decoder) error {
 				return err
 			}
 		}
+
 		_, err = decoder.Token()
 		return err
 	default:

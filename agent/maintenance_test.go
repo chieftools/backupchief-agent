@@ -167,6 +167,7 @@ func TestForgetPersistsAProtectedFixedSnapshotPlanBeforeRemoval(t *testing.T) {
 		{ExitCode: 0, Outcome: "complete"},
 		{ExitCode: 0, Outcome: "complete", Output: `[{"id":"` + protected + `"}]`},
 	}}
+
 	job := maintenanceExecutionJob(t)
 	job.Retention = JobRetention{
 		Last: 2, Daily: 7, KeepLatestComplete: true,
@@ -174,6 +175,7 @@ func TestForgetPersistsAProtectedFixedSnapshotPlanBeforeRemoval(t *testing.T) {
 			RunID: "01k4p4f7m1r9d3t6v8w2x5y7ze", FinishedAt: "2026-09-10T08:00:00.000000Z", SnapshotIDs: []string{protected},
 		},
 	}
+
 	command := maintenanceJournalCommand("forget", job.ID)
 	var persisted MaintenancePlan
 	persistedBeforeForget := false
@@ -196,6 +198,7 @@ func TestForgetPersistsAProtectedFixedSnapshotPlanBeforeRemoval(t *testing.T) {
 	if len(executor.requests) != 4 || executor.requests[1].Operation != "forget_plan" || executor.requests[2].Operation != "forget" || !reflect.DeepEqual(executor.requests[2].SnapshotIDs, []string{first, second}) {
 		t.Fatalf("requests: %+v", executor.requests)
 	}
+
 	wantStatistics := RunStatistics{
 		"snapshots_considered": uint64(3), "snapshots_removed": uint64(2),
 		"snapshots_retained": uint64(1), "snapshots_protected": uint64(1),
@@ -582,15 +585,18 @@ func TestMaintenanceRuntimeClearsOnlyAfterCentralConfirmationAndRotatesSuccessfu
 		}},
 		journal: newCommandJournal(), active: map[string]context.CancelFunc{},
 	}
+
 	runtime.acceptMaintenanceConfigLocked(config)
 	if !runtime.state.Maintenance[job.Repository.ID].Unresolved {
 		t.Fatal("the same central revision cleared a local unresolved marker")
 	}
+
 	config.Revision = 3
 	runtime.acceptMaintenanceConfigLocked(config)
 	if !runtime.state.Maintenance[job.Repository.ID].Unresolved {
 		t.Fatal("a newer config cleared an unresolved result before central confirmation")
 	}
+
 	config.Jobs[0].Retention.HasUnresolvedRuns = true
 	runtime.acceptMaintenanceConfigLocked(config)
 	config.Revision = 4
@@ -599,15 +605,18 @@ func TestMaintenanceRuntimeClearsOnlyAfterCentralConfirmationAndRotatesSuccessfu
 	if runtime.state.Maintenance[job.Repository.ID].Unresolved {
 		t.Fatal("a later safe central revision did not clear the confirmed unresolved marker")
 	}
+
 	runtime.recordOutcomeLocked(job, CommandResult{RunKind: "check_data", Status: "complete", ResultCode: "success"})
 	if runtime.state.Maintenance[job.Repository.ID].NextDataPart != 2 {
 		t.Fatalf("data rotation: %+v", runtime.state.Maintenance[job.Repository.ID])
 	}
+
 	runtime.state.Maintenance[job.Repository.ID] = MaintenanceRuntime{Unresolved: true}
 	runtime.recordOutcomeLocked(job, CommandResult{
 		RunKind: "snapshot_inventory", Status: "complete", ResultCode: "success",
 		SnapshotEvidence: &SnapshotEvidence{Scope: "repository"},
 	})
+
 	if runtime.state.Maintenance[job.Repository.ID].Unresolved {
 		t.Fatal("a verified full inventory did not clear local repository uncertainty")
 	}
@@ -709,6 +718,7 @@ func TestScheduledMaintenanceCompletesOfflineAndReplaysAfterRestart(t *testing.T
 		{ExitCode: 0, Outcome: "complete"},
 		{ExitCode: 0, Outcome: "complete", Output: `[{"id":"` + protected + `"}]`},
 	}}
+
 	config := schedulerConfig(job)
 	now := time.Date(2026, 9, 11, 0, 59, 0, 0, time.UTC)
 	runtime := newSchedulerDaemon(t, store, config, &now, executor)
@@ -716,6 +726,7 @@ func TestScheduledMaintenanceCompletesOfflineAndReplaysAfterRestart(t *testing.T
 	if err := runtime.scheduleBackups(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		runtime.mu.Lock()
@@ -761,6 +772,7 @@ func TestScheduledMaintenanceCompletesOfflineAndReplaysAfterRestart(t *testing.T
 		}
 	}))
 	defer server.Close()
+
 	restarted := newSchedulerDaemon(t, store, config, &now, executor)
 	restarted.client = NewClient(server.URL+"/agent/v1", testBootstrap().Credential, "1.1.0", server.Client())
 	if err := restarted.reportJournal(context.Background()); err != nil {
@@ -781,6 +793,7 @@ func TestSchedulerEnforcesTwoBackupOneMaintenanceAndRepositorySerialization(t *t
 	executor := &schedulerExecutor{release: release}
 	now := time.Date(2026, 9, 13, 0, 59, 0, 0, time.UTC)
 	jobs := make([]Job, 4)
+
 	for index := range jobs {
 		jobs[index] = maintenanceExecutionJob(t)
 		jobs[index].ID = []string{
@@ -796,12 +809,14 @@ func TestSchedulerEnforcesTwoBackupOneMaintenanceAndRepositorySerialization(t *t
 	}
 	jobs[0].Schedule.Expression = "0 1 * * *"
 	jobs[1].Schedule.Expression = "0 1 * * *"
+
 	config := Config{ProtocolRevision: ProtocolRevision, Generation: 1, Revision: 2, SchemaVersion: ConfigSchemaVersion, Jobs: jobs}
 	runtime := newSchedulerDaemon(t, store, config, &now, executor)
 	now = time.Date(2026, 9, 13, 1, 0, 0, 0, time.UTC)
 	if err := runtime.scheduleBackups(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+
 	waitForScheduledExecutions(t, executor, 3)
 
 	runtime.mu.Lock()
@@ -815,6 +830,7 @@ func TestSchedulerEnforcesTwoBackupOneMaintenanceAndRepositorySerialization(t *t
 	if overlaps != 3 {
 		t.Fatalf("overlaps=%d journal=%d", overlaps, len(runtime.journal.Commands))
 	}
+
 	close(release)
 	waitForAllScheduledRuns(t, runtime, 6)
 }

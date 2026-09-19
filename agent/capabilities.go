@@ -25,9 +25,11 @@ func probeCapabilities() map[string]any {
 		mysql := probeExternalTool("mysql")
 		mysqldump := probeExternalTool("mysqldump")
 		mysqlAvailable := mysql["available"] == true && mysqldump["available"] == true
+
 		psql := probeExternalTool("psql")
 		pgDump := probeExternalTool("pg_dump")
 		postgresqlAvailable := psql["available"] == true && pgDump["available"] == true
+
 		capabilities = map[string]any{
 			"backup_types": map[string]any{
 				"file": map[string]any{"available": true},

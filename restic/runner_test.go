@@ -28,18 +28,21 @@ func TestSFTPRepositoryUsesPinnedBundledRcloneTransport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	request := testRequest(t)
 	request.Connection = repository.NewSFTPConnection(repository.SFTPConnection{
 		Host: "archive.example.test", Port: 2222, Username: "synthetic-backup",
 		Path: "/repositories/job-example", HostKeys: []string{"ssh-ed25519 c3ludGhldGljLWhvc3Qta2V5"},
 		Authentication: repository.Ed25519Authentication(string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: encoded}))),
 	})
+
 	prepared, configuration, err := repository.PrepareRclone(request.Connection, repository.RcloneOptions{
 		Name: "backupchief_repository", Program: "/private/runtime/rclone", ProxyURL: "http://127.0.0.1:43210",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	arguments, _, err := request.argumentsPrepared("password", "", "cache", prepared)
 	if err != nil {
 		t.Fatal(err)
@@ -57,6 +60,7 @@ func TestSFTPRepositoryUsesPinnedBundledRcloneTransport(t *testing.T) {
 			t.Fatalf("missing %q in configuration: %s", expected, configuration)
 		}
 	}
+
 	if !slices.Contains(arguments, "rclone.program=/private/runtime/rclone") {
 		t.Fatalf("arguments=%v", arguments)
 	}
@@ -323,18 +327,21 @@ func TestDualRepositoryTransportUsesBundledRclone(t *testing.T) {
 		SourceConnection: &source, Password: "synthetic-destination-password", SourcePassword: "synthetic-source-password",
 		TimeoutSeconds: 3600, LockWaitSeconds: 30,
 	}
+
 	destinationPrepared, destinationConfig, err := repository.PrepareRclone(request.Connection, repository.RcloneOptions{
 		Name: "backupchief_destination", Program: "/private/runtime/rclone",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	sourcePrepared, sourceConfig, err := repository.PrepareRclone(source, repository.RcloneOptions{
 		Name: "backupchief_source", Program: "/private/runtime/rclone",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	args, _, err := request.dualArguments("destination-password", "source-password", "cache", destinationPrepared, sourcePrepared)
 	if err != nil {
 		t.Fatal(err)
@@ -342,6 +349,7 @@ func TestDualRepositoryTransportUsesBundledRclone(t *testing.T) {
 	if !slices.Contains(args, "rclone.program=/private/runtime/rclone") {
 		t.Fatalf("missing bundled rclone program: %v", args)
 	}
+
 	config := sourceConfig + destinationConfig
 	for _, section := range []string{"[backupchief_source]", "[backupchief_destination]"} {
 		if !strings.Contains(config, section) {

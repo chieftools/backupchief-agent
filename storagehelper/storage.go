@@ -47,6 +47,7 @@ type Result struct {
 
 func Run(ctx context.Context, state string, request Request) Result {
 	result := Result{Version: ProtocolVersion, Outcome: "failed"}
+
 	if request.Version != ProtocolVersion {
 		result.Diagnostic = "unsupported storage request version"
 		return result
@@ -54,6 +55,7 @@ func Run(ctx context.Context, state string, request Request) Result {
 	if request.Operation == "generate_ed25519" {
 		return generateEd25519()
 	}
+
 	sftp, sftpConnection := request.Connection.SFTP()
 	if request.TimeoutSeconds < 1 || request.TimeoutSeconds > 3600 || !sftpConnection {
 		result.Diagnostic = "invalid storage request"
@@ -62,6 +64,7 @@ func Run(ctx context.Context, state string, request Request) Result {
 
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(request.TimeoutSeconds)*time.Second)
 	defer cancel()
+
 	if err := privateDirectory(state); err != nil {
 		result.Diagnostic = "invalid private state directory"
 		return result
@@ -99,6 +102,7 @@ func Run(ctx context.Context, state string, request Request) Result {
 	}
 
 	if request.TrustOnFirstUse {
+		// Discovery is immediately replaced with an explicitly pinned configuration.
 		if _, err = run([]string{"lsd", remote("/")}, ""); err != nil {
 			result.Diagnostic = "SFTP connection or first-use host-key discovery failed"
 			return result
@@ -108,11 +112,13 @@ func Run(ctx context.Context, state string, request Request) Result {
 			result.Diagnostic = "cannot read discovered SFTP host keys"
 			return result
 		}
+
 		sftp.HostKeys = repository.ParseHostKeys(string(configurationBytes))
 		if len(sftp.HostKeys) == 0 {
 			result.Diagnostic = "SFTP server did not provide a host key"
 			return result
 		}
+
 		request.Connection = repository.NewSFTPConnection(sftp)
 		binding.Connection = request.Connection
 		binding.TrustOnFirstUse = false
@@ -128,17 +134,20 @@ func Run(ctx context.Context, state string, request Request) Result {
 			result.Diagnostic = "SFTP root path is unavailable"
 			return result
 		}
+
 		token := make([]byte, 24)
 		if _, err = rand.Read(token); err != nil {
 			result.Diagnostic = "cannot create storage verification token"
 			return result
 		}
+
 		proof := base64.RawURLEncoding.EncodeToString(token)
 		proofPath := path.Join(sftp.Path, ".backupchief-verify-"+proof)
 		if _, err = run([]string{"rcat", remote(proofPath)}, proof); err != nil {
 			result.Diagnostic = "SFTP write verification failed"
 			return result
 		}
+
 		contents, readErr := run([]string{"cat", remote(proofPath)}, "")
 		_, deleteErr := run([]string{"deletefile", remote(proofPath)}, "")
 		if readErr != nil || string(contents) != proof || deleteErr != nil {
@@ -150,6 +159,7 @@ func Run(ctx context.Context, state string, request Request) Result {
 			result.Diagnostic = "invalid SFTP file request"
 			return result
 		}
+
 		if _, err = run([]string{"rcat", remote(path.Join(sftp.Path, request.RelativePath))}, request.Contents); err != nil {
 			result.Diagnostic = "SFTP file write failed"
 			return result
@@ -159,6 +169,7 @@ func Run(ctx context.Context, state string, request Request) Result {
 			result.Diagnostic = "invalid SFTP directory request"
 			return result
 		}
+
 		if _, err = run([]string{"purge", remote(path.Join(sftp.Path, request.RelativePath))}, ""); err != nil {
 			result.Diagnostic = "SFTP directory deletion failed"
 			return result
@@ -170,6 +181,7 @@ func Run(ctx context.Context, state string, request Request) Result {
 
 	result.Outcome = "complete"
 	result.HostKeys = append([]string(nil), sftp.HostKeys...)
+
 	return result
 }
 
@@ -178,10 +190,12 @@ func generateEd25519() Result {
 	if err != nil {
 		return Result{Version: ProtocolVersion, Outcome: "failed", Diagnostic: "cannot generate Ed25519 key"}
 	}
+
 	privateBytes, err := x509.MarshalPKCS8PrivateKey(privateKey)
 	if err != nil {
 		return Result{Version: ProtocolVersion, Outcome: "failed", Diagnostic: "cannot encode Ed25519 key"}
 	}
+
 	wire := sshPublicKey(publicKey)
 	fingerprint := sha256.Sum256(wire)
 	return Result{
@@ -198,9 +212,11 @@ func sshPublicKey(publicKey ed25519.PublicKey) []byte {
 	wire := make([]byte, 4+len(algorithm)+4+len(publicKey))
 	binary.BigEndian.PutUint32(wire, uint32(len(algorithm)))
 	copy(wire[4:], algorithm)
+
 	offset := 4 + len(algorithm)
 	binary.BigEndian.PutUint32(wire[offset:], uint32(len(publicKey)))
 	copy(wire[offset+4:], publicKey)
+
 	return wire
 }
 
@@ -212,11 +228,13 @@ func safeRelativePath(value string) bool {
 	if value == "" || len(value) > 1024 || strings.ContainsAny(value, "\\\x00") || strings.HasPrefix(value, "/") {
 		return false
 	}
+
 	for _, part := range strings.Split(value, "/") {
 		if part == "" || part == "." || part == ".." {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -224,6 +242,7 @@ func privateDirectory(directory string) error {
 	if !filepath.IsAbs(directory) || strings.ContainsRune(directory, 0) {
 		return errors.New("state directory must be absolute")
 	}
+
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		return err
 	}
@@ -231,5 +250,6 @@ func privateDirectory(directory string) error {
 	if err != nil || !info.IsDir() || info.Mode().Perm()&0077 != 0 {
 		return fmt.Errorf("state directory must be private")
 	}
+
 	return nil
 }

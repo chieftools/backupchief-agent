@@ -141,6 +141,7 @@ func TestHeartbeatReportsAcceptedConfigurationWarnings(t *testing.T) {
 	store := newAgentTestStore(t)
 	bootstrap := testBootstrap()
 	warning := `job "job_01k4p4f7m1r9d3t6v8w2x5y7zb" uses unsupported type "database-export"; skipped`
+
 	var heartbeat HeartbeatRequest
 	client := NewClient(bootstrap.Endpoint, bootstrap.Credential, "1.1.0", &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.URL.Path != "/agent/v1/heartbeat" {
@@ -157,6 +158,7 @@ func TestHeartbeatReportsAcceptedConfigurationWarnings(t *testing.T) {
 			Body:       http.NoBody,
 		}, nil
 	})})
+
 	runtime := &daemon{
 		store: store, client: client, bootstrap: bootstrap,
 		bootID: "01k4p4f7m1r9d3t6v8w2x5y7zc",
@@ -212,6 +214,7 @@ func TestDaemonRefreshesAnIncompatibleConfigBeforeStarting(t *testing.T) {
 	)
 	latest := testConfigBody(1, 2, ProtocolRevision)
 	ctx, cancel := context.WithCancel(context.Background())
+
 	var cancelOnce sync.Once
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set(ProtocolHeader, ProtocolRevision)
@@ -233,6 +236,7 @@ func TestDaemonRefreshesAnIncompatibleConfigBeforeStarting(t *testing.T) {
 		}
 	}))
 	defer server.Close()
+
 	bootstrap.Endpoint = server.URL + "/agent/v1"
 	if err := store.SaveBootstrap(bootstrap); err != nil {
 		t.Fatal(err)
@@ -242,6 +246,7 @@ func TestDaemonRefreshesAnIncompatibleConfigBeforeStarting(t *testing.T) {
 	if err := Run(ctx, RunOptions{Store: store, HTTPClient: server.Client(), Version: "1.1.0-test"}); err != nil {
 		t.Fatal(err)
 	}
+
 	plaintext, metadata, err := store.LoadConfig(bootstrap)
 	config, _, decodeErr := DecodeConfig(plaintext, 1)
 	if err != nil || decodeErr != nil || metadata.Revision != 2 || config.Revision != 2 {

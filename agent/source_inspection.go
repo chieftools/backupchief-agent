@@ -26,11 +26,13 @@ func inspectSource(ctx context.Context, generation uint64, runID, stateDirectory
 		result.Failure = inspectionFailure("source_validation", fmt.Sprintf("encode source payload: %v", err))
 		return result
 	}
+
 	var source sourceDocument
 	if err := json.Unmarshal(encoded, &source); err != nil {
 		result.Failure = inspectionFailure("source_validation", fmt.Sprintf("decode source payload: %v", err))
 		return result
 	}
+
 	if payload.Type == "file" {
 		info, err := os.Lstat(source.Root)
 		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
@@ -43,12 +45,14 @@ func inspectSource(ctx context.Context, generation uint64, runID, stateDirectory
 			result.Failure = inspectionFailure("source_access", detail)
 			return result
 		}
+
 		result.Status = "complete"
 		result.ResultCode = "success"
 		result.Summary = "The source directory is available."
 		result.Failure = nil
 		return result
 	}
+
 	jobType := JobType(payload.Type)
 	if isPostgreSQLJob(jobType) {
 		if source.Selection == nil || !validPostgreSQLJobSource(jobType, &PostgreSQLSource{SelectionMode: source.Selection.Mode, TableSelection: normalizeTableSelection(source.TableSelection)}) {
@@ -57,10 +61,12 @@ func inspectSource(ctx context.Context, generation uint64, runID, stateDirectory
 		}
 		return inspectPostgreSQLSource(ctx, result, source, stateDirectory)
 	}
+
 	if !isMySQLJob(jobType) || source.Selection == nil || source.Dump == nil || !validMySQLJobSource(jobType, &MySQLSource{SelectionMode: source.Selection.Mode, TableSelection: normalizeTableSelection(source.TableSelection)}) {
 		result.Failure = inspectionFailure("source_validation", "The source type or required source fields are not supported by this agent.")
 		return result
 	}
+
 	mysql := MySQLSource{
 		Host: source.Host, Port: source.Port, Username: source.Username, Password: source.Password,
 		SelectionMode: source.Selection.Mode, Databases: source.Selection.Databases,
@@ -73,6 +79,7 @@ func inspectSource(ctx context.Context, generation uint64, runID, stateDirectory
 		result.Failure = inspectionFailure("source_validation", err.Error(), mysql.Password)
 		return result
 	}
+
 	mysqlBinary, mysqlErr := resolveExternalTool("mysql")
 	dumpBinary, dumpErr := resolveExternalTool("mysqldump")
 	if mysqlErr != nil || dumpErr != nil {
@@ -82,12 +89,14 @@ func inspectSource(ctx context.Context, generation uint64, runID, stateDirectory
 		result.Failure = inspectionFailure("tool_check", toolResolutionDetail(mysqlErr, dumpErr))
 		return result
 	}
+
 	optionFile, cleanup, err := mysqlOptionFile(mysql, stateDirectory)
 	if err != nil {
 		result.Failure = inspectionFailure("credential_setup", fmt.Sprintf("prepare private MySQL credentials: %v", err), mysql.Password)
 		return result
 	}
 	defer cleanup()
+
 	discovered, err := discoverMySQLDatabases(ctx, mysqlBinary, optionFile)
 	if err != nil {
 		result.ResultCode = "source_authentication_failed"
@@ -95,6 +104,7 @@ func inspectSource(ctx context.Context, generation uint64, runID, stateDirectory
 		result.Failure = inspectionFailure("database_discovery", err.Error(), mysql.Password)
 		return result
 	}
+
 	targets, valid := selectedMySQLDatabases(mysql, discovered)
 	if !valid {
 		result.ResultCode = "database_selection_invalid"
@@ -103,12 +113,14 @@ func inspectSource(ctx context.Context, generation uint64, runID, stateDirectory
 		result.Failure = inspectionFailure("database_selection", "The selection contains a database that was not returned as accessible, or no accessible databases remain after exclusions.", mysql.Password)
 		return result
 	}
+
 	testDatabase := targets[0]
 	if mysql.TableSelection != nil {
 		accessible := map[string]bool{}
 		for _, database := range targets {
 			accessible[database] = true
 		}
+
 		tables, catalogErr := discoverMySQLTables(ctx, mysqlBinary, optionFile)
 		if catalogErr != nil {
 			result.ResultCode = "table_selection_invalid"
@@ -117,6 +129,7 @@ func inspectSource(ctx context.Context, generation uint64, runID, stateDirectory
 			result.Failure = inspectionFailure("table_selection", catalogErr.Error(), mysql.Password)
 			return result
 		}
+
 		for _, table := range mysql.TableSelection.Tables {
 			if !accessible[table.Database] || !tables[table.Database+"\x00"+table.Table] {
 				result.ResultCode = "table_selection_invalid"
@@ -127,6 +140,7 @@ func inspectSource(ctx context.Context, generation uint64, runID, stateDirectory
 			}
 		}
 	}
+
 	arguments := []string{"--defaults-extra-file=" + optionFile, "--no-data", "--single-transaction", "--quick", "--skip-lock-tables", "--no-tablespaces"}
 	dumpHelp := mysqlDumpHelp(ctx, dumpBinary)
 	if mysqlDumpSupportsOption(dumpHelp, "column-statistics") {
@@ -137,11 +151,13 @@ func inspectSource(ctx context.Context, generation uint64, runID, stateDirectory
 	}
 	arguments = append(arguments, mysql.CustomFlags...)
 	arguments = append(arguments, mysqlTableArguments(mysql, testDatabase)...)
+
 	command := exec.CommandContext(ctx, dumpBinary, arguments...)
 	command.Env = []string{"PATH=/usr/bin:/bin:/usr/local/bin:/usr/local/mysql/bin", "LANG=C"}
 	command.Stdout = &bytes.Buffer{}
 	var stderr inspectionOutput
 	command.Stderr = &stderr
+
 	if err := command.Run(); err != nil {
 		result.ResultCode = "source_authentication_failed"
 		result.Summary = "mysqldump could not produce a schema-only test dump."
@@ -149,6 +165,7 @@ func inspectSource(ctx context.Context, generation uint64, runID, stateDirectory
 		result.Failure = inspectionFailure("dump_test", commandFailure("mysqldump", err, stderr.String()).Error(), mysql.Password)
 		return result
 	}
+
 	result.Status = "complete"
 	result.ResultCode = "success"
 	result.Summary = "MySQL credentials and a schema-only dump were verified."
@@ -163,6 +180,7 @@ func inspectPostgreSQLSource(ctx context.Context, result CommandResult, source s
 		result.Failure = inspectionFailure("source_validation", "The PostgreSQL source fields are incomplete.", source.Password)
 		return result
 	}
+
 	postgresql := PostgreSQLSource{
 		Host: source.Host, Port: source.Port, Username: source.Username, Password: source.Password,
 		ConnectionDatabase: source.ConnectionDatabase, SelectionMode: source.Selection.Mode, Databases: source.Selection.Databases,
@@ -173,6 +191,7 @@ func inspectPostgreSQLSource(ctx context.Context, result CommandResult, source s
 		result.Failure = inspectionFailure("source_validation", err.Error(), postgresql.Password)
 		return result
 	}
+
 	psqlBinary, psqlErr := resolveExternalTool("psql")
 	dumpBinary, dumpErr := resolveExternalTool("pg_dump")
 	if psqlErr != nil || dumpErr != nil {
@@ -182,11 +201,13 @@ func inspectPostgreSQLSource(ctx context.Context, result CommandResult, source s
 		result.Failure = inspectionFailure("tool_check", postgresqlToolResolutionDetail(psqlErr, dumpErr))
 		return result
 	}
+
 	passfile, cleanup, err := postgresqlPassfile(postgresql, postgresql.ConnectionDatabase, stateDirectory)
 	if err != nil {
 		result.Failure = inspectionFailure("credential_setup", fmt.Sprintf("prepare private PostgreSQL credentials: %v", err), postgresql.Password)
 		return result
 	}
+
 	discovered, err := discoverPostgreSQLDatabases(ctx, psqlBinary, postgresql, passfile)
 	cleanup()
 	if err != nil {
@@ -195,6 +216,7 @@ func inspectPostgreSQLSource(ctx context.Context, result CommandResult, source s
 		result.Failure = inspectionFailure("database_discovery", err.Error(), postgresql.Password)
 		return result
 	}
+
 	targets, valid := selectedPostgreSQLDatabases(postgresql, discovered)
 	if !valid {
 		result.ResultCode = "database_selection_invalid"
@@ -203,17 +225,20 @@ func inspectPostgreSQLSource(ctx context.Context, result CommandResult, source s
 		result.Failure = inspectionFailure("database_selection", "The selection contains a database that was not returned as connectable, or no connectable databases were found.", postgresql.Password)
 		return result
 	}
+
 	if postgresql.TableSelection != nil {
 		catalogs := map[string]map[string]bool{}
 		for _, table := range postgresql.TableSelection.Tables {
 			if _, checked := catalogs[table.Database]; checked {
 				continue
 			}
+
 			tablePassfile, tableCleanup, passfileErr := postgresqlPassfile(postgresql, table.Database, stateDirectory)
 			if passfileErr != nil {
 				result.Failure = inspectionFailure("credential_setup", fmt.Sprintf("prepare private PostgreSQL credentials: %v", passfileErr), postgresql.Password)
 				return result
 			}
+
 			catalog, catalogErr := discoverPostgreSQLTables(ctx, psqlBinary, postgresql, table.Database, tablePassfile)
 			tableCleanup()
 			if catalogErr != nil {
@@ -225,6 +250,7 @@ func inspectPostgreSQLSource(ctx context.Context, result CommandResult, source s
 			}
 			catalogs[table.Database] = catalog
 		}
+
 		for _, table := range postgresql.TableSelection.Tables {
 			if !catalogs[table.Database][table.Schema+"\x00"+table.Table] {
 				result.ResultCode = "table_selection_invalid"
@@ -243,11 +269,13 @@ func inspectPostgreSQLSource(ctx context.Context, result CommandResult, source s
 		return result
 	}
 	defer cleanup()
+
 	command := exec.CommandContext(ctx, dumpBinary, postgresqlDumpArguments(postgresql, testDatabase, passfile, true)...)
 	command.Env = []string{"PATH=/usr/bin:/bin:/usr/local/bin", "LANG=C"}
 	command.Stdout = &bytes.Buffer{}
 	var stderr inspectionOutput
 	command.Stderr = &stderr
+
 	if err := command.Run(); err != nil {
 		result.ResultCode = "execution_failed"
 		result.Summary = "pg_dump could not produce a schema-only test dump."
@@ -255,6 +283,7 @@ func inspectPostgreSQLSource(ctx context.Context, result CommandResult, source s
 		result.Failure = inspectionFailure("dump_execution", commandFailure("pg_dump", err, stderr.String()).Error(), postgresql.Password)
 		return result
 	}
+
 	result.Status = "complete"
 	result.ResultCode = "success"
 	result.Summary = "PostgreSQL credentials and a schema-only dump were verified."

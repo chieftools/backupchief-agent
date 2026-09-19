@@ -274,6 +274,7 @@ func writeAtomic(path string, data []byte, mode os.FileMode, uid, gid int) error
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return fmt.Errorf("create %s: %w", directory, err)
 	}
+
 	temporary, err := os.CreateTemp(directory, "."+filepath.Base(path)+"-*")
 	if err != nil {
 		return fmt.Errorf("create temporary %s: %w", filepath.Base(path), err)
@@ -283,6 +284,7 @@ func writeAtomic(path string, data []byte, mode os.FileMode, uid, gid int) error
 		_ = temporary.Close()
 		_ = os.Remove(temporaryPath)
 	}
+
 	if err := temporary.Chmod(mode); err != nil {
 		cleanup()
 		return fmt.Errorf("set %s permissions: %w", filepath.Base(path), err)
@@ -293,6 +295,7 @@ func writeAtomic(path string, data []byte, mode os.FileMode, uid, gid int) error
 			return fmt.Errorf("set %s ownership: %w", filepath.Base(path), err)
 		}
 	}
+
 	if _, err := temporary.Write(data); err != nil {
 		cleanup()
 		return fmt.Errorf("write %s: %w", filepath.Base(path), err)
@@ -305,10 +308,13 @@ func writeAtomic(path string, data []byte, mode os.FileMode, uid, gid int) error
 		cleanup()
 		return fmt.Errorf("close %s: %w", filepath.Base(path), err)
 	}
+
 	if err := os.Rename(temporaryPath, path); err != nil {
 		cleanup()
 		return fmt.Errorf("replace %s: %w", filepath.Base(path), err)
 	}
+
+	// Sync the directory so the rename survives a crash after this function returns.
 	directoryHandle, err := os.Open(directory)
 	if err != nil {
 		return fmt.Errorf("open %s for sync: %w", directory, err)
@@ -317,5 +323,6 @@ func writeAtomic(path string, data []byte, mode os.FileMode, uid, gid int) error
 	if err := directoryHandle.Sync(); err != nil {
 		return fmt.Errorf("sync %s: %w", directory, err)
 	}
+
 	return nil
 }

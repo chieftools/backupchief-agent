@@ -77,6 +77,7 @@ func (daemon *daemon) receiveCommand(command AgentCommand) error {
 			return err
 		}
 	}
+
 	runKind := command.Payload.Maintenance
 	if command.Kind == "run_backup" {
 		runKind = "backup"
@@ -87,6 +88,7 @@ func (daemon *daemon) receiveCommand(command AgentCommand) error {
 	} else if command.Kind == "update_agent" {
 		runKind = "agent_update"
 	}
+
 	daemon.journal.Commands[command.ID] = &JournalCommand{
 		Command:         command,
 		RunID:           runID,
@@ -102,6 +104,7 @@ func (daemon *daemon) receiveCommand(command AgentCommand) error {
 		delete(daemon.journal.Commands, command.ID)
 		return err
 	}
+
 	if command.Kind == "update_agent" {
 		previous := daemon.state.AgentUpdate
 		daemon.state.AgentUpdate = &AgentUpdateRuntime{
@@ -118,6 +121,7 @@ func (daemon *daemon) receiveCommand(command AgentCommand) error {
 			return err
 		}
 	}
+
 	notifyLoop(daemon.dispatchWake)
 	return nil
 }
@@ -302,6 +306,7 @@ func (daemon *daemon) startOperation(ctx context.Context, commandID string, job 
 	if !daemon.store.canAcceptWork(criticalRunRecordEstimate) {
 		return nil
 	}
+
 	daemon.mu.Lock()
 	if daemon.state.AgentUpdate != nil {
 		daemon.mu.Unlock()
@@ -315,6 +320,7 @@ func (daemon *daemon) startOperation(ctx context.Context, commandID string, job 
 	if journaled.RunKind == "" {
 		journaled.RunKind = "backup"
 	}
+
 	if daemon.active == nil {
 		daemon.active = make(map[string]context.CancelFunc)
 	}
@@ -324,6 +330,7 @@ func (daemon *daemon) startOperation(ctx context.Context, commandID string, job 
 	if daemon.repositories == nil {
 		daemon.repositories = make(map[string]bool)
 	}
+
 	backups, maintenance := daemon.activeCountsLocked()
 	capacityReached := journaled.RunKind == "backup" && backups >= 2 || journaled.RunKind != "backup" && maintenance >= 1
 	repositoryIDs := []string{job.Repository.ID}
@@ -336,6 +343,7 @@ func (daemon *daemon) startOperation(ctx context.Context, commandID string, job 
 			return nil
 		}
 	}
+
 	repositoryBusy := false
 	for _, repositoryID := range repositoryIDs {
 		repositoryBusy = repositoryBusy || daemon.repositories[repositoryID]
@@ -353,6 +361,7 @@ func (daemon *daemon) startOperation(ctx context.Context, commandID string, job 
 			return err
 		}
 	}
+
 	runContext, cancel := context.WithCancel(ctx)
 	initialSequence := journaled.Sequence
 	initialEventCount := len(journaled.Events)
@@ -366,6 +375,7 @@ func (daemon *daemon) startOperation(ctx context.Context, commandID string, job 
 		}
 		journaled.JobSnapshot = snapshot
 	}
+
 	journaled.State = "running"
 	journaled.Sequence++
 	eventID, err := newULID(daemon.now())
@@ -377,6 +387,7 @@ func (daemon *daemon) startOperation(ctx context.Context, commandID string, job 
 	journaled.Events = append(journaled.Events, daemon.eventEnvelope(
 		journaled, eventID, journaled.Sequence, protocolTimestamp(daemon.now()), "run_started", map[string]any{},
 	))
+
 	if absInt64(daemon.state.ClockOffsetSeconds) > 300 {
 		journaled.Sequence++
 		if skewEventID, skewErr := newULID(daemon.now()); skewErr == nil {
@@ -394,6 +405,7 @@ func (daemon *daemon) startOperation(ctx context.Context, commandID string, job 
 		daemon.mu.Unlock()
 		return err
 	}
+
 	daemon.active[journaled.RunID] = cancel
 	daemon.activeRunKinds[journaled.RunID] = journaled.RunKind
 	for _, repositoryID := range repositoryIDs {
@@ -409,6 +421,7 @@ func (daemon *daemon) startOperation(ctx context.Context, commandID string, job 
 	} else {
 		go daemon.runMaintenance(runContext, commandID, runID, job, plan)
 	}
+
 	return nil
 }
 
@@ -504,6 +517,7 @@ func (daemon *daemon) finishOperation(ctx context.Context, commandID, runID stri
 	if daemon.client != nil && !protocolRevisionSupports(daemon.client.selectedProtocolRevision(), "1.4.0") && result.Statistics != nil {
 		delete(*result.Statistics, "prune_status")
 	}
+
 	logID, idErr := newULID(daemon.now())
 	if idErr == nil {
 		idErr = daemon.store.WriteRunLog(logID, log)
@@ -516,6 +530,7 @@ func (daemon *daemon) finishOperation(ctx context.Context, commandID, runID stri
 	for _, replica := range job.Replicas {
 		delete(daemon.repositories, replica.ID)
 	}
+
 	journaled := daemon.journal.Commands[commandID]
 	if journaled == nil {
 		daemon.mu.Unlock()
@@ -529,6 +544,7 @@ func (daemon *daemon) finishOperation(ctx context.Context, commandID, runID stri
 			journaled.ReplicationPending = append(journaled.ReplicationPending, replica.Key)
 		}
 	}
+
 	daemon.appendSnapshotEvidenceEvents(journaled, result)
 	journaled.Sequence++
 	if eventID, err := newULID(daemon.now()); err == nil {
@@ -544,6 +560,7 @@ func (daemon *daemon) finishOperation(ctx context.Context, commandID, runID stri
 		journaled.LogTruncated = truncated
 		journaled.LogDroppedBytes = dropped
 	}
+
 	if idErr != nil {
 		reason := "log_unavailable"
 		if errors.Is(idErr, ErrSpoolCapacity) {
@@ -558,6 +575,7 @@ func (daemon *daemon) finishOperation(ctx context.Context, commandID, runID stri
 		}
 		daemon.state.SpoolGapDetected = true
 	}
+
 	daemon.recordOutcomeLocked(job, result)
 	if err := daemon.store.SaveCommandJournal(daemon.journal); errors.Is(err, ErrSpoolCapacity) {
 		for _, cancel := range daemon.active {
@@ -570,6 +588,7 @@ func (daemon *daemon) finishOperation(ctx context.Context, commandID, runID stri
 	jobID := journaled.Command.Payload.JobID
 	hasReplication := len(journaled.ReplicationPending) > 0
 	daemon.mu.Unlock()
+
 	if hasReplication {
 		daemon.startReplication(ctx, job)
 	}
@@ -649,10 +668,12 @@ func (daemon *daemon) journalCommand(commandID string) *JournalCommand {
 func (daemon *daemon) finishWithoutExecution(commandID, status, resultCode, summary string) error {
 	daemon.mu.Lock()
 	defer daemon.mu.Unlock()
+
 	journaled := daemon.journal.Commands[commandID]
 	if journaled == nil {
 		return nil
 	}
+
 	now := protocolTimestamp(daemon.now())
 	journaled.State = "finished"
 	if journaled.Command.Kind == "sync_replica" {
@@ -678,6 +699,7 @@ func (daemon *daemon) finishWithoutExecution(commandID, status, resultCode, summ
 		journaled.ResultReported = false
 		return daemon.store.SaveCommandJournal(daemon.journal)
 	}
+
 	journaled.Result = &CommandResult{
 		Generation:  daemon.bootstrap.Generation,
 		RunID:       journaled.RunID,
@@ -690,12 +712,14 @@ func (daemon *daemon) finishWithoutExecution(commandID, status, resultCode, summ
 		SnapshotIDs: []string{},
 		Summary:     summary,
 	}
+
 	journaled.Sequence++
 	if eventID, err := newULID(daemon.now()); err == nil {
 		journaled.Events = append(journaled.Events, daemon.eventEnvelope(
 			journaled, eventID, journaled.Sequence, now, "run_finished", terminalEventPayload(*journaled.Result),
 		))
 	}
+
 	journaled.ResultReported = journaled.Trigger == "scheduled"
 	return daemon.store.SaveCommandJournal(daemon.journal)
 }
@@ -919,6 +943,7 @@ func (daemon *daemon) reconcileInterrupted(ctx context.Context) error {
 		daemon.mu.Unlock()
 		return nil
 	}
+
 	ids := make([]string, 0)
 	replicationJobs := make(map[string]Job)
 	for id, command := range daemon.journal.Commands {
@@ -943,9 +968,11 @@ func (daemon *daemon) reconcileInterrupted(ctx context.Context) error {
 			return err
 		}
 	}
+
 	for _, job := range replicationJobs {
 		daemon.startReplication(ctx, job)
 	}
+
 	return nil
 }
 
@@ -1009,6 +1036,7 @@ func (daemon *daemon) consumeAgentUpdateResult() error {
 	if err != nil || result == nil {
 		return err
 	}
+
 	daemon.mu.Lock()
 	runtime := daemon.state.AgentUpdate
 	if runtime == nil {
@@ -1021,15 +1049,18 @@ func (daemon *daemon) consumeAgentUpdateResult() error {
 		daemon.mu.Unlock()
 		return fmt.Errorf("updater result has no active update")
 	}
+
 	if result.Generation != daemon.bootstrap.Generation || result.RunID != runtime.RunID || result.TargetVersion != runtime.TargetVersion {
 		daemon.mu.Unlock()
 		return fmt.Errorf("updater result does not match the active update")
 	}
+
 	command := daemon.journal.Commands[runtime.CommandID]
 	if command == nil || command.Command.Kind != "update_agent" {
 		daemon.mu.Unlock()
 		return fmt.Errorf("updater result command is unavailable")
 	}
+
 	command.State = "finished"
 	command.UpdateResult = &AgentUpdateResult{
 		Generation: result.Generation, RunID: result.RunID, Status: result.Status, ResultCode: result.ResultCode,
@@ -1042,10 +1073,12 @@ func (daemon *daemon) consumeAgentUpdateResult() error {
 		daemon.mu.Unlock()
 		return err
 	}
+
 	if err := daemon.store.SaveRuntimeState(daemon.state); err != nil {
 		daemon.mu.Unlock()
 		return err
 	}
+
 	daemon.mu.Unlock()
 	return updater.RemoveResult(daemon.store.stateDirectory())
 }
@@ -1057,6 +1090,7 @@ func (daemon *daemon) reconcileOne(ctx context.Context, commandID string) error 
 	if journaled == nil {
 		return nil
 	}
+
 	job, ready, err := daemon.jobForExecution(ctx, journaled)
 	if err != nil {
 		return err
@@ -1067,6 +1101,7 @@ func (daemon *daemon) reconcileOne(ctx context.Context, commandID string) error 
 	if job == nil {
 		return daemon.finishWithoutExecution(commandID, "unresolved", "outcome_unresolved", "The interrupted run configuration is unavailable and it was not rerun.")
 	}
+
 	var result CommandResult
 	if journaled.RunKind == "backup" {
 		request := restic.Request{
@@ -1084,6 +1119,7 @@ func (daemon *daemon) reconcileOne(ctx context.Context, commandID string) error 
 	} else {
 		result = daemon.reconciledMaintenance(ctx, journaled, *job)
 	}
+
 	if daemon.client != nil && !protocolRevisionSupports(daemon.client.selectedProtocolRevision(), "1.2.0") {
 		result.SnapshotEvidence = nil
 		result.SnapshotEvidenceIDs = nil
@@ -1126,27 +1162,33 @@ func (daemon *daemon) reconciledMaintenance(ctx context.Context, command *Journa
 		SnapshotIDs: []string{},
 		Summary:     "The interrupted maintenance outcome could not be proved and was not rerun.",
 	}
+
 	if command.RunKind != "forget" || command.MaintenancePlan == nil ||
 		len(command.MaintenancePlan.CandidateSnapshotIDs) == 0 && !command.MaintenancePlan.ForgetPlanned {
 		return result
 	}
+
 	request := maintenanceRequest(job)
 	request.Operation = "snapshots"
 	request.TimeoutSeconds = 300
 	request.LockWaitSeconds = 30
+
 	inventoryResult := daemon.executor.Run(ctx, request)
 	inventory, ok := parseSnapshotInventory(inventoryResult)
 	if !ok {
 		attachSnapshotEvidence(&result, "candidates", command.MaintenancePlan.CandidateSnapshotIDs, daemon.now())
 		return result
 	}
+
 	attachSnapshotEvidence(&result, "repository", snapshotIDs(inventory), daemon.now())
+
 	remaining := 0
 	for _, snapshotID := range command.MaintenancePlan.CandidateSnapshotIDs {
 		if inventory[snapshotID] {
 			remaining++
 		}
 	}
+
 	removed := len(command.MaintenancePlan.CandidateSnapshotIDs) - remaining
 	result.Statistics = maintenanceStatistics(len(inventory)+removed, len(command.MaintenancePlan.CandidateSnapshotIDs), remaining, len(command.MaintenancePlan.ProtectedSnapshotIDs))
 	if command.MaintenancePlan.CombinedRetention {
@@ -1164,6 +1206,7 @@ func (daemon *daemon) reconciledMaintenance(ctx context.Context, command *Journa
 			(*result.Statistics)["prune_status"] = "not_due"
 		}
 	}
+
 	switch {
 	case remaining == 0:
 		result.Status = "complete"
@@ -1178,6 +1221,7 @@ func (daemon *daemon) reconciledMaintenance(ctx context.Context, command *Journa
 		result.ResultCode = "execution_failed"
 		result.Summary = "The interrupted retention run made no observable snapshot changes and was not repeated."
 	}
+
 	return result
 }
 
@@ -1195,9 +1239,11 @@ func reconciledResult(generation uint64, command *JournalCommand, result restic.
 		SnapshotIDs: []string{},
 		Summary:     "The interrupted backup outcome could not be proved and was not rerun.",
 	}
+
 	if result.ExitCode != 0 {
 		return reconciled
 	}
+
 	var snapshots []struct {
 		ID      string         `json:"id"`
 		Summary *resticSummary `json:"summary"`
@@ -1205,15 +1251,18 @@ func reconciledResult(generation uint64, command *JournalCommand, result restic.
 	if json.Unmarshal([]byte(result.Output), &snapshots) != nil || len(snapshots) == 0 {
 		return reconciled
 	}
+
 	for _, snapshot := range snapshots {
 		if digestPattern.MatchString(snapshot.ID) {
 			reconciled.SnapshotIDs = append(reconciled.SnapshotIDs, snapshot.ID)
 		}
 	}
+
 	last := snapshots[len(snapshots)-1]
 	if len(reconciled.SnapshotIDs) == 0 || last.Summary == nil {
 		return reconciled
 	}
+
 	statistics := RunStatistics{
 		"files_new":              last.Summary.FilesNew,
 		"files_changed":          last.Summary.FilesChanged,
@@ -1225,6 +1274,7 @@ func reconciledResult(generation uint64, command *JournalCommand, result restic.
 		"source_bytes":           last.Summary.SourceBytes,
 		"stored_bytes":           last.Summary.StoredBytes,
 	}
+
 	reconciled.Statistics = &statistics
 	reconciled.Status = "complete"
 	reconciled.ResultCode = "success"
@@ -1232,5 +1282,6 @@ func reconciledResult(generation uint64, command *JournalCommand, result restic.
 	if last.Summary.SourceFiles == 0 {
 		reconciled.ResultCode = "empty_selection"
 	}
+
 	return reconciled
 }

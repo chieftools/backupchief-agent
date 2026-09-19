@@ -79,6 +79,7 @@ func (destination Destination) Driver() Driver {
 	if destination.backend == nil {
 		return ""
 	}
+
 	return destination.backend.driver()
 }
 
@@ -86,6 +87,7 @@ func (destination Destination) Validate() error {
 	if destination.backend == nil {
 		return errors.New("driver is invalid")
 	}
+
 	return destination.backend.validate()
 }
 
@@ -96,6 +98,7 @@ func (destination Destination) Resolve(relativePath string) (Connection, error) 
 	if !validRelativePath(relativePath) || runeLength(relativePath) > 1024 {
 		return Connection{}, errors.New("repository path must be a safe relative path")
 	}
+
 	return destination.backend.resolve(relativePath)
 }
 
@@ -121,6 +124,7 @@ func (value LocalDestination) validate() error {
 	if !filepath.IsAbs(value.Root) || strings.ContainsRune(value.Root, 0) || runeLength(value.Root) > 4096 {
 		return errors.New("local settings are invalid")
 	}
+
 	return nil
 }
 
@@ -146,6 +150,7 @@ func (value S3Destination) resolve(relativePath string) (Connection, error) {
 	if value.Prefix != "" {
 		prefix = value.Prefix + "/" + relativePath
 	}
+
 	return NewS3Connection(S3Connection{
 		Endpoint: value.Endpoint, Region: value.Region, Bucket: value.Bucket, Prefix: prefix,
 		AccessKey: value.AccessKey, SecretKey: value.SecretKey,
@@ -162,6 +167,7 @@ func (value SFTPDestination) validate() error {
 	if err := validateHostKeys(value.HostKeys); err != nil {
 		return err
 	}
+
 	return value.Authentication.Validate()
 }
 
@@ -170,6 +176,7 @@ func (value SFTPDestination) resolve(relativePath string) (Connection, error) {
 	if value.RootPath == "/" {
 		path = "/" + relativePath
 	}
+
 	return NewSFTPConnection(SFTPConnection{
 		Host: value.Host, Port: value.Port, Username: value.Username, Path: path,
 		HostKeys: value.HostKeys, Authentication: value.Authentication,
@@ -223,6 +230,7 @@ func (connection Connection) Driver() Driver {
 	if connection.backend == nil {
 		return ""
 	}
+
 	return connection.backend.driver()
 }
 
@@ -277,6 +285,7 @@ func (connection Connection) Validate(allowLocal bool) error {
 	default:
 		return errors.New("unsupported repository driver")
 	}
+
 	return nil
 }
 
@@ -291,16 +300,19 @@ func (connection Connection) Location() string {
 		if err != nil {
 			return ""
 		}
+
 		prefix := fmt.Sprintf("sftp://%s@%s/", url.User(value.Username).String(), target.Authority)
 		if strings.HasPrefix(value.Path, "/") {
 			return prefix + "/" + strings.TrimPrefix(value.Path, "/")
 		}
+
 		return prefix + value.Path
 	default:
 		return ""
 	}
 }
 
+// Identity excludes credentials and trust material so one repository always uses one lock.
 func (connection Connection) Identity() string {
 	switch value := connection.backend.(type) {
 	case LocalConnection:
@@ -311,6 +323,7 @@ func (connection Connection) Identity() string {
 		if endpoint != nil {
 			canonical = endpoint.String()
 		}
+
 		return "s3\x00" + canonical + "\x00" + value.Bucket + "\x00" + value.Prefix
 	case SFTPConnection:
 		target, _ := canonicalTarget(value.Host, value.Port)
@@ -340,6 +353,7 @@ func (connection Connection) Target() (egress.Target, bool, error) {
 		if err != nil {
 			return egress.Target{}, false, err
 		}
+
 		return egress.Target{Host: endpoint.Hostname(), Port: 443}, true, nil
 	case SFTPConnection:
 		target, err := canonicalTarget(value.Host, value.Port)
@@ -397,6 +411,7 @@ func (authentication SFTPAuthentication) Method() string {
 	if authentication.credential == nil {
 		return ""
 	}
+
 	return authentication.credential.method()
 }
 
@@ -404,6 +419,7 @@ func (authentication SFTPAuthentication) Secret() string {
 	if authentication.credential == nil {
 		return ""
 	}
+
 	return authentication.credential.secret()
 }
 
@@ -411,6 +427,7 @@ func (authentication SFTPAuthentication) Validate() error {
 	if authentication.credential == nil {
 		return errors.New("SFTP authentication method is invalid")
 	}
+
 	return authentication.credential.validate()
 }
 
@@ -420,6 +437,7 @@ func (value passwordCredential) validate() error {
 	if !lineSafe(string(value), 1000) {
 		return errors.New("SFTP password authentication is invalid")
 	}
+
 	return nil
 }
 
@@ -429,6 +447,7 @@ func (value ed25519Credential) validate() error {
 	if !validEd25519PrivateKey(string(value)) {
 		return errors.New("SFTP Ed25519 authentication is invalid")
 	}
+
 	return nil
 }
 
@@ -441,14 +460,17 @@ func canonicalTarget(host string, port uint16) (canonicalEgressTarget, error) {
 	if host != strings.TrimSpace(host) {
 		return canonicalEgressTarget{}, errors.New("invalid storage hostname")
 	}
+
 	authority, err := egress.Authority(egress.Target{Host: host, Port: port})
 	if err != nil {
 		return canonicalEgressTarget{}, err
 	}
+
 	canonicalHost, _, err := net.SplitHostPort(authority)
 	if err != nil {
 		return canonicalEgressTarget{}, err
 	}
+
 	return canonicalEgressTarget{Target: egress.Target{Host: canonicalHost, Port: port}, Authority: authority}, nil
 }
 
@@ -457,10 +479,13 @@ func canonicalS3Endpoint(raw, region string) (*url.URL, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// AWS regional endpoints use dual-stack DNS so the guarded proxy can retain IPv6 reachability.
 	matches := amazonS3EndpointPattern.FindStringSubmatch(endpoint.Hostname())
 	if len(matches) == 2 && matches[1] == region {
 		endpoint.Host = net.JoinHostPort("s3.dualstack."+region+".amazonaws.com", "443")
 	}
+
 	return endpoint, nil
 }
 
@@ -468,11 +493,13 @@ func validRelativePath(value string) bool {
 	if value == "" || strings.ContainsAny(value, "\\\x00") || strings.HasPrefix(value, "/") {
 		return false
 	}
+
 	for _, part := range strings.Split(value, "/") {
 		if part == "" || part == "." || part == ".." {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -490,11 +517,13 @@ func validSFTPPath(value string) bool {
 	if strings.HasSuffix(value, "/") || strings.Contains(value, "//") {
 		return false
 	}
+
 	for _, part := range strings.Split(strings.TrimPrefix(value, "/"), "/") {
 		if part == "" || part == "." || part == ".." {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -504,8 +533,10 @@ func validateHostKeys(values []string) error {
 		if _, exists := seen[value]; exists || !validSFTPHostKey(value) {
 			return errors.New("SFTP host keys are invalid")
 		}
+
 		seen[value] = struct{}{}
 	}
+
 	return nil
 }
 
@@ -513,10 +544,12 @@ func validSFTPHostKey(value string) bool {
 	if value == "" || len(value) > 4096 || strings.ContainsAny(value, "\r\n\x00") {
 		return false
 	}
+
 	parts := strings.Fields(value)
 	if len(parts) != 2 || strings.Join(parts, " ") != value || !lineSafe(parts[0], 255) {
 		return false
 	}
+
 	decoded, err := base64.StdEncoding.DecodeString(parts[1])
 	return err == nil && len(decoded) > 0 && len(decoded) <= 2048
 }
@@ -525,14 +558,17 @@ func validEd25519PrivateKey(value string) bool {
 	if value == "" || len(value) > 16384 || strings.ContainsRune(value, 0) {
 		return false
 	}
+
 	block, trailing := pem.Decode([]byte(value))
 	if block == nil || block.Type != "PRIVATE KEY" || len(bytes.TrimSpace(trailing)) != 0 {
 		return false
 	}
+
 	key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 	if err != nil {
 		return false
 	}
+
 	_, ok := key.(ed25519.PrivateKey)
 	return ok
 }
@@ -551,6 +587,7 @@ func pathDir(value string) string {
 	if index == 0 {
 		return "/"
 	}
+
 	return value[:index]
 }
 
@@ -559,5 +596,6 @@ func pathBase(value string) string {
 	if index < 0 {
 		return value
 	}
+
 	return value[index+1:]
 }

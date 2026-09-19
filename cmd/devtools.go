@@ -127,6 +127,7 @@ func newDevelopmentSetupCommand(version string, stateDirectory *string) *cobra.C
 			if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
 				return fmt.Errorf("development setup requires an amd64 or arm64 host")
 			}
+
 			store, directory, err := developmentStore(*stateDirectory)
 			if err != nil {
 				return err
@@ -150,6 +151,7 @@ func newDevelopmentSetupCommand(version string, stateDirectory *string) *cobra.C
 				}
 				return err
 			}
+
 			_, metadata, err := store.LoadConfig(bootstrap)
 			if err != nil {
 				return fmt.Errorf("load accepted development configuration: %w", err)
@@ -183,6 +185,7 @@ func newDevelopmentRunCommand(version string, stateDirectory *string) *cobra.Com
 			if heartbeatEvery <= 0 || configEvery <= 0 || commandEvery <= 0 {
 				return fmt.Errorf("development polling intervals must be greater than zero")
 			}
+
 			store, directory, err := developmentStore(*stateDirectory)
 			if err != nil {
 				return err
@@ -198,6 +201,7 @@ func newDevelopmentRunCommand(version string, stateDirectory *string) *cobra.Com
 			if err := validateDevelopmentEndpoint(bootstrap.Endpoint); err != nil {
 				return fmt.Errorf("stored development endpoint is invalid: %w", err)
 			}
+
 			_, err = fmt.Fprintf(
 				command.OutOrStdout(),
 				"Running development agent %s against %s.\nState directory: %s\nAccepted config: generation %d, revision %d, digest %s\nPolling: commands %s, heartbeat %s, config %s. Press Ctrl+C to stop.\n",
@@ -244,6 +248,7 @@ func newDevelopmentStatusCommand(stateDirectory *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+
 			bootstrap, err := store.LoadBootstrap()
 			if err != nil {
 				return fmt.Errorf("load development identity: %w", err)
@@ -254,6 +259,7 @@ func newDevelopmentStatusCommand(stateDirectory *string) *cobra.Command {
 			if pendingErr != nil && !errors.Is(pendingErr, os.ErrNotExist) {
 				return fmt.Errorf("inspect pending development setup: %w", pendingErr)
 			}
+
 			if configErr != nil && !setupPending {
 				return fmt.Errorf("load accepted development configuration: %w", configErr)
 			}
@@ -261,12 +267,14 @@ func newDevelopmentStatusCommand(stateDirectory *string) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("load development runtime state: %w", err)
 			}
+
 			configRevision := "unavailable"
 			configDigest := "unavailable"
 			if configErr == nil {
 				configRevision = fmt.Sprintf("%d", metadata.Revision)
 				configDigest = metadata.Digest
 			}
+
 			_, err = fmt.Fprintf(
 				command.OutOrStdout(),
 				"Development agent: %s\nEndpoint: %s\nState directory: %s\nGeneration: %d\nSetup complete: %t\nAccepted config revision: %s\nAccepted config digest: %s\nAuthentication paused: %t\nRevoked: %t\nRejected config revision: %d\nLast config error: %s\n",

@@ -84,9 +84,11 @@ func writeSnapshotExport(command *cobra.Command, state string, request restic.Ex
 	if err != nil {
 		return errors.New("invalid export output path")
 	}
+
 	if _, err = os.Lstat(output); err == nil || !os.IsNotExist(err) {
 		return errors.New("export output already exists or cannot be inspected")
 	}
+
 	part := output + ".part"
 	file, err := os.OpenFile(part, os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, 0600)
 	if err != nil {
@@ -110,6 +112,7 @@ func writeSnapshotExport(command *cobra.Command, state string, request restic.Ex
 	if err = file.Close(); err != nil {
 		return errors.New("cannot close partial export")
 	}
+
 	if err = chownSudoUser(part); err != nil {
 		return err
 	}

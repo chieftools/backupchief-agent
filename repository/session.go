@@ -66,10 +66,13 @@ func OpenSession(ctx context.Context, options SessionOptions, bindings []Binding
 		if _, exists := names[binding.Name]; exists {
 			return nil, errors.New("duplicate repository binding name")
 		}
+
 		names[binding.Name] = struct{}{}
+
 		if err := validateBinding(binding, options.AllowLocal); err != nil {
 			return nil, err
 		}
+
 		target, remote, err := binding.Connection.Target()
 		if err != nil {
 			return nil, err
@@ -77,6 +80,7 @@ func OpenSession(ctx context.Context, options SessionOptions, bindings []Binding
 		if remote {
 			targets = append(targets, target)
 		}
+
 		if binding.Strategy == RequireRclone || !supportsNative(binding.Connection) {
 			requiresRclone = true
 		}
@@ -92,6 +96,7 @@ func OpenSession(ctx context.Context, options SessionOptions, bindings []Binding
 	}
 
 	cleanupError := func(err error) (*Session, error) {
+		// Close also handles sessions that failed after opening only the proxy.
 		session.Close()
 		return nil, err
 	}
@@ -101,6 +106,7 @@ func OpenSession(ctx context.Context, options SessionOptions, bindings []Binding
 		if value, exists := obscured[password]; exists {
 			return value, nil
 		}
+
 		command := exec.CommandContext(ctx, session.program, "obscure", "-")
 		command.Env = commandEnvironment(options.Work, session.environment)
 		command.Dir = options.Work
@@ -109,6 +115,7 @@ func OpenSession(ctx context.Context, options SessionOptions, bindings []Binding
 		if err != nil {
 			return "", err
 		}
+
 		value := strings.TrimSpace(string(output))
 		obscured[password] = value
 		return value, nil
@@ -120,6 +127,7 @@ func OpenSession(ctx context.Context, options SessionOptions, bindings []Binding
 		if err != nil {
 			return cleanupError(errors.New("cannot prepare bundled rclone executable"))
 		}
+
 		session.program = program
 		session.configPath = filepath.Join(options.Work, "rclone.conf")
 	}
@@ -139,6 +147,7 @@ func OpenSession(ctx context.Context, options SessionOptions, bindings []Binding
 		if err != nil {
 			return cleanupError(err)
 		}
+
 		configuration.WriteString(section)
 		session.environment = appendUnique(session.environment, environment...)
 		session.prepared[binding.Name] = prepared
@@ -170,10 +179,12 @@ func (session *Session) RcloneCommand(ctx context.Context, arguments ...string) 
 	if session.program == "" || session.configPath == "" {
 		return nil, errors.New("repository session does not use rclone")
 	}
+
 	base := []string{"--config", session.configPath}
 	command := exec.CommandContext(ctx, session.program, append(base, arguments...)...)
 	command.Env = commandEnvironment(session.work, session.environment)
 	command.Dir = session.work
+
 	return command, nil
 }
 
@@ -184,13 +195,16 @@ func (session *Session) RewriteRclone(binding Binding, allowLocal bool) error {
 	if err := validateBinding(binding, allowLocal); err != nil {
 		return err
 	}
+
 	prepared, section, err := rcloneSpec(binding, session.program, session.proxyURL(), session.obscure)
 	if err != nil {
 		return err
 	}
+
 	if err := os.WriteFile(session.configPath, []byte(section), 0o600); err != nil {
 		return errors.New("cannot write private transport configuration")
 	}
+
 	session.prepared[binding.Name] = prepared
 	return nil
 }
@@ -199,6 +213,7 @@ func (session *Session) Close() {
 	if session == nil {
 		return
 	}
+
 	session.closeOnce.Do(func() {
 		if session.proxy != nil {
 			session.proxy.Close()
@@ -210,6 +225,7 @@ func (session *Session) proxyURL() string {
 	if session.proxy == nil {
 		return ""
 	}
+
 	return session.proxy.URL
 }
 
@@ -221,6 +237,7 @@ func PrepareNative(connection Connection, allowLocal bool) (PreparedRepository, 
 	if err := connection.Validate(allowLocal); err != nil {
 		return PreparedRepository{}, nil, err
 	}
+
 	return nativeSpec(connection)
 }
 
@@ -241,11 +258,13 @@ func PrepareRclone(connection Connection, options RcloneOptions) (PreparedReposi
 	if err := validateBinding(binding, options.AllowLocal); err != nil {
 		return PreparedRepository{}, "", err
 	}
+
 	if options.Obscure == nil {
 		options.Obscure = func(string) (string, error) {
 			return "", errors.New("password obscurer is unavailable")
 		}
 	}
+
 	return rcloneSpec(binding, options.Program, options.ProxyURL, options.Obscure)
 }
 
@@ -258,8 +277,10 @@ func validateBinding(binding Binding, allowLocal bool) error {
 		if _, err := canonicalTarget(value.Host, value.Port); err != nil || !lineSafe(value.Username, 255) || !validSFTPPath(value.Path) || value.Authentication.Validate() != nil {
 			return errors.New("invalid or missing SFTP settings")
 		}
+
 		return nil
 	}
+
 	return binding.Connection.Validate(allowLocal)
 }
 
@@ -272,6 +293,7 @@ func nativeSpec(connection Connection) (PreparedRepository, []string, error) {
 		if err != nil {
 			return PreparedRepository{}, nil, err
 		}
+
 		endpoint.Host = strings.TrimSuffix(endpoint.Host, ":443")
 		endpoint.Path = "/" + value.Bucket + "/" + value.Prefix
 		return PreparedRepository{
@@ -287,6 +309,7 @@ func rcloneSpec(binding Binding, program, proxyURL string, obscure func(string) 
 	if !filepath.IsAbs(program) || strings.ContainsRune(program, 0) {
 		return PreparedRepository{}, "", errors.New("repository transport requires the bundled rclone executable")
 	}
+
 	name := binding.Name
 	switch value := binding.Connection.backend.(type) {
 	case LocalConnection:
@@ -296,6 +319,7 @@ func rcloneSpec(binding Binding, program, proxyURL string, obscure func(string) 
 		if err != nil {
 			return PreparedRepository{}, "", err
 		}
+
 		endpoint.Host = strings.TrimSuffix(endpoint.Host, ":443")
 		section := fmt.Sprintf(
 			"[%s]\ntype = s3\nprovider = Other\nenv_auth = false\naccess_key_id = %s\nsecret_access_key = %s\nendpoint = %s\nregion = %s\nforce_path_style = true\nno_check_bucket = true\n",
@@ -307,6 +331,7 @@ func rcloneSpec(binding Binding, program, proxyURL string, obscure func(string) 
 		if err != nil {
 			return PreparedRepository{}, "", err
 		}
+
 		authentication := ""
 		switch value.Authentication.Method() {
 		case "password":
@@ -320,6 +345,7 @@ func rcloneSpec(binding Binding, program, proxyURL string, obscure func(string) 
 		default:
 			return PreparedRepository{}, "", errors.New("invalid or missing SFTP settings")
 		}
+
 		section := fmt.Sprintf(
 			"[%s]\ntype = sftp\nhost = %s\nport = %d\nuser = %s\n%sshell_type = none\ndisable_hashcheck = true\nhost_keys = %s\nhttp_proxy = %s\n",
 			name, target.Host, target.Port, value.Username, authentication, strings.Join(value.HostKeys, ","), proxyURL,
@@ -327,6 +353,7 @@ func rcloneSpec(binding Binding, program, proxyURL string, obscure func(string) 
 		if binding.TrustOnFirstUse {
 			section += "pin_host_key = true\n"
 		}
+
 		return rclonePrepared(name, value.Path, program), section, nil
 	default:
 		return PreparedRepository{}, "", errors.New("unsupported repository driver")
@@ -343,11 +370,13 @@ func ParseHostKeys(configuration string) []string {
 		if found && strings.TrimSpace(key) == "host_keys" {
 			parts := strings.Split(strings.TrimSpace(value), ",")
 			keys := make([]string, 0, len(parts))
+
 			for _, part := range parts {
 				if part = strings.TrimSpace(part); part != "" {
 					keys = append(keys, part)
 				}
 			}
+
 			return keys
 		}
 	}
@@ -375,11 +404,13 @@ func appendUnique(values []string, additions ...string) []string {
 	for _, value := range values {
 		seen[value] = struct{}{}
 	}
+
 	for _, value := range additions {
 		if _, exists := seen[value]; !exists {
 			values = append(values, value)
 			seen[value] = struct{}{}
 		}
 	}
+
 	return values
 }

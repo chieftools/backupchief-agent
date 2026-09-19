@@ -74,6 +74,7 @@ func Run(ctx context.Context, options RunOptions) error {
 	if options.Store == nil {
 		return fmt.Errorf("daemon file store is required")
 	}
+
 	bootstrap, err := options.Store.LoadBootstrap()
 	if errors.Is(err, ErrManagedIdentityMissing) {
 		return runStandalone(ctx, options)
@@ -81,6 +82,7 @@ func Run(ctx context.Context, options RunOptions) error {
 	if err != nil {
 		return fmt.Errorf("load managed identity: %w", err)
 	}
+
 	state, err := options.Store.LoadRuntimeState()
 	if err != nil {
 		return fmt.Errorf("load runtime state: %w", err)
@@ -88,6 +90,7 @@ func Run(ctx context.Context, options RunOptions) error {
 	if state.Revoked {
 		return fmt.Errorf("%w: setup was revoked", ErrPermanentlyStopped)
 	}
+
 	configBody, metadata, err := options.Store.LoadConfig(bootstrap)
 	if errors.Is(err, ErrConfigCachePayloadInvalid) {
 		if _, updateErr := UpdateConfig(ctx, ConfigUpdateOptions{
@@ -100,11 +103,13 @@ func Run(ctx context.Context, options RunOptions) error {
 	if err != nil {
 		return fmt.Errorf("load accepted configuration: %w", err)
 	}
+
 	config, _, err := DecodeConfig(configBody, bootstrap.Generation)
 	if err != nil {
 		return fmt.Errorf("decode accepted configuration: %w", err)
 	}
 	logConfigWarnings(config)
+
 	journal, err := options.Store.LoadCommandJournal()
 	if err != nil {
 		return fmt.Errorf("load command journal: %w", err)
@@ -112,6 +117,7 @@ func Run(ctx context.Context, options RunOptions) error {
 	if options.Now == nil {
 		options.Now = time.Now
 	}
+
 	bootID, err := newULID(options.Now())
 	if err != nil {
 		return err
@@ -137,10 +143,12 @@ func Run(ctx context.Context, options RunOptions) error {
 	if options.Jitter == nil {
 		options.Jitter = fullJitter
 	}
+
 	executor := options.Executor
 	if executor == nil {
 		executor = restic.Runner{State: options.Store.stateDirectory(), AllowLocal: options.AllowLocal}
 	}
+
 	client := NewManagedClient(bootstrap.Endpoint, bootstrap.Credential, options.Version, bootstrap.ServerID, options.HTTPClient)
 	client.Now = options.Now
 	runtime := &daemon{
@@ -172,6 +180,7 @@ func Run(ctx context.Context, options RunOptions) error {
 	if err := runtime.restoreAgentUpdateState(); err != nil {
 		return err
 	}
+
 	if runtime.state.AgentUpdate != nil {
 		if err := updater.WriteReadiness(runtime.store.stateDirectory(), updater.Readiness{
 			CommandID: runtime.state.AgentUpdate.CommandID,
@@ -187,6 +196,7 @@ func Run(ctx context.Context, options RunOptions) error {
 
 	runContext, cancel := context.WithCancel(ctx)
 	defer cancel()
+
 	errorsChannel := make(chan error, 8)
 	go func() {
 		errorsChannel <- runTriggeredAgentLoop(runContext, options.HeartbeatEvery, 0.10, options.Jitter, runtime.heartbeatWake, runtime.sendHeartbeat)
@@ -220,6 +230,7 @@ func Run(ctx context.Context, options RunOptions) error {
 			cancel()
 		}
 	}
+
 	runtime.activeWG.Wait()
 	return runErr
 }
@@ -230,6 +241,7 @@ func (daemon *daemon) reloadLocalConfig(context.Context) error {
 		log.Printf("backupchief: ignored invalid configuration update: %v", err)
 		return nil
 	}
+
 	fileDigest := metadata.FileDigest
 	daemon.mu.Lock()
 	if fileDigest == daemon.metadata.FileDigest {
@@ -237,17 +249,20 @@ func (daemon *daemon) reloadLocalConfig(context.Context) error {
 		return nil
 	}
 	daemon.mu.Unlock()
+
 	config, _, err := DecodeConfig(body, daemon.bootstrap.Generation)
 	if err != nil {
 		log.Printf("backupchief: ignored invalid configuration update: %v", err)
 		return nil
 	}
 	logConfigWarnings(config)
+
 	daemon.mu.Lock()
 	cancellations, queuedOperations := daemon.acceptMaintenanceConfigLocked(config)
 	daemon.config = config
 	daemon.metadata = metadata
 	daemon.mu.Unlock()
+
 	daemon.replaceRealtime(config.Realtime, config.ProtocolRevision)
 	notifyLoop(daemon.heartbeatWake)
 	for _, cancelRun := range cancellations {
@@ -266,6 +281,7 @@ func runStandalone(ctx context.Context, options RunOptions) error {
 	if err != nil {
 		return err
 	}
+
 	logConfigWarnings(config)
 	if config.Host.Key != "" {
 		return fmt.Errorf("managed configuration has an unusable host identity")
@@ -273,12 +289,15 @@ func runStandalone(ctx context.Context, options RunOptions) error {
 	if options.Now == nil {
 		options.Now = time.Now
 	}
+
 	executor := options.Executor
 	if executor == nil {
 		executor = restic.Runner{State: options.Store.stateDirectory(), AllowLocal: true}
 	}
+
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+
 	lastMinute := options.Now().UTC().Truncate(time.Minute)
 	for {
 		select {
@@ -293,11 +312,13 @@ func runStandalone(ctx context.Context, options RunOptions) error {
 				log.Printf("backupchief: applied configuration update")
 				logConfigWarnings(config)
 			}
+
 			minute := options.Now().UTC().Truncate(time.Minute)
 			if !minute.After(lastMinute) {
 				continue
 			}
 			lastMinute = minute
+
 			for _, job := range config.Jobs {
 				if !job.Enabled {
 					continue
@@ -307,6 +328,7 @@ func runStandalone(ctx context.Context, options RunOptions) error {
 					log.Printf("backupchief: job %s has an invalid schedule: %v", job.Key, scheduleErr)
 					continue
 				}
+
 				if due {
 					go runStandaloneBackup(ctx, executor, options.Store.stateDirectory(), config.Host.Name, job, options.Now)
 				}
@@ -348,6 +370,7 @@ func (daemon *daemon) refreshConfig(ctx context.Context) error {
 		}
 		return daemon.handleRequestError(err)
 	}
+
 	if response.NotModified {
 		return daemon.clearAuthenticationPause()
 	}
@@ -355,6 +378,7 @@ func (daemon *daemon) refreshConfig(ctx context.Context) error {
 	if errors.Is(err, ErrConfigUnchanged) {
 		return daemon.clearAuthenticationPause()
 	}
+
 	if err != nil {
 		daemon.mu.Lock()
 		daemon.state.LastConfigError = err.Error()
@@ -365,11 +389,13 @@ func (daemon *daemon) refreshConfig(ctx context.Context) error {
 		daemon.mu.Unlock()
 		return err
 	}
+
 	config, _, err := DecodeConfig(response.Body, daemon.bootstrap.Generation)
 	if err != nil {
 		return err
 	}
 	logConfigWarnings(config)
+
 	daemon.mu.Lock()
 	cancellations, queuedOperations := daemon.acceptMaintenanceConfigLocked(config)
 	daemon.metadata = metadata
@@ -384,6 +410,7 @@ func (daemon *daemon) refreshConfig(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
 	daemon.replaceRealtime(config.Realtime, config.ProtocolRevision)
 	notifyLoop(daemon.heartbeatWake)
 	for _, cancelRun := range cancellations {
@@ -403,6 +430,7 @@ func (daemon *daemon) sendHeartbeat(ctx context.Context) error {
 	configState := daemon.state
 	warnings := append([]string{}, daemon.config.Warnings...)
 	daemon.mu.Unlock()
+
 	status := "accepted"
 	errorText := ""
 	if configState.LastConfigError != "" && configState.RejectedConfigRevision > 0 && digestPattern.MatchString(configState.RejectedConfigDigest) {
@@ -412,6 +440,7 @@ func (daemon *daemon) sendHeartbeat(ctx context.Context) error {
 		metadata.Digest = configState.RejectedConfigDigest
 		warnings = nil
 	}
+
 	request := HeartbeatRequest{
 		Generation:         daemon.bootstrap.Generation,
 		BootID:             daemon.bootID,
@@ -436,6 +465,7 @@ func (daemon *daemon) sendHeartbeat(ctx context.Context) error {
 	if err := daemon.client.Heartbeat(ctx, request); err != nil {
 		return daemon.handleRequestError(err)
 	}
+
 	return daemon.clearAuthenticationPause()
 }
 
@@ -568,11 +598,13 @@ func runAgentLoop(ctx context.Context, normalInterval time.Duration, jitterFract
 
 func runTriggeredAgentLoop(ctx context.Context, normalInterval time.Duration, jitterFraction float64, jitter func(time.Duration) time.Duration, wake <-chan struct{}, action func(context.Context) error) error {
 	backoff := 2 * time.Second
+
 	for {
 		err := action(ctx)
 		if errors.Is(err, ErrPermanentlyStopped) {
 			return err
 		}
+
 		wait := normalJitter(normalInterval, jitterFraction, jitter)
 		if err != nil {
 			var apiError *APIError
@@ -588,10 +620,12 @@ func runTriggeredAgentLoop(ctx context.Context, normalInterval time.Duration, ji
 		} else {
 			backoff = 2 * time.Second
 		}
+
 		activeWake := wake
 		if err != nil {
 			activeWake = nil
 		}
+
 		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():

@@ -33,6 +33,7 @@ func (runner Runner) Run(ctx context.Context, request Request) Result {
 		result.Diagnostic = "invalid private state directory"
 		return result
 	}
+
 	shared := request.Operation == "backup" || request.Operation == "backup_stdin"
 	var repositoryLock *os.File
 	var err error
@@ -45,10 +46,12 @@ func (runner Runner) Run(ctx context.Context, request Request) Result {
 		result.Diagnostic = "cannot acquire repository operation lock"
 		return result
 	}
+
 	defer func() {
 		_ = syscall.Flock(int(repositoryLock.Fd()), syscall.LOCK_UN)
 		_ = repositoryLock.Close()
 	}()
+
 	var sourceLock *os.File
 	if request.SourceConnection != nil {
 		sourceLock, err = lockRepositoryShared(ctx, runner.State, *request.SourceConnection)
@@ -83,13 +86,16 @@ func (runner Runner) Run(ctx context.Context, request Request) Result {
 	dual := request.Operation == "init_from" || request.Operation == "copy"
 	strategy := repository.PreferNative
 	if dual && request.SourceConnection != nil && (request.Connection.Driver() != repository.DriverLocal || request.SourceConnection.Driver() != repository.DriverLocal) {
+		// Remote-to-remote operations need both repositories in one rclone namespace.
 		strategy = repository.RequireRclone
 	}
+
 	bindings := []repository.Binding{{Name: "backupchief_repository", Connection: request.Connection, Strategy: strategy}}
 	if request.SourceConnection != nil {
 		bindings[0].Name = "backupchief_destination"
 		bindings = append(bindings, repository.Binding{Name: "backupchief_source", Connection: *request.SourceConnection, Strategy: strategy})
 	}
+
 	session, err := repository.OpenSession(ctx, repository.SessionOptions{
 		State: runner.State, Work: work, AllowLocal: runner.AllowLocal,
 	}, bindings)
@@ -113,6 +119,7 @@ func (runner Runner) Run(ctx context.Context, request Request) Result {
 		result.Diagnostic = err.Error()
 		return result
 	}
+
 	env = append(env, session.Environment()...)
 
 	binary, err := Binary(ctx, runner.State)
@@ -140,12 +147,14 @@ func (runner Runner) Run(ctx context.Context, request Request) Result {
 			return result
 		}
 	}
+
 	if request.SourcePassword != "" {
 		if err := os.WriteFile(sourcePasswordFile, []byte(request.SourcePassword), 0600); err != nil {
 			result.Diagnostic = "cannot write private source password input"
 			return result
 		}
 	}
+
 	if request.Operation == "backup_stdin" {
 		if err := os.WriteFile(commandConfigFile, []byte(request.CommandConfig), 0600); err != nil {
 			result.Diagnostic = "cannot write private command configuration"

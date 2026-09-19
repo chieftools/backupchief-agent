@@ -119,17 +119,20 @@ func (client *Client) Enroll(ctx context.Context, token string, request Enrollme
 	if err != nil {
 		return EnrollmentResponse{}, fmt.Errorf("encode enrollment request: %w", err)
 	}
+
 	response, err := client.request(ctx, http.MethodPost, "/enroll", token, "", body)
 	if err != nil {
 		return EnrollmentResponse{}, err
 	}
 	defer response.Body.Close()
+
 	if err := requireProtocolResponse(response); err != nil {
 		return EnrollmentResponse{}, err
 	}
 	if response.StatusCode != http.StatusCreated && response.StatusCode != http.StatusOK {
 		return EnrollmentResponse{}, decodeProblem(response)
 	}
+
 	data, err := readLimited(response.Body, 64<<10)
 	if err != nil {
 		return EnrollmentResponse{}, fmt.Errorf("read enrollment response: %w", err)
@@ -137,6 +140,7 @@ func (client *Client) Enroll(ctx context.Context, token string, request Enrollme
 	if err := rejectDuplicateJSONKeys(data); err != nil {
 		return EnrollmentResponse{}, fmt.Errorf("validate enrollment response: %w", err)
 	}
+
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	var enrollment EnrollmentResponse
@@ -146,6 +150,7 @@ func (client *Client) Enroll(ctx context.Context, token string, request Enrollme
 	if err := requireJSONEOF(decoder); err != nil {
 		return EnrollmentResponse{}, fmt.Errorf("decode enrollment response: %w", err)
 	}
+
 	if !compatibleProtocolRevision(enrollment.ProtocolRevision) || enrollment.ProtocolRevision != response.Header.Get(ProtocolHeader) || !ulidPattern.MatchString(enrollment.ServerID) || enrollment.Generation == 0 || enrollment.ConfigRevision == 0 || !validateTimestamp(enrollment.EnrolledAt) {
 		return EnrollmentResponse{}, fmt.Errorf("enrollment response is incompatible")
 	}
@@ -158,6 +163,7 @@ func (client *Client) FetchConfig(ctx context.Context, etag string, expectedGene
 		return ConfigResponse{}, err
 	}
 	defer response.Body.Close()
+
 	if err := requireProtocolResponse(response); err != nil {
 		return ConfigResponse{}, err
 	}
@@ -167,12 +173,14 @@ func (client *Client) FetchConfig(ctx context.Context, etag string, expectedGene
 	if response.StatusCode != http.StatusOK {
 		return ConfigResponse{}, decodeProblem(response)
 	}
+
 	body, err := readLimited(response.Body, maximumConfig)
 	if err != nil {
 		return ConfigResponse{}, fmt.Errorf("read configuration: %w", err)
 	}
 	responseETag := response.Header.Get("ETag")
 	_, metadata, err := DecodeConfig(body, expectedGeneration)
+
 	if metadata.Digest != metadata.FileDigest {
 		return ConfigResponse{Body: body, Metadata: metadata}, fmt.Errorf("configuration response contains an installed-cache digest")
 	}
@@ -183,6 +191,7 @@ func (client *Client) FetchConfig(ctx context.Context, etag string, expectedGene
 		}
 		return configResponse, err
 	}
+
 	if responseETag != `"`+metadata.FileDigest+`"` {
 		return ConfigResponse{Body: body, Metadata: metadata}, fmt.Errorf("configuration ETag does not match its body")
 	}
@@ -383,17 +392,20 @@ func (client *Client) SubmitEvents(ctx context.Context, request EventRequest) (E
 	if len(body) > 1<<20 {
 		return EventsResponse{}, fmt.Errorf("events exceed 1 MiB")
 	}
+
 	response, err := client.request(ctx, http.MethodPost, "/events", client.Credential, "", body)
 	if err != nil {
 		return EventsResponse{}, err
 	}
 	defer response.Body.Close()
+
 	if err := requireProtocolResponse(response); err != nil {
 		return EventsResponse{}, err
 	}
 	if response.StatusCode != http.StatusOK {
 		return EventsResponse{}, decodeProblem(response)
 	}
+
 	data, err := readLimited(response.Body, 64<<10)
 	if err != nil {
 		return EventsResponse{}, fmt.Errorf("read event response: %w", err)
@@ -402,6 +414,7 @@ func (client *Client) SubmitEvents(ctx context.Context, request EventRequest) (E
 	if err := decodeStrict(data, &result); err != nil {
 		return EventsResponse{}, fmt.Errorf("decode event response: %w", err)
 	}
+
 	if !compatibleProtocolRevision(result.ProtocolRevision) || result.ProtocolRevision != response.Header.Get(ProtocolHeader) || len(result.Results) != len(request.Events) {
 		return EventsResponse{}, fmt.Errorf("event response does not match request")
 	}
@@ -410,6 +423,7 @@ func (client *Client) SubmitEvents(ctx context.Context, request EventRequest) (E
 			return EventsResponse{}, fmt.Errorf("event response item is invalid")
 		}
 	}
+
 	return result, nil
 }
 
@@ -579,6 +593,7 @@ func requestBodyForProtocol(path string, body []byte, protocolRevision string) (
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, fmt.Errorf("rewrite enrollment protocol revision: %w", err)
 	}
+
 	if path == "/enroll" {
 		revision, err := json.Marshal(protocolRevision)
 		if err != nil {
@@ -586,6 +601,7 @@ func requestBodyForProtocol(path string, body []byte, protocolRevision string) (
 		}
 		payload["protocol_revision"] = revision
 	}
+
 	if path == "/heartbeat" && !protocolRevisionSupports(protocolRevision, "1.1.0") {
 		delete(payload, "capabilities")
 		if rawConfig, exists := payload["config"]; exists {
@@ -593,6 +609,7 @@ func requestBodyForProtocol(path string, body []byte, protocolRevision string) (
 			if err := json.Unmarshal(rawConfig, &config); err != nil {
 				return nil, fmt.Errorf("rewrite heartbeat protocol revision: %w", err)
 			}
+
 			delete(config, "protocol_revision")
 			encodedConfig, err := json.Marshal(config)
 			if err != nil {
@@ -601,12 +618,14 @@ func requestBodyForProtocol(path string, body []byte, protocolRevision string) (
 			payload["config"] = encodedConfig
 		}
 	}
+
 	if path == "/heartbeat" && protocolRevisionSupports(protocolRevision, "1.1.0") {
 		if rawCapabilities, exists := payload["capabilities"]; exists {
 			var capabilities map[string]any
 			if err := json.Unmarshal(rawCapabilities, &capabilities); err != nil {
 				return nil, fmt.Errorf("rewrite heartbeat capabilities: %w", err)
 			}
+
 			if !protocolRevisionSupports(protocolRevision, "1.2.0") {
 				if backupTypes, ok := capabilities["backup_types"].(map[string]any); ok {
 					delete(backupTypes, "postgresql")
@@ -616,6 +635,7 @@ func requestBodyForProtocol(path string, body []byte, protocolRevision string) (
 					delete(tools, "pg_dump")
 				}
 			}
+
 			if !protocolRevisionSupports(protocolRevision, "1.7.0") {
 				if tools, ok := capabilities["tools"].(map[string]any); ok {
 					delete(tools, "snapshot_restore")
@@ -626,6 +646,7 @@ func requestBodyForProtocol(path string, body []byte, protocolRevision string) (
 					delete(tools, "agent_update")
 				}
 			}
+
 			encodedCapabilities, err := json.Marshal(capabilities)
 			if err != nil {
 				return nil, fmt.Errorf("rewrite heartbeat capabilities: %w", err)
@@ -638,6 +659,7 @@ func requestBodyForProtocol(path string, body []byte, protocolRevision string) (
 	if err != nil {
 		return nil, fmt.Errorf("rewrite enrollment protocol revision: %w", err)
 	}
+
 	return rewritten, nil
 }
 
@@ -662,6 +684,7 @@ func validateCommand(command AgentCommand, expectedGeneration uint64, protocolRe
 	if !expires.After(issued) || expires.Sub(issued) > 24*time.Hour {
 		return fmt.Errorf("command expiry is invalid")
 	}
+
 	switch command.Kind {
 	case "run_backup":
 		if !ulidPattern.MatchString(command.Payload.JobID) || command.Payload.RequiredConfigRevision == 0 || command.Payload.RunID != "" || command.Payload.Maintenance != "" || command.Payload.SnapshotIDs != nil {
@@ -675,6 +698,7 @@ func validateCommand(command AgentCommand, expectedGeneration uint64, protocolRe
 			if command.Payload.Maintenance != "forget" || !protocolRevisionSupports(protocolRevision, "1.5.0") || len(command.Payload.SnapshotIDs) == 0 || len(command.Payload.SnapshotIDs) > 1000 {
 				return fmt.Errorf("maintenance command snapshot identities are invalid")
 			}
+
 			seen := map[string]bool{}
 			for _, snapshotID := range command.Payload.SnapshotIDs {
 				if !digestPattern.MatchString(snapshotID) || seen[snapshotID] {
@@ -701,6 +725,7 @@ func validateCommand(command AgentCommand, expectedGeneration uint64, protocolRe
 	default:
 		return fmt.Errorf("unsupported command kind %q", command.Kind)
 	}
+
 	return nil
 }
 

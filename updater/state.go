@@ -147,11 +147,13 @@ func writeJSON(path string, value any, mode os.FileMode, uid, gid int) error {
 	if err != nil {
 		return err
 	}
+
 	data = append(data, '\n')
 	directory := filepath.Dir(path)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return err
 	}
+
 	file, err := os.CreateTemp(directory, "."+filepath.Base(path)+"-*")
 	if err != nil {
 		return err
@@ -161,6 +163,7 @@ func writeJSON(path string, value any, mode os.FileMode, uid, gid int) error {
 		_ = file.Close()
 		_ = os.Remove(temporary)
 	}
+
 	if err := file.Chmod(mode); err != nil {
 		cleanup()
 		return err
@@ -171,6 +174,7 @@ func writeJSON(path string, value any, mode os.FileMode, uid, gid int) error {
 			return err
 		}
 	}
+
 	if _, err := file.Write(data); err != nil {
 		cleanup()
 		return err
@@ -183,10 +187,12 @@ func writeJSON(path string, value any, mode os.FileMode, uid, gid int) error {
 		_ = os.Remove(temporary)
 		return err
 	}
+
 	if err := os.Rename(temporary, path); err != nil {
 		_ = os.Remove(temporary)
 		return err
 	}
+
 	return nil
 }
 

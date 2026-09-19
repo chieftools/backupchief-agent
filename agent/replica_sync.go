@@ -9,6 +9,7 @@ import (
 
 func (daemon *daemon) startReplicaSync(ctx context.Context, commandID string, job Job) error {
 	daemon.mu.Lock()
+
 	if daemon.state.AgentUpdate != nil {
 		daemon.mu.Unlock()
 		return nil
@@ -18,11 +19,13 @@ func (daemon *daemon) startReplicaSync(ctx context.Context, commandID string, jo
 		daemon.mu.Unlock()
 		return nil
 	}
+
 	target, found := replicaForKey(job, journaled.Command.Payload.RepositoryKey)
 	if !found {
 		daemon.mu.Unlock()
 		return daemon.finishWithoutExecution(commandID, "failed", "execution_failed", "The replica is unavailable in the required configuration.")
 	}
+
 	if daemon.replicationActive == nil {
 		daemon.replicationActive = make(map[string]bool)
 	}
@@ -46,10 +49,12 @@ func (daemon *daemon) startReplicaSync(ctx context.Context, commandID string, jo
 		daemon.mu.Unlock()
 		return err
 	}
+
 	daemon.activeWG.Add(1)
 	daemon.mu.Unlock()
 
 	go daemon.runReplicaSync(ctx, commandID, job, target)
+
 	return nil
 }
 

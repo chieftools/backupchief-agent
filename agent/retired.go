@@ -113,6 +113,7 @@ func prepareRetiredGeneration(store *FileStore, bootstrap Bootstrap, now time.Ti
 	if err != nil {
 		return err
 	}
+
 	for _, command := range journal.Commands {
 		if command.Command.Generation != bootstrap.Generation {
 			continue
@@ -122,6 +123,7 @@ func prepareRetiredGeneration(store *FileStore, bootstrap Bootstrap, now time.Ti
 			if command.State == "running" {
 				status, resultCode, summary = "unresolved", "outcome_unresolved", "Re-enrollment ended the run before its outcome was confirmed."
 			}
+
 			timestamp := protocolTimestamp(now)
 			command.State = "finished"
 			command.Result = &CommandResult{
@@ -134,6 +136,7 @@ func prepareRetiredGeneration(store *FileStore, bootstrap Bootstrap, now time.Ti
 			if idErr != nil {
 				return idErr
 			}
+
 			command.Events = append(command.Events, AgentEvent{
 				ID: eventID, RunID: command.RunID, JobID: command.Command.Payload.JobID,
 				RunKind: command.RunKind, ConfigRevision: command.ConfigRevision, Trigger: command.Trigger, ScheduledFor: command.ScheduledFor,
@@ -141,6 +144,7 @@ func prepareRetiredGeneration(store *FileStore, bootstrap Bootstrap, now time.Ti
 				Payload: terminalEventPayload(*command.Result),
 			})
 		}
+
 		terminalEvents := command.Events[:0]
 		for _, event := range command.Events {
 			if event.Kind == "snapshot_inventory_chunk" || event.Kind == "run_finished" {
@@ -151,6 +155,7 @@ func prepareRetiredGeneration(store *FileStore, bootstrap Bootstrap, now time.Ti
 		command.JobSnapshot = ""
 		command.ResultReported = true
 	}
+
 	if err := store.SaveCommandJournal(journal); err != nil {
 		return fmt.Errorf("settle retired command journal: %w", err)
 	}
@@ -168,8 +173,10 @@ func (daemon *daemon) reportRetiredJournal(ctx context.Context) error {
 	if len(records) == 0 {
 		return nil
 	}
+
 	sort.Slice(records, func(first, second int) bool { return records[first].Generation < records[second].Generation })
 	kept := records[:0]
+
 	for _, record := range records {
 		expiresAt, _ := time.Parse("2006-01-02T15:04:05.000000Z", record.ExpiresAt)
 		if !daemon.now().Before(expiresAt) {
@@ -178,6 +185,7 @@ func (daemon *daemon) reportRetiredJournal(ctx context.Context) error {
 			}
 			continue
 		}
+
 		complete, reportErr := daemon.flushRetiredGeneration(ctx, record)
 		var apiError *APIError
 		if errors.As(reportErr, &apiError) && apiError.Code == "enrollment_revoked" {
@@ -186,6 +194,7 @@ func (daemon *daemon) reportRetiredJournal(ctx context.Context) error {
 			}
 			continue
 		}
+
 		if reportErr != nil {
 			if err := daemon.store.saveRetiredEnrollments(daemon.bootstrap.CacheKey, records); err != nil {
 				return err
@@ -196,6 +205,7 @@ func (daemon *daemon) reportRetiredJournal(ctx context.Context) error {
 			kept = append(kept, record)
 		}
 	}
+
 	return daemon.store.saveRetiredEnrollments(daemon.bootstrap.CacheKey, kept)
 }
 

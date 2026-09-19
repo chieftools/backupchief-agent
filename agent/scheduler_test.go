@@ -442,6 +442,7 @@ func TestOfflineRunsContinueDuringSlowReportingAndReplayAfterRestart(t *testing.
 func TestSpoolPressureReleasesReserveAndRecordsAnOccurrenceGap(t *testing.T) {
 	store := newAgentTestStore(t)
 	store.reserveBytes = 4096
+
 	if _, err := store.LoadRuntimeState(); err != nil {
 		t.Fatal(err)
 	}
@@ -471,10 +472,12 @@ func TestSpoolPressureReleasesReserveAndRecordsAnOccurrenceGap(t *testing.T) {
 	if executor.count() != 0 || len(runtime.journal.Commands) != 0 {
 		t.Fatal("spool pressure created work")
 	}
+
 	exists, err := pressureStore.occurrenceExists(job.ID, "backup", protocolTimestamp(now))
 	if err != nil || !exists {
 		t.Fatalf("pressure occurrence tombstone: found=%t err=%v", exists, err)
 	}
+
 	state, err := pressureStore.LoadRuntimeState()
 	if err != nil || !state.SpoolGapDetected {
 		t.Fatalf("pressure gap state: %+v %v", state, err)
@@ -541,6 +544,7 @@ func TestStateDatabaseBackfillsRunKindForDurableBackupRecords(t *testing.T) {
 	jobID := "01k4p4f7m1r9d3t6v8w2x5y7zc"
 	eventID := "01k4p4f7m1r9d3t6v8w2x5y7zd"
 	journal := newCommandJournal()
+
 	journal.Commands[commandID] = &JournalCommand{
 		Command: AgentCommand{
 			ID: commandID, Generation: 1, Kind: "run_backup",
@@ -566,6 +570,7 @@ func TestStateDatabaseBackfillsRunKindForDurableBackupRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	command := loaded.Commands[commandID]
 	if command.RunKind != "backup" || command.Events[0].RunKind != "backup" || command.Result.RunKind != "backup" {
 		t.Fatalf("legacy run kinds were not backfilled: %+v", command)
@@ -573,6 +578,7 @@ func TestStateDatabaseBackfillsRunKindForDurableBackupRecords(t *testing.T) {
 	if err := store.SaveCommandJournal(loaded); err != nil {
 		t.Fatal(err)
 	}
+
 	reloaded, err := store.LoadCommandJournal()
 	if err != nil || reloaded.Commands[commandID].Events[0].RunKind != "backup" {
 		t.Fatalf("backfilled event was not durable: %+v %v", reloaded, err)
@@ -583,6 +589,7 @@ func TestStateDatabaseCompactsAcknowledgedVerboseRecords(t *testing.T) {
 	store := newAgentTestStore(t)
 	journal := newCommandJournal()
 	now := time.Date(2026, 9, 10, 3, 0, 0, 0, time.UTC)
+
 	for range 200 {
 		commandID, err := newULID(now)
 		if err != nil {
@@ -609,12 +616,14 @@ func TestStateDatabaseCompactsAcknowledgedVerboseRecords(t *testing.T) {
 			}},
 		}
 	}
+
 	if err := store.SaveCommandJournal(journal); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.SaveCommandJournal(newCommandJournal()); err != nil {
 		t.Fatal(err)
 	}
+
 	before, err := os.Stat(store.databasePath())
 	if err != nil {
 		t.Fatal(err)
@@ -622,6 +631,7 @@ func TestStateDatabaseCompactsAcknowledgedVerboseRecords(t *testing.T) {
 	if err := store.compactStateDatabase(); err != nil {
 		t.Fatal(err)
 	}
+
 	after, err := os.Stat(store.databasePath())
 	if err != nil {
 		t.Fatal(err)
@@ -629,6 +639,7 @@ func TestStateDatabaseCompactsAcknowledgedVerboseRecords(t *testing.T) {
 	if after.Size() >= before.Size() {
 		t.Fatalf("state database did not compact: before=%d after=%d", before.Size(), after.Size())
 	}
+
 	loaded, err := store.LoadCommandJournal()
 	if err != nil || len(loaded.Commands) != 0 {
 		t.Fatalf("compacted state is invalid: %+v %v", loaded, err)
