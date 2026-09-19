@@ -4,6 +4,17 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.13.0]
+
+### Changed
+
+- Updated the agent protocol to 1.12 so a successfully reported gap is acknowledged and cleared locally without clearing a newer gap that occurred concurrently.
+
+### Fixed
+
+- Reported a gap only when evidence was actually discarded or could not be retained, instead of flagging terminal and inventory events that remain durably queued for retry.
+- Kept ordinary coalesced schedule occurrences from creating reporting-gap warnings while preserving atomic occurrence and gap state under real spool pressure.
+
 ## [0.12.1]
 
 ### Fixed
@@ -198,7 +209,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.12.1...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/chieftools/backupchief-agent/compare/v0.12.1...v0.13.0
 [0.12.1]: https://github.com/chieftools/backupchief-agent/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/chieftools/backupchief-agent/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/chieftools/backupchief-agent/compare/v0.10.2...v0.11.0
