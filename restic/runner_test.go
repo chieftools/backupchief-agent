@@ -121,6 +121,26 @@ func TestStdinBackupBuildsACommandWithoutShellInterpolation(t *testing.T) {
 	}
 }
 
+func TestResticCommandsUseLowImpactExecutionSettings(t *testing.T) {
+	request := testRequest(t)
+	request.Operation = "backup"
+	request.Root = "/srv/synthetic-source"
+
+	arguments, environment, err := request.arguments("password", "", "cache", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, expected := range []string{"GOMAXPROCS=1", "RESTIC_READ_CONCURRENCY=1"} {
+		if !slices.Contains(environment, expected) {
+			t.Fatalf("missing execution setting %q: %v", expected, environment)
+		}
+	}
+	if !slices.Contains(arguments, "--no-scan") {
+		t.Fatalf("filesystem backup retains its progress scan: %v", arguments)
+	}
+}
+
 func TestAWSRepositoryAndGuardUseTheDerivedEndpoint(t *testing.T) {
 	request := testRequest(t)
 	request.Connection = repository.NewS3Connection(repository.S3Connection{
@@ -342,12 +362,17 @@ func TestDualRepositoryTransportUsesBundledRclone(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	args, _, err := request.dualArguments("destination-password", "source-password", "cache", destinationPrepared, sourcePrepared)
+	args, environment, err := request.dualArguments("destination-password", "source-password", "cache", destinationPrepared, sourcePrepared)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Contains(args, "rclone.program=/private/runtime/rclone") {
 		t.Fatalf("missing bundled rclone program: %v", args)
+	}
+	for _, expected := range []string{"GOMAXPROCS=1", "RESTIC_READ_CONCURRENCY=1"} {
+		if !slices.Contains(environment, expected) {
+			t.Fatalf("missing dual-repository execution setting %q: %v", expected, environment)
+		}
 	}
 
 	config := sourceConfig + destinationConfig

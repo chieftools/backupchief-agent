@@ -236,6 +236,19 @@ Restart=no
 	_ = exec.Command("systemctl", "reset-failed", "backupchief").Run()
 	runSystem(t, "systemctl", "start", "backupchief")
 	waitForService(t)
+	for property, expected := range map[string]string{
+		"CPUQuotaPerSecUSec":   "1s",
+		"CPUWeight":            "10",
+		"IOWeight":             "10",
+		"IOSchedulingClass":    "2",
+		"IOSchedulingPriority": "7",
+		"Nice":                 "10",
+	} {
+		actual := strings.TrimSpace(runSystem(t, "systemctl", "show", "backupchief", "--property="+property, "--value"))
+		if actual != expected {
+			t.Fatalf("effective %s is %q, want %q", property, actual, expected)
+		}
+	}
 
 	serviceResult = strings.TrimSpace(
 		runSystem(t, "systemctl", "show", "backupchief", "--property=Result", "--value"),

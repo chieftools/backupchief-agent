@@ -144,6 +144,12 @@ func TestPackageContents(t *testing.T) {
 			for _, setting := range []string{
 				"User=backupchief",
 				"Group=backupchief",
+				"Nice=10",
+				"CPUWeight=10",
+				"CPUQuota=100%",
+				"IOWeight=10",
+				"IOSchedulingClass=best-effort",
+				"IOSchedulingPriority=7",
 				"ExecStart=/usr/bin/backupchief run",
 				"RestartPreventExitStatus=2",
 				"StateDirectory=backupchief",
@@ -160,6 +166,22 @@ func TestPackageContents(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAgentUnitLimitsResourceUsage(t *testing.T) {
+	service := string(read(t, "backupchief.service"))
+	for _, expected := range []string{
+		"\nNice=10\n",
+		"\nCPUWeight=10\n",
+		"\nCPUQuota=100%\n",
+		"\nIOWeight=10\n",
+		"\nIOSchedulingClass=best-effort\n",
+		"\nIOSchedulingPriority=7\n",
+	} {
+		if !strings.Contains(service, expected) {
+			t.Fatalf("agent service is missing %q", expected)
+		}
 	}
 }
 

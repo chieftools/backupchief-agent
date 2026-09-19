@@ -55,7 +55,15 @@ func (r Request) dualArguments(passwordFile, sourcePasswordFile, cache string, d
 
 	lockWait := time.Duration(r.LockWaitSeconds) * time.Second
 	arguments := []string{"--password-file", passwordFile, "--cache-dir", cache, "--retry-lock", lockWait.String()}
-	environment := []string{"PATH=/usr/bin:/bin", "HOME=" + cache, "TMPDIR=" + cache, "LANG=C", "RESTIC_PROGRESS_FPS=1"}
+	environment := []string{
+		"PATH=/usr/bin:/bin",
+		"HOME=" + cache,
+		"TMPDIR=" + cache,
+		"LANG=C",
+		"GOMAXPROCS=1",
+		"RESTIC_PROGRESS_FPS=1",
+		"RESTIC_READ_CONCURRENCY=1",
+	}
 	arguments = append(arguments, "--repo", destination.Repository)
 	options := append([]string(nil), destination.Options...)
 	for _, option := range source.Options {
@@ -145,7 +153,7 @@ func (r Request) argumentsPrepared(passwordFile, newPasswordFile, cache string, 
 			return nil, nil, errors.New("invalid backup host")
 		}
 
-		arguments = append(arguments, "backup", "--json", "--one-file-system")
+		arguments = append(arguments, "backup", "--json", "--one-file-system", "--no-scan")
 		if r.Host != "" {
 			arguments = append(arguments, "--host", r.Host)
 		}
@@ -331,7 +339,9 @@ func (r Request) baseArgumentsPrepared(passwordFile, cache string, prepared repo
 		"HOME=" + cache,
 		"TMPDIR=" + cache,
 		"LANG=C",
+		"GOMAXPROCS=1",
 		"RESTIC_PROGRESS_FPS=1",
+		"RESTIC_READ_CONCURRENCY=1",
 	}
 
 	arguments = append(arguments, "--repo", prepared.Repository)
