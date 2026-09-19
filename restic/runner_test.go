@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/chieftools/backupchief-agent/repository"
 )
 
 func TestSFTPRepositoryUsesPinnedBundledRcloneTransport(t *testing.T) {
@@ -27,22 +29,18 @@ func TestSFTPRepositoryUsesPinnedBundledRcloneTransport(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := testRequest(t)
-	request.Connection = Connection{
-		Driver:         "sftp",
-		Host:           "archive.example.test",
-		Port:           2222,
-		Username:       "synthetic-backup",
-		Path:           "/repositories/job-example",
-		HostKeys:       []string{"ssh-ed25519 c3ludGhldGljLWhvc3Qta2V5"},
-		SFTPPrivateKey: string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: encoded})),
+	request.Connection = repository.NewSFTPConnection(repository.SFTPConnection{
+		Host: "archive.example.test", Port: 2222, Username: "synthetic-backup",
+		Path: "/repositories/job-example", HostKeys: []string{"ssh-ed25519 c3ludGhldGljLWhvc3Qta2V5"},
+		Authentication: repository.Ed25519Authentication(string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: encoded}))),
+	})
+	prepared, configuration, err := repository.PrepareRclone(request.Connection, repository.RcloneOptions{
+		Name: "backupchief_repository", Program: "/private/runtime/rclone", ProxyURL: "http://127.0.0.1:43210",
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	transport := transportOptions{
-		rcloneConfig:  "/private/runtime/rclone.conf",
-		rcloneProgram: "/private/runtime/rclone",
-		proxyURL:      "http://127.0.0.1:43210",
-	}
-
-	arguments, environment, configuration, err := request.argumentsWithTransport("password", "", "cache", transport, false)
+	arguments, _, err := request.argumentsPrepared("password", "", "cache", prepared)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,35 +57,27 @@ func TestSFTPRepositoryUsesPinnedBundledRcloneTransport(t *testing.T) {
 			t.Fatalf("missing %q in configuration: %s", expected, configuration)
 		}
 	}
-	if !slices.Contains(arguments, "rclone.program=/private/runtime/rclone") || !slices.Contains(environment, "RCLONE_CONFIG=/private/runtime/rclone.conf") {
-		t.Fatalf("arguments=%v environment=%v", arguments, environment)
+	if !slices.Contains(arguments, "rclone.program=/private/runtime/rclone") {
+		t.Fatalf("arguments=%v", arguments)
 	}
 }
 
 func TestSFTPPasswordIsObscuredBeforeWritingRcloneConfiguration(t *testing.T) {
 	request := testRequest(t)
-	request.Connection = Connection{
-		Driver:       "sftp",
-		Host:         "password.example.test",
-		Port:         22,
-		Username:     "synthetic-backup",
-		Path:         "/repositories/job-password",
-		HostKeys:     []string{"ssh-ed25519 c3ludGhldGljLWhvc3Qta2V5"},
-		SFTPPassword: "synthetic-sftp-password",
-	}
-	transport := transportOptions{
-		rcloneConfig:  "/private/runtime/rclone.conf",
-		rcloneProgram: "/private/runtime/rclone",
-		proxyURL:      "http://127.0.0.1:43210",
-		obscure: func(password string) (string, error) {
+	request.Connection = repository.NewSFTPConnection(repository.SFTPConnection{
+		Host: "password.example.test", Port: 22, Username: "synthetic-backup",
+		Path: "/repositories/job-password", HostKeys: []string{"ssh-ed25519 c3ludGhldGljLWhvc3Qta2V5"},
+		Authentication: repository.PasswordAuthentication("synthetic-sftp-password"),
+	})
+	_, configuration, err := repository.PrepareRclone(request.Connection, repository.RcloneOptions{
+		Name: "backupchief_repository", Program: "/private/runtime/rclone", ProxyURL: "http://127.0.0.1:43210",
+		Obscure: func(password string) (string, error) {
 			if password != "synthetic-sftp-password" {
 				t.Fatalf("password: %q", password)
 			}
 			return "obscured-synthetic-password", nil
 		},
-	}
-
-	_, _, configuration, err := request.argumentsWithTransport("password", "", "cache", transport, false)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,21 +119,16 @@ func TestStdinBackupBuildsACommandWithoutShellInterpolation(t *testing.T) {
 
 func TestAWSRepositoryAndGuardUseTheDerivedEndpoint(t *testing.T) {
 	request := testRequest(t)
-	request.Connection = Connection{
-		Driver:    "s3",
-		Endpoint:  "https://s3.eu-west-3.amazonaws.com",
-		Region:    "eu-west-3",
-		Bucket:    "synthetic-archive",
-		Prefix:    "repositories/synthetic-job",
-		AccessKey: "synthetic-access",
-		SecretKey: "synthetic-secret",
-	}
+	request.Connection = repository.NewS3Connection(repository.S3Connection{
+		Endpoint: "https://s3.eu-west-3.amazonaws.com", Region: "eu-west-3", Bucket: "synthetic-archive",
+		Prefix: "repositories/synthetic-job", AccessKey: "synthetic-access", SecretKey: "synthetic-secret",
+	})
 
 	arguments, _, err := request.arguments("password", "", "cache", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	endpoint, err := canonicalS3Endpoint(request.Connection)
+	target, _, err := request.Connection.Target()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,8 +137,8 @@ func TestAWSRepositoryAndGuardUseTheDerivedEndpoint(t *testing.T) {
 	if !slices.Contains(arguments, repository) {
 		t.Fatalf("repository arguments: %v", arguments)
 	}
-	if endpoint.String() != "https://s3.dualstack.eu-west-3.amazonaws.com:443" {
-		t.Fatalf("guarded endpoint: %s", endpoint)
+	if target.Host != "s3.dualstack.eu-west-3.amazonaws.com" || target.Port != 443 {
+		t.Fatalf("guarded target: %+v", target)
 	}
 }
 
@@ -161,12 +146,9 @@ func testRequest(t *testing.T) Request {
 	t.Helper()
 
 	return Request{
-		Version:   1,
-		Operation: "init",
-		Connection: Connection{
-			Driver: "local",
-			Path:   filepath.Join(t.TempDir(), "repository"),
-		},
+		Version:         1,
+		Operation:       "init",
+		Connection:      repository.NewLocalConnection(filepath.Join(t.TempDir(), "repository")),
 		Password:        "synthetic-service-password",
 		TimeoutSeconds:  300,
 		LockWaitSeconds: 0,
@@ -254,7 +236,7 @@ func TestIndependentRecovery(t *testing.T) {
 		command := exec.Command(
 			binary,
 			"--repo",
-			request.Connection.Path,
+			request.Connection.RepositoryPath(),
 			"restore",
 			snapshots[0].ID,
 			"--target",
@@ -329,32 +311,38 @@ func TestInitializesAndCopiesBetweenLocalRepositories(t *testing.T) {
 }
 
 func TestDualRepositoryTransportUsesBundledRclone(t *testing.T) {
-	source := Connection{
-		Driver: "s3", Endpoint: "https://source.storage.example.test", Bucket: "synthetic-source",
-		Prefix: "repository", Region: "test-1", AccessKey: "synthetic-source-key", SecretKey: "synthetic-source-secret",
-	}
+	source := repository.NewS3Connection(repository.S3Connection{
+		Endpoint: "https://source.storage.example.test", Bucket: "synthetic-source", Prefix: "repository",
+		Region: "test-1", AccessKey: "synthetic-source-key", SecretKey: "synthetic-source-secret",
+	})
 	request := Request{
-		Version: 1, Operation: "copy", Connection: Connection{
-			Driver: "s3", Endpoint: "https://destination.storage.example.test", Bucket: "synthetic-destination",
-			Prefix: "repository", Region: "test-2", AccessKey: "synthetic-destination-key", SecretKey: "synthetic-destination-secret",
-		},
+		Version: 1, Operation: "copy", Connection: repository.NewS3Connection(repository.S3Connection{
+			Endpoint: "https://destination.storage.example.test", Bucket: "synthetic-destination", Prefix: "repository",
+			Region: "test-2", AccessKey: "synthetic-destination-key", SecretKey: "synthetic-destination-secret",
+		}),
 		SourceConnection: &source, Password: "synthetic-destination-password", SourcePassword: "synthetic-source-password",
 		TimeoutSeconds: 3600, LockWaitSeconds: 30,
 	}
-
-	args, environment, config, err := request.dualArguments(
-		"destination-password", "source-password", "cache",
-		transportOptions{rcloneConfig: "rclone.conf", rcloneProgram: "/private/runtime/rclone"}, false,
-	)
+	destinationPrepared, destinationConfig, err := repository.PrepareRclone(request.Connection, repository.RcloneOptions{
+		Name: "backupchief_destination", Program: "/private/runtime/rclone",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourcePrepared, sourceConfig, err := repository.PrepareRclone(source, repository.RcloneOptions{
+		Name: "backupchief_source", Program: "/private/runtime/rclone",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args, _, err := request.dualArguments("destination-password", "source-password", "cache", destinationPrepared, sourcePrepared)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Contains(args, "rclone.program=/private/runtime/rclone") {
 		t.Fatalf("missing bundled rclone program: %v", args)
 	}
-	if !slices.Contains(environment, "RCLONE_CONFIG=rclone.conf") {
-		t.Fatalf("missing isolated rclone configuration: %v", environment)
-	}
+	config := sourceConfig + destinationConfig
 	for _, section := range []string{"[backupchief_source]", "[backupchief_destination]"} {
 		if !strings.Contains(config, section) {
 			t.Fatalf("missing rclone remote %s: %s", section, config)
@@ -364,9 +352,7 @@ func TestDualRepositoryTransportUsesBundledRclone(t *testing.T) {
 		t.Fatalf("rclone remotes may attempt bucket creation: %s", config)
 	}
 
-	if _, _, _, err := request.dualArguments(
-		"destination-password", "source-password", "cache", transportOptions{rcloneConfig: "rclone.conf"}, false,
-	); err == nil {
+	if _, _, err := repository.PrepareRclone(source, repository.RcloneOptions{Name: "backupchief_source"}); err == nil {
 		t.Fatal("accepted a system-resolved rclone executable")
 	}
 }
@@ -570,9 +556,9 @@ func TestBackupSelectionProtectsStateAndNestedRepository(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner.State = filepath.Join(root, ".backupchief-state")
-	repository := filepath.Join(root, "nested repository")
+	repositoryPath := filepath.Join(root, "nested repository")
 	request := testRequest(t)
-	request.Connection.Path = repository
+	request.Connection = repository.NewLocalConnection(repositoryPath)
 	requireComplete(t, runner, request)
 
 	files := map[string]string{
@@ -715,20 +701,20 @@ func TestSecretRedaction(t *testing.T) {
 	request := Request{
 		Password:       "synthetic&password",
 		SourcePassword: "synthetic-source-password",
-		Connection: Connection{
-			SecretKey:      "synthetic/storage+secret",
-			SFTPPassword:   "synthetic-sftp-password",
-			SFTPPrivateKey: "synthetic-sftp-private-key",
-		},
-		SourceConnection: &Connection{
-			AccessKey: "synthetic-source-access",
-			SecretKey: "synthetic-source-secret",
-		},
+		Connection: repository.NewS3Connection(repository.S3Connection{
+			Endpoint: "https://redaction.example.test", Bucket: "synthetic-bucket", Prefix: "repository", Region: "test-1",
+			AccessKey: "synthetic-source-access", SecretKey: "synthetic/storage+secret",
+		}),
 	}
+	source := repository.NewSFTPConnection(repository.SFTPConnection{
+		Host: "redaction.example.test", Port: 22, Username: "synthetic", Path: "/repository",
+		HostKeys: []string{"ssh-ed25519 c3ludGhldGljLWtleQ=="}, Authentication: repository.PasswordAuthentication("synthetic-sftp-password"),
+	})
+	request.SourceConnection = &source
 
-	got := redact("synthetic&password synthetic/storage+secret synthetic%26password synthetic-source-password synthetic-source-access synthetic-source-secret synthetic-sftp-password synthetic-sftp-private-key", request)
+	got := redact("synthetic&password synthetic/storage+secret synthetic%26password synthetic-source-password synthetic-source-access synthetic-sftp-password", request)
 
-	if got != "[REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED]" {
+	if got != "[REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED]" {
 		t.Fatal(got)
 	}
 }

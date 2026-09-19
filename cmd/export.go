@@ -70,7 +70,7 @@ func newExportCommand(configPath *string) *cobra.Command {
 func exportRequest(job agent.Job, repository agent.JobRepository, snapshot, kind, path string) restic.ExportRequest {
 	return restic.ExportRequest{
 		Version:    1,
-		Connection: repository.Connection.Restic(),
+		Connection: repository.Connection,
 		Password:   repository.ServicePassword, Snapshot: snapshot, Kind: kind, Path: path,
 		ArchiveEntryName: exportEntryName(path), TimeoutSeconds: 6 * 60 * 60, LockWaitSeconds: 5 * 60,
 	}

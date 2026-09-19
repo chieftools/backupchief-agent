@@ -19,6 +19,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/chieftools/backupchief-agent/repository"
 )
 
 func TestPinnedResticRejectsRedirectToLoopback(t *testing.T) {
@@ -123,15 +125,10 @@ func TestPinnedResticRejectsRedirectToLoopback(t *testing.T) {
 	request := Request{
 		Version:   1,
 		Operation: "snapshots",
-		Connection: Connection{
-			Driver:    "s3",
-			Endpoint:  "https://objects.example.test",
-			Bucket:    "synthetic-bucket",
-			Prefix:    "repository",
-			Region:    "auto",
-			AccessKey: "synthetic-access",
-			SecretKey: "synthetic-secret",
-		},
+		Connection: repository.NewS3Connection(repository.S3Connection{
+			Endpoint: "https://objects.example.test", Bucket: "synthetic-bucket", Prefix: "repository",
+			Region: "auto", AccessKey: "synthetic-access", SecretKey: "synthetic-secret",
+		}),
 		Password:       "synthetic-password",
 		TimeoutSeconds: 5,
 	}

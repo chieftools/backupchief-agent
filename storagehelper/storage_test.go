@@ -7,6 +7,8 @@ import (
 	"encoding/pem"
 	"strings"
 	"testing"
+
+	"github.com/chieftools/backupchief-agent/repository"
 )
 
 func TestGenerateEd25519ProducesMatchingOpenSSHAndPKCS8Keys(t *testing.T) {
@@ -42,7 +44,7 @@ func TestGenerateEd25519ProducesMatchingOpenSSHAndPKCS8Keys(t *testing.T) {
 func TestParseHostKeysReadsThePinnedRcloneSetting(t *testing.T) {
 	configuration := "[backupchief_storage]\ntype = sftp\nhost_keys = ssh-ed25519 c3ludGhldGljLW9uZQ==,ssh-rsa c3ludGhldGljLXR3bw==\n"
 	want := []string{"ssh-ed25519 c3ludGhldGljLW9uZQ==", "ssh-rsa c3ludGhldGljLXR3bw=="}
-	got := parseHostKeys(configuration)
+	got := repository.ParseHostKeys(configuration)
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("host keys: %v", got)
 	}

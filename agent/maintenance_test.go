@@ -32,7 +32,7 @@ func TestMaintenanceRunsPrimaryThenReplicaAndRetriesTransientFailures(t *testing
 	job.Replicas = []JobRepository{{
 		Key: "repository_01k4p4f7m1r9d3t6v8w2x5y7zf", ID: strings.Repeat("d", 64),
 		ServicePassword: "synthetic-service-password", Source: job.Repository.Key, Status: "active",
-		Connection: RepositoryConnection{Driver: "local", Path: t.TempDir()},
+		Connection: testLocalRepository(t.TempDir()),
 	}}
 
 	result, _, _, _ := executeMaintenanceRepositories(
@@ -76,7 +76,7 @@ func TestRetentionResolvesProtectedSnapshotsToReplicaLocalIDs(t *testing.T) {
 	job.Replicas = []JobRepository{{
 		Key: "repository_01k4p4f7m1r9d3t6v8w2x5y7zd", ID: strings.Repeat("e", 64),
 		ServicePassword: "synthetic-service-password", Source: job.Repository.Key, Status: "active",
-		Connection: RepositoryConnection{Driver: "local", Path: t.TempDir()},
+		Connection: testLocalRepository(t.TempDir()),
 	}}
 	job.Retention.LatestComplete = &CompleteSnapshotProof{
 		RunID: latestRunID, FinishedAt: "2026-09-10T08:00:00.000000Z", SnapshotIDs: []string{primaryLatest},
@@ -121,7 +121,7 @@ func TestRetentionFailsClosedWhenAProtectedReplicaSnapshotIsMissing(t *testing.T
 	job.Replicas = []JobRepository{{
 		Key: "repository_01k4p4f7m1r9d3t6v8w2x5y7zh", ID: strings.Repeat("4", 64),
 		ServicePassword: "synthetic-service-password", Source: job.Repository.Key, Status: "active",
-		Connection: RepositoryConnection{Driver: "local", Path: t.TempDir()},
+		Connection: testLocalRepository(t.TempDir()),
 	}}
 	job.Retention.LatestComplete = &CompleteSnapshotProof{
 		RunID: latestRunID, FinishedAt: "2026-09-10T08:00:00.000000Z", SnapshotIDs: []string{primaryLatest},

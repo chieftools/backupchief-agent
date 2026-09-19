@@ -30,7 +30,7 @@ func TestRepositoryContention(t *testing.T) {
 	backup := exec.Command(
 		binary,
 		"--repo",
-		request.Connection.Path,
+		request.Connection.RepositoryPath(),
 		"backup",
 		"--stdin",
 		"--stdin-filename",
@@ -48,7 +48,7 @@ func TestRepositoryContention(t *testing.T) {
 	}()
 
 	waitFor(t, func() bool {
-		entries, _ := os.ReadDir(filepath.Join(request.Connection.Path, "locks"))
+		entries, _ := os.ReadDir(filepath.Join(request.Connection.RepositoryPath(), "locks"))
 		for _, entry := range entries {
 			if snapshotPattern.MatchString(entry.Name()) {
 				return true
@@ -115,7 +115,7 @@ func TestMaintenanceRecoversAStaleRepositoryLockOnce(t *testing.T) {
 	backup := exec.Command(
 		binary,
 		"--repo",
-		request.Connection.Path,
+		request.Connection.RepositoryPath(),
 		"backup",
 		"--stdin",
 		"--stdin-filename",
@@ -128,7 +128,7 @@ func TestMaintenanceRecoversAStaleRepositoryLockOnce(t *testing.T) {
 	}
 
 	waitFor(t, func() bool {
-		entries, _ := os.ReadDir(filepath.Join(request.Connection.Path, "locks"))
+		entries, _ := os.ReadDir(filepath.Join(request.Connection.RepositoryPath(), "locks"))
 		for _, entry := range entries {
 			if snapshotPattern.MatchString(entry.Name()) {
 				return true
@@ -151,7 +151,7 @@ func TestMaintenanceRecoversAStaleRepositoryLockOnce(t *testing.T) {
 	if recovered.ExitCode != 0 || recovered.Outcome != "complete" || !strings.Contains(recovered.Diagnostic, "stale repository lock cleanup attempted") {
 		t.Fatalf("stale lock recovery failed: %+v", recovered)
 	}
-	entries, err := os.ReadDir(filepath.Join(request.Connection.Path, "locks"))
+	entries, err := os.ReadDir(filepath.Join(request.Connection.RepositoryPath(), "locks"))
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("repository locks remain after recovery: %v %v", entries, err)
 	}

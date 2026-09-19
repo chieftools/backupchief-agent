@@ -65,7 +65,7 @@ func ResticRequest(job Job, operation, host string) restic.Request {
 func ResticRequestForRepository(job Job, repository JobRepository, operation, host string) restic.Request {
 	return restic.Request{
 		Version: 1, Operation: operation,
-		Connection: repository.Connection.Restic(),
+		Connection: repository.Connection,
 		Password:   repository.ServicePassword, Root: job.Source.Root,
 		Excludes: append([]string{}, job.Source.Excludes...), Host: host,
 		Tags: []string{"backupchief-job:" + job.ID}, TimeoutSeconds: 12 * 60 * 60, LockWaitSeconds: 5 * 60,

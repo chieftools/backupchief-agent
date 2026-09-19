@@ -12,15 +12,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/chieftools/backupchief-agent/egress"
-	bundledrclone "github.com/chieftools/backupchief-agent/rclone"
-	"github.com/chieftools/backupchief-agent/restic"
+	"github.com/chieftools/backupchief-agent/repository"
 )
 
 const (
@@ -29,13 +26,13 @@ const (
 )
 
 type Request struct {
-	Version         int               `json:"version"`
-	Operation       string            `json:"operation"`
-	Connection      restic.Connection `json:"connection,omitempty"`
-	RelativePath    string            `json:"relative_path,omitempty"`
-	Contents        string            `json:"contents,omitempty"`
-	TrustOnFirstUse bool              `json:"trust_on_first_use,omitempty"`
-	TimeoutSeconds  int               `json:"timeout_seconds,omitempty"`
+	Version         int                   `json:"version"`
+	Operation       string                `json:"operation"`
+	Connection      repository.Connection `json:"connection,omitempty"`
+	RelativePath    string                `json:"relative_path,omitempty"`
+	Contents        string                `json:"contents,omitempty"`
+	TrustOnFirstUse bool                  `json:"trust_on_first_use,omitempty"`
+	TimeoutSeconds  int                   `json:"timeout_seconds,omitempty"`
 }
 
 type Result struct {
@@ -57,7 +54,8 @@ func Run(ctx context.Context, state string, request Request) Result {
 	if request.Operation == "generate_ed25519" {
 		return generateEd25519()
 	}
-	if request.TimeoutSeconds < 1 || request.TimeoutSeconds > 3600 || request.Connection.Driver != "sftp" {
+	sftp, sftpConnection := request.Connection.SFTP()
+	if request.TimeoutSeconds < 1 || request.TimeoutSeconds > 3600 || !sftpConnection {
 		result.Diagnostic = "invalid storage request"
 		return result
 	}
@@ -79,49 +77,23 @@ func Run(ctx context.Context, state string, request Request) Result {
 		return result
 	}
 
-	program, err := bundledrclone.Binary(ctx, state)
-	if err != nil {
-		result.Diagnostic = "cannot prepare bundled rclone executable"
-		return result
+	binding := repository.Binding{
+		Name: "backupchief_storage", Connection: request.Connection,
+		Strategy: repository.RequireRclone, TrustOnFirstUse: request.TrustOnFirstUse,
 	}
-	proxy, err := egress.StartTargets(ctx, []egress.Target{{Host: request.Connection.Host, Port: request.Connection.Port}})
-	if err != nil {
-		result.Diagnostic = "cannot establish guarded storage transport"
-		return result
-	}
-	defer proxy.Close()
-
-	obscuredPassword := ""
-	if request.Connection.SFTPPassword != "" {
-		obscuredPassword, err = obscure(ctx, program, work, request.Connection.SFTPPassword)
-		if err != nil {
-			result.Diagnostic = "cannot prepare SFTP authentication"
-			return result
-		}
-	}
-	_, configuration, err := restic.SFTPRemoteConfig("backupchief_storage", request.Connection, obscuredPassword, proxy.URL, request.TrustOnFirstUse)
+	session, err := repository.OpenSession(ctx, repository.SessionOptions{State: state, Work: work}, []repository.Binding{binding})
 	if err != nil {
 		result.Diagnostic = err.Error()
 		return result
 	}
-	if request.TrustOnFirstUse {
-		if len(request.Connection.HostKeys) != 0 {
-			result.Diagnostic = "host keys must be empty for first-use trust"
-			return result
-		}
-		configuration += "pin_host_key = true\n"
-	}
-	configFile := filepath.Join(work, "rclone.conf")
-	if err = os.WriteFile(configFile, []byte(configuration), 0600); err != nil {
-		result.Diagnostic = "cannot write private transport configuration"
-		return result
-	}
+	defer session.Close()
 
 	run := func(arguments []string, input string) ([]byte, error) {
-		base := []string{"--config", configFile, "--contimeout", "10s", "--timeout", "30s", "--retries", "1", "--low-level-retries", "1"}
-		command := exec.CommandContext(ctx, program, append(base, arguments...)...)
-		command.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + work, "TMPDIR=" + work, "LANG=C"}
-		command.Dir = work
+		base := []string{"--contimeout", "10s", "--timeout", "30s", "--retries", "1", "--low-level-retries", "1"}
+		command, commandErr := session.RcloneCommand(ctx, append(base, arguments...)...)
+		if commandErr != nil {
+			return nil, commandErr
+		}
 		command.Stdin = strings.NewReader(input)
 		return command.Output()
 	}
@@ -131,18 +103,20 @@ func Run(ctx context.Context, state string, request Request) Result {
 			result.Diagnostic = "SFTP connection or first-use host-key discovery failed"
 			return result
 		}
-		configurationBytes, readErr := os.ReadFile(configFile)
+		configurationBytes, readErr := os.ReadFile(session.RcloneConfigPath())
 		if readErr != nil {
 			result.Diagnostic = "cannot read discovered SFTP host keys"
 			return result
 		}
-		request.Connection.HostKeys = parseHostKeys(string(configurationBytes))
-		if len(request.Connection.HostKeys) == 0 {
+		sftp.HostKeys = repository.ParseHostKeys(string(configurationBytes))
+		if len(sftp.HostKeys) == 0 {
 			result.Diagnostic = "SFTP server did not provide a host key"
 			return result
 		}
-		_, configuration, err = restic.SFTPRemoteConfig("backupchief_storage", request.Connection, obscuredPassword, proxy.URL, false)
-		if err != nil || os.WriteFile(configFile, []byte(configuration), 0600) != nil {
+		request.Connection = repository.NewSFTPConnection(sftp)
+		binding.Connection = request.Connection
+		binding.TrustOnFirstUse = false
+		if err = session.RewriteRclone(binding, false); err != nil {
 			result.Diagnostic = "cannot pin discovered SFTP host keys"
 			return result
 		}
@@ -150,7 +124,7 @@ func Run(ctx context.Context, state string, request Request) Result {
 
 	switch request.Operation {
 	case "verify":
-		if _, err = run([]string{"mkdir", remote(request.Connection.Path)}, ""); err != nil {
+		if _, err = run([]string{"mkdir", remote(sftp.Path)}, ""); err != nil {
 			result.Diagnostic = "SFTP root path is unavailable"
 			return result
 		}
@@ -160,7 +134,7 @@ func Run(ctx context.Context, state string, request Request) Result {
 			return result
 		}
 		proof := base64.RawURLEncoding.EncodeToString(token)
-		proofPath := path.Join(request.Connection.Path, ".backupchief-verify-"+proof)
+		proofPath := path.Join(sftp.Path, ".backupchief-verify-"+proof)
 		if _, err = run([]string{"rcat", remote(proofPath)}, proof); err != nil {
 			result.Diagnostic = "SFTP write verification failed"
 			return result
@@ -176,7 +150,7 @@ func Run(ctx context.Context, state string, request Request) Result {
 			result.Diagnostic = "invalid SFTP file request"
 			return result
 		}
-		if _, err = run([]string{"rcat", remote(path.Join(request.Connection.Path, request.RelativePath))}, request.Contents); err != nil {
+		if _, err = run([]string{"rcat", remote(path.Join(sftp.Path, request.RelativePath))}, request.Contents); err != nil {
 			result.Diagnostic = "SFTP file write failed"
 			return result
 		}
@@ -185,7 +159,7 @@ func Run(ctx context.Context, state string, request Request) Result {
 			result.Diagnostic = "invalid SFTP directory request"
 			return result
 		}
-		if _, err = run([]string{"purge", remote(path.Join(request.Connection.Path, request.RelativePath))}, ""); err != nil {
+		if _, err = run([]string{"purge", remote(path.Join(sftp.Path, request.RelativePath))}, ""); err != nil {
 			result.Diagnostic = "SFTP directory deletion failed"
 			return result
 		}
@@ -195,7 +169,7 @@ func Run(ctx context.Context, state string, request Request) Result {
 	}
 
 	result.Outcome = "complete"
-	result.HostKeys = append([]string(nil), request.Connection.HostKeys...)
+	result.HostKeys = append([]string(nil), sftp.HostKeys...)
 	return result
 }
 
@@ -228,35 +202,6 @@ func sshPublicKey(publicKey ed25519.PublicKey) []byte {
 	binary.BigEndian.PutUint32(wire[offset:], uint32(len(publicKey)))
 	copy(wire[offset+4:], publicKey)
 	return wire
-}
-
-func obscure(ctx context.Context, program, work, password string) (string, error) {
-	command := exec.CommandContext(ctx, program, "obscure", "-")
-	command.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + work, "TMPDIR=" + work, "LANG=C"}
-	command.Dir = work
-	command.Stdin = strings.NewReader(password)
-	output, err := command.Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(output)), nil
-}
-
-func parseHostKeys(configuration string) []string {
-	for _, line := range strings.Split(configuration, "\n") {
-		key, value, found := strings.Cut(line, "=")
-		if found && strings.TrimSpace(key) == "host_keys" {
-			values := strings.Split(strings.TrimSpace(value), ",")
-			keys := make([]string, 0, len(values))
-			for _, value := range values {
-				if value = strings.TrimSpace(value); value != "" {
-					keys = append(keys, value)
-				}
-			}
-			return keys
-		}
-	}
-	return nil
 }
 
 func remote(remotePath string) string {

@@ -37,7 +37,7 @@ func TestReplicationCoalescesPendingRunsAndReportsTheirSnapshotMappings(t *testi
 	job.Repository.Key = "repository_01k4p4f7m1r9d3t6v8w2x5y7ze"
 	job.Replicas = []JobRepository{{
 		Key: replicaKey, ID: strings.Repeat("d", 64), ServicePassword: "synthetic-service-password", Source: job.Repository.Key, Status: "active",
-		Connection: RepositoryConnection{Driver: "local", Path: t.TempDir()},
+		Connection: testLocalRepository(t.TempDir()),
 	}}
 	runtime := &daemon{
 		store: store, now: func() time.Time { return time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC) },
@@ -75,7 +75,7 @@ func TestReplicationReportsABoundedFailureDiagnostic(t *testing.T) {
 	job.ID = "01k4p4f7m1r9d3t6v8w2x5y7zk"
 	job.Replicas = []JobRepository{{
 		Key: replicaKey, ID: strings.Repeat("d", 64), ServicePassword: "synthetic-service-password", Source: job.Repository.Key, Status: "active",
-		Connection: RepositoryConnection{Driver: "local", Path: t.TempDir()},
+		Connection: testLocalRepository(t.TempDir()),
 	}}
 	runtime := &daemon{
 		store: store, now: func() time.Time { return time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC) },
@@ -157,7 +157,7 @@ func TestInitialReplicaSyncUsesProvisioningConfigurationAndReportsItsTarget(t *t
 	job.Repository.Key = "repository_01k4p4f7m1r9d3t6v8w2x5y7zs"
 	job.ReplicaSetups = []JobRepository{{
 		Key: replicaKey, ID: strings.Repeat("e", 64), ServicePassword: "synthetic-service-password",
-		Source: job.Repository.Key, Status: "provisioning", Connection: RepositoryConnection{Driver: "local", Path: t.TempDir()},
+		Source: job.Repository.Key, Status: "provisioning", Connection: testLocalRepository(t.TempDir()),
 	}}
 	runtime := &daemon{
 		store: store, bootstrap: Bootstrap{Generation: 1}, now: time.Now, journal: journal, executor: executor,

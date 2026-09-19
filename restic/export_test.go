@@ -169,7 +169,7 @@ func TestCancelledSnapshotExportRemovesItsRepositoryLock(t *testing.T) {
 	}()
 
 	waitFor(t, func() bool {
-		entries, _ := os.ReadDir(filepath.Join(request.Connection.Path, "locks"))
+		entries, _ := os.ReadDir(filepath.Join(request.Connection.RepositoryPath(), "locks"))
 		for _, entry := range entries {
 			if snapshotPattern.MatchString(entry.Name()) {
 				return true
@@ -190,7 +190,7 @@ func TestCancelledSnapshotExportRemovesItsRepositoryLock(t *testing.T) {
 		t.Fatal("cancelled export did not stop")
 	}
 	waitFor(t, func() bool {
-		entries, _ := os.ReadDir(filepath.Join(request.Connection.Path, "locks"))
+		entries, _ := os.ReadDir(filepath.Join(request.Connection.RepositoryPath(), "locks"))
 		return len(entries) == 0
 	})
 }

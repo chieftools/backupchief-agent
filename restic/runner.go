@@ -3,8 +3,6 @@ package restic
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -17,8 +15,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/chieftools/backupchief-agent/egress"
-	bundledrclone "github.com/chieftools/backupchief-agent/rclone"
+	"github.com/chieftools/backupchief-agent/repository"
 )
 
 type Runner struct {
@@ -75,7 +72,6 @@ func (runner Runner) Run(ctx context.Context, request Request) Result {
 	passwordFile := filepath.Join(work, "password")
 	sourcePasswordFile := filepath.Join(work, "source-password")
 	newPasswordFile := filepath.Join(work, "new-password")
-	rcloneConfigFile := filepath.Join(work, "rclone.conf")
 	commandConfigFile := filepath.Join(work, "command.cnf")
 	cache := filepath.Join(runner.State, "cache")
 
@@ -84,33 +80,40 @@ func (runner Runner) Run(ctx context.Context, request Request) Result {
 		return result
 	}
 
-	connections := []Connection{request.Connection}
-	if request.SourceConnection != nil {
-		connections = append(connections, *request.SourceConnection)
-	}
 	dual := request.Operation == "init_from" || request.Operation == "copy"
-	transport, proxyEnvironment, closeTransport, err := prepareTransport(ctx, runner.State, work, connections, dual)
+	strategy := repository.PreferNative
+	if dual && request.SourceConnection != nil && (request.Connection.Driver() != repository.DriverLocal || request.SourceConnection.Driver() != repository.DriverLocal) {
+		strategy = repository.RequireRclone
+	}
+	bindings := []repository.Binding{{Name: "backupchief_repository", Connection: request.Connection, Strategy: strategy}}
+	if request.SourceConnection != nil {
+		bindings[0].Name = "backupchief_destination"
+		bindings = append(bindings, repository.Binding{Name: "backupchief_source", Connection: *request.SourceConnection, Strategy: strategy})
+	}
+	session, err := repository.OpenSession(ctx, repository.SessionOptions{
+		State: runner.State, Work: work, AllowLocal: runner.AllowLocal,
+	}, bindings)
 	if err != nil {
 		result.Diagnostic = err.Error()
 		return result
 	}
-	defer closeTransport()
+	defer session.Close()
 
 	var args []string
 	var env []string
-	var rcloneConfig string
-	if request.Operation == "init_from" || request.Operation == "copy" {
-		transport.rcloneConfig = rcloneConfigFile
-		args, env, rcloneConfig, err = request.dualArguments(passwordFile, sourcePasswordFile, cache, transport, runner.AllowLocal)
+	if dual {
+		destination, _ := session.Repository("backupchief_destination")
+		source, _ := session.Repository("backupchief_source")
+		args, env, err = request.dualArguments(passwordFile, sourcePasswordFile, cache, destination, source)
 	} else {
-		transport.rcloneConfig = rcloneConfigFile
-		args, env, rcloneConfig, err = request.argumentsWithTransport(passwordFile, newPasswordFile, cache, transport, runner.AllowLocal)
+		prepared, _ := session.Repository("backupchief_repository")
+		args, env, err = request.argumentsPrepared(passwordFile, newPasswordFile, cache, prepared)
 	}
 	if err != nil {
 		result.Diagnostic = err.Error()
 		return result
 	}
-	env = append(env, proxyEnvironment...)
+	env = append(env, session.Environment()...)
 
 	binary, err := Binary(ctx, runner.State)
 	if err != nil {
@@ -143,12 +146,6 @@ func (runner Runner) Run(ctx context.Context, request Request) Result {
 			return result
 		}
 	}
-	if rcloneConfig != "" {
-		if err := os.WriteFile(rcloneConfigFile, []byte(rcloneConfig), 0600); err != nil {
-			result.Diagnostic = "cannot write private transport configuration"
-			return result
-		}
-	}
 	if request.Operation == "backup_stdin" {
 		if err := os.WriteFile(commandConfigFile, []byte(request.CommandConfig), 0600); err != nil {
 			result.Diagnostic = "cannot write private command configuration"
@@ -168,13 +165,10 @@ func (runner Runner) Run(ctx context.Context, request Request) Result {
 	}
 
 	if request.RecoverStaleLocks {
-		unlockArgs, _, unlockConfig, unlockErr := request.staleLockArgumentsWithTransport(passwordFile, cache, transport, runner.AllowLocal)
+		prepared, _ := session.Repository("backupchief_repository")
+		unlockArgs, _, unlockErr := request.staleLockArgumentsPrepared(passwordFile, cache, prepared)
 		if unlockErr != nil {
 			result.Diagnostic = unlockErr.Error()
-			return result
-		}
-		if unlockConfig != "" && unlockConfig != rcloneConfig {
-			result.Diagnostic = "cannot prepare private transport configuration"
 			return result
 		}
 		unlocked := execute(unlockArgs, request)
@@ -188,86 +182,6 @@ func (runner Runner) Run(ctx context.Context, request Request) Result {
 	}
 
 	return execute(args, request)
-}
-
-func prepareTransport(ctx context.Context, state, work string, connections []Connection, dual bool) (transportOptions, []string, func(), error) {
-	options := transportOptions{}
-	environment := []string{}
-	cleanup := func() {}
-	targets := make([]egress.Target, 0, len(connections))
-	requiresRclone := false
-
-	for _, connection := range connections {
-		switch connection.Driver {
-		case "s3":
-			endpoint, err := canonicalS3Endpoint(connection)
-			if err != nil {
-				return transportOptions{}, nil, cleanup, errors.New("cannot establish guarded storage transport")
-			}
-			targets = append(targets, egress.Target{Host: endpoint.Hostname(), Port: 443})
-			if dual {
-				requiresRclone = true
-			}
-		case "sftp":
-			targets = append(targets, egress.Target{Host: connection.Host, Port: connection.Port})
-			requiresRclone = true
-		case "local":
-		default:
-			return transportOptions{}, nil, cleanup, errors.New("unsupported repository driver")
-		}
-	}
-	if dual {
-		for _, connection := range connections {
-			if connection.Driver != "local" {
-				requiresRclone = true
-			}
-		}
-	}
-
-	if len(targets) > 0 {
-		proxy, err := egress.StartTargets(ctx, targets)
-		if err != nil {
-			return transportOptions{}, nil, cleanup, errors.New("cannot establish guarded storage transport")
-		}
-		cleanup = proxy.Close
-		options.proxyURL = proxy.URL
-		environment = append(environment,
-			"HTTPS_PROXY="+proxy.URL,
-			"HTTP_PROXY="+proxy.URL,
-			"NO_PROXY=",
-			"https_proxy="+proxy.URL,
-			"http_proxy="+proxy.URL,
-			"no_proxy=",
-		)
-	}
-
-	if requiresRclone {
-		program, err := bundledrclone.Binary(ctx, state)
-		if err != nil {
-			cleanup()
-			return transportOptions{}, nil, func() {}, errors.New("cannot prepare bundled rclone executable")
-		}
-		options.rcloneProgram = program
-		obscuredPasswords := map[string]string{}
-		options.obscure = func(password string) (string, error) {
-			if obscured, exists := obscuredPasswords[password]; exists {
-				return obscured, nil
-			}
-			command := exec.CommandContext(ctx, program, "obscure", "-")
-			command.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + work, "TMPDIR=" + work, "LANG=C"}
-			command.Dir = work
-			command.Stdin = strings.NewReader(password)
-			output, err := command.Output()
-			if err != nil {
-				return "", err
-			}
-			obscured := strings.TrimSpace(string(output))
-			obscuredPasswords[password] = obscured
-			return obscured, nil
-		}
-	}
-
-	return options, environment, cleanup, nil
 }
 
 func joinResultLogs(prefix string, results ...Result) string {
@@ -299,11 +213,7 @@ func lockRepositoryMode(ctx context.Context, state string, connection Connection
 	if err := privateDirectory(locks); err != nil {
 		return nil, err
 	}
-	encoded, err := json.Marshal(connection)
-	if err != nil {
-		return nil, err
-	}
-	digest := sha256.Sum256(encoded)
+	digest := sha256.Sum256([]byte(connection.Identity()))
 	path := filepath.Join(locks, fmt.Sprintf("%x.lock", digest))
 	lock, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
@@ -482,13 +392,10 @@ func redact(text string, request Request) string {
 		request.Password,
 		request.SourcePassword,
 		request.NewPassword,
-		request.Connection.AccessKey,
-		request.Connection.SecretKey,
-		request.Connection.SFTPPassword,
-		request.Connection.SFTPPrivateKey,
 	}
+	secrets = append(secrets, request.Connection.Secrets()...)
 	if request.SourceConnection != nil {
-		secrets = append(secrets, request.SourceConnection.AccessKey, request.SourceConnection.SecretKey, request.SourceConnection.SFTPPassword, request.SourceConnection.SFTPPrivateKey)
+		secrets = append(secrets, request.SourceConnection.Secrets()...)
 	}
 
 	for _, secret := range secrets {

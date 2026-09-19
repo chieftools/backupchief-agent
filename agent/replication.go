@@ -250,7 +250,7 @@ func boundedReplicationDiagnostic(diagnostic string) string {
 }
 
 func replicaResticConnection(connection RepositoryConnection) restic.Connection {
-	return connection.Restic()
+	return connection
 }
 
 func connectionPointer(connection restic.Connection) *restic.Connection {

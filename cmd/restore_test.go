@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/chieftools/backupchief-agent/agent"
+	"github.com/chieftools/backupchief-agent/repository"
 )
 
 func TestRestoreRequestUsesTheConfiguredSnapshotRoot(t *testing.T) {
@@ -54,17 +55,15 @@ func TestRestoreRequestUsesTheSelectedRepository(t *testing.T) {
 	job := agent.Job{Type: agent.JobTypeFile, Source: agent.JobSource{Root: "/srv/synthetic"}}
 	repository := agent.JobRepository{
 		ServicePassword: "synthetic-replica-password",
-		Connection: agent.RepositoryConnection{
-			Driver: "s3",
-			Bucket: "replica-example-test",
-			Prefix: "synthetic/repository",
-		},
+		Connection:      repository.NewS3Connection(repository.S3Connection{Bucket: "replica-example-test", Prefix: "synthetic/repository"}),
 	}
 	request, err := restoreRequest(job, repository, "synthetic-replica-snapshot", filepath.Join(t.TempDir(), "restored"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if request.Password != repository.ServicePassword || request.Connection.Bucket != repository.Connection.Bucket || request.Snapshot != "synthetic-replica-snapshot" {
+	requestS3, _ := request.Connection.S3()
+	repositoryS3, _ := repository.Connection.S3()
+	if request.Password != repository.ServicePassword || requestS3.Bucket != repositoryS3.Bucket || request.Snapshot != "synthetic-replica-snapshot" {
 		t.Fatalf("restore request: %+v", request)
 	}
 }

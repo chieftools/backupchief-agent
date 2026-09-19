@@ -679,7 +679,7 @@ func schedulerConfig(job Job) Config {
 func deferredSchedulerJob(t *testing.T) Job {
 	t.Helper()
 	job := executionJob(t.TempDir())
-	job.Repository.Location = job.Repository.Connection.Path
+	job.Repository.Location = job.Repository.Connection.RepositoryPath()
 	job.Maintenance = JobMaintenance{Strategy: "after_scheduled_backup", MaxDeferralSeconds: 86400, PruneIntervalSeconds: 604800}
 	job.Retention = JobRetention{KeepLatestComplete: true, ForgetCron: "30 3 * * *", PruneCron: "45 4 * * 0"}
 	job.Integrity = JobIntegrity{MetadataCron: "0 1 * * 0", DataMode: "auto", DataCron: "0 2 * * 0", DataParts: 4}

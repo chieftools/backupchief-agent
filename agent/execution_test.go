@@ -605,7 +605,7 @@ func executionJob(root string) Job {
 		},
 		Repository: JobRepository{
 			ID: strings.Repeat("c", 64), ServicePassword: "synthetic-service-password",
-			Connection: RepositoryConnection{Driver: "local", Path: filepath.Join(root, "repository")},
+			Connection: testLocalRepository(filepath.Join(root, "repository")),
 		},
 	}
 }

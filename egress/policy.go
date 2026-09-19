@@ -86,7 +86,10 @@ func Endpoint(raw string) (*url.URL, error) {
 }
 
 func Authority(target Target) (string, error) {
-	host := strings.ToLower(strings.TrimSpace(target.Host))
+	if target.Host != strings.TrimSpace(target.Host) {
+		return "", errors.New("invalid storage hostname")
+	}
+	host := strings.ToLower(target.Host)
 	if target.Port == 0 || host == "" || strings.HasSuffix(host, ".") || host == "localhost" || strings.HasSuffix(host, ".localhost") {
 		return "", errors.New("storage target is not public")
 	}
@@ -101,8 +104,11 @@ func Authority(target Target) (string, error) {
 		}
 	}
 
-	if ip, err := netip.ParseAddr(host); err == nil && !Public(ip) {
-		return "", errors.New("storage target is not public")
+	if ip, err := netip.ParseAddr(host); err == nil {
+		if !Public(ip) {
+			return "", errors.New("storage target is not public")
+		}
+		host = ip.String()
 	} else if err != nil {
 		if strings.Contains(host, ":") {
 			return "", errors.New("invalid storage hostname")

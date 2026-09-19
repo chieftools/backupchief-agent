@@ -86,11 +86,16 @@ func TestTargetRestrictions(t *testing.T) {
 	if authority, err := Authority(Target{Host: "storage.example.test", Port: 2222}); err != nil || authority != "storage.example.test:2222" {
 		t.Fatalf("unexpected authority %q: %v", authority, err)
 	}
+	if authority, err := Authority(Target{Host: "STORAGE.EXAMPLE.TEST", Port: 2222}); err != nil || authority != "storage.example.test:2222" {
+		t.Fatalf("unexpected canonical authority %q: %v", authority, err)
+	}
 
 	for _, target := range []Target{
 		{Host: "localhost", Port: 22},
 		{Host: "127.0.0.1", Port: 22},
 		{Host: "storage.example.test.", Port: 22},
+		{Host: " storage.example.test", Port: 22},
+		{Host: "storage.example.test\n", Port: 22},
 		{Host: "storage.example.test", Port: 0},
 	} {
 		if _, err := Authority(target); err == nil {

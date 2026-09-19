@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/chieftools/backupchief-agent/agent"
+	"github.com/chieftools/backupchief-agent/repository"
 )
 
 func TestDecodeSnapshotPathRequiresNormalizedAbsoluteBase64URL(t *testing.T) {
@@ -72,11 +73,7 @@ func TestValidateJobSnapshotSelectionUsesConfiguredRoot(t *testing.T) {
 func TestExportRequestUsesTheSelectedRepository(t *testing.T) {
 	repository := agent.JobRepository{
 		ServicePassword: "synthetic-replica-password",
-		Connection: agent.RepositoryConnection{
-			Driver: "s3",
-			Bucket: "replica-example-test",
-			Prefix: "synthetic/repository",
-		},
+		Connection:      repository.NewS3Connection(repository.S3Connection{Bucket: "replica-example-test", Prefix: "synthetic/repository"}),
 	}
 	request := exportRequest(
 		agent.Job{Type: agent.JobTypeFile},
@@ -86,7 +83,9 @@ func TestExportRequestUsesTheSelectedRepository(t *testing.T) {
 		"/srv/synthetic",
 	)
 
-	if request.Password != repository.ServicePassword || request.Connection.Bucket != repository.Connection.Bucket || request.Snapshot != "synthetic-replica-snapshot" {
+	requestS3, _ := request.Connection.S3()
+	repositoryS3, _ := repository.Connection.S3()
+	if request.Password != repository.ServicePassword || requestS3.Bucket != repositoryS3.Bucket || request.Snapshot != "synthetic-replica-snapshot" {
 		t.Fatalf("export request: %+v", request)
 	}
 }

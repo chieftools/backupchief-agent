@@ -36,7 +36,7 @@ func StartMany(ctx context.Context, endpoints []string) (*Proxy, error) {
 		}
 		authorities = append(authorities, authorizedEndpoint.Host)
 	}
-	return StartAuthorities(ctx, authorities)
+	return startAuthorities(ctx, authorities)
 }
 
 func StartTargets(ctx context.Context, targets []Target) (*Proxy, error) {
@@ -48,10 +48,10 @@ func StartTargets(ctx context.Context, targets []Target) (*Proxy, error) {
 		}
 		authorities = append(authorities, authority)
 	}
-	return StartAuthorities(ctx, authorities)
+	return startAuthorities(ctx, authorities)
 }
 
-func StartAuthorities(ctx context.Context, authorities []string) (*Proxy, error) {
+func startAuthorities(ctx context.Context, authorities []string) (*Proxy, error) {
 	hosts := make(map[string]struct{}, len(authorities))
 	for _, authority := range authorities {
 		hosts[authority] = struct{}{}

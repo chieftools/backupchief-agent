@@ -185,7 +185,7 @@ func runtimeConfig(root, jobID string) Config {
 		SchemaVersion:    ConfigSchemaVersion,
 		IssuedAt:         "2026-09-09T08:15:00.000000Z",
 		Host:             HostConfig{Name: "synthetic-host", ID: testBootstrap().ServerID},
-		Destinations:     map[string]Destination{destinationKey: {Driver: "local", Path: root}},
+		Destinations:     map[string]Destination{destinationKey: testLocalDestination(root)},
 		Jobs: []Job{{
 			ID: jobID, Type: JobTypeFile, Enabled: true,
 			Source: JobSource{Root: root, OneFileSystem: true, Excludes: []string{"*.synthetic-cache"}},

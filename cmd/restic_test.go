@@ -9,18 +9,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chieftools/backupchief-agent/repository"
 	"github.com/chieftools/backupchief-agent/restic"
 )
 
 func TestResticLifetimePipe(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "state")
 	request := restic.Request{
-		Version:   1,
-		Operation: "init",
-		Connection: restic.Connection{
-			Driver: "local",
-			Path:   filepath.Join(t.TempDir(), "repository"),
-		},
+		Version:         1,
+		Operation:       "init",
+		Connection:      repository.NewLocalConnection(filepath.Join(t.TempDir(), "repository")),
 		Password:        "synthetic-pipe-password",
 		TimeoutSeconds:  300,
 		LockWaitSeconds: 0,

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/chieftools/backupchief-agent/repository"
 )
 
 type serviceFixture struct {
@@ -53,10 +55,15 @@ func TestSystemdQualification(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		connection.Prefix += "/linux-" + name
+		s3, ok := connection.S3()
+		if !ok {
+			t.Fatal("qualification connection is not S3")
+		}
+		s3.Prefix += "/linux-" + name
+		connection = repository.NewS3Connection(s3)
 		fixture.S3 = &connection
 
-		receipt, _ := json.Marshal(map[string]string{"prefix": connection.Prefix})
+		receipt, _ := json.Marshal(map[string]string{"prefix": s3.Prefix})
 		if err := os.WriteFile("/tmp/backupchief-qualification-s3-receipt.json", receipt, 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -259,12 +266,9 @@ func TestServiceWorker(t *testing.T) {
 	}
 
 	request := Request{
-		Version:   1,
-		Operation: "init",
-		Connection: Connection{
-			Driver: "local",
-			Path:   filepath.Join(fixture.State, "repository"),
-		},
+		Version:         1,
+		Operation:       "init",
+		Connection:      repository.NewLocalConnection(filepath.Join(fixture.State, "repository")),
 		Password:        "synthetic-service-password",
 		TimeoutSeconds:  300,
 		LockWaitSeconds: 0,
@@ -374,46 +378,17 @@ func TestServiceWorker(t *testing.T) {
 	for index, password := range []string{"synthetic-service-password", "synthetic-recovery-password"} {
 		for _, snapshot := range snapshots {
 			target := filepath.Join(fixture.State, fmt.Sprintf("restore-%d-%s", index, snapshot.ID))
-			command := exec.Command(
-				binary,
-				"--repo",
-				request.Connection.Path,
-				"restore",
-				snapshot.ID,
-				"--target",
-				target,
-				"--verify",
-			)
-			command.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + fixture.State, "RESTIC_PASSWORD=" + password}
-
-			if fixture.S3 != nil {
-				connection := fixture.S3
-				repository := "s3:" + strings.TrimSuffix(connection.Endpoint, "/") +
-					"/" + connection.Bucket +
-					"/" + connection.Prefix
-
-				command = exec.Command(
-					binary,
-					"--repo",
-					repository,
-					"-o",
-					"s3.region="+connection.Region,
-					"-o",
-					"s3.bucket-lookup=path",
-					"restore",
-					snapshot.ID,
-					"--target",
-					target,
-					"--verify",
-				)
-				command.Env = []string{
-					"PATH=/usr/bin:/bin",
-					"HOME=" + fixture.State,
-					"RESTIC_PASSWORD=" + password,
-					"AWS_ACCESS_KEY_ID=" + connection.AccessKey,
-					"AWS_SECRET_ACCESS_KEY=" + connection.SecretKey,
-				}
+			prepared, extraEnvironment, err := repository.PrepareNative(request.Connection, true)
+			if err != nil {
+				t.Fatal(err)
 			}
+			arguments := []string{"--repo", prepared.Repository}
+			for _, option := range prepared.Options {
+				arguments = append(arguments, "-o", option)
+			}
+			arguments = append(arguments, "restore", snapshot.ID, "--target", target, "--verify")
+			command := exec.Command(binary, arguments...)
+			command.Env = append([]string{"PATH=/usr/bin:/bin", "HOME=" + fixture.State, "RESTIC_PASSWORD=" + password}, extraEnvironment...)
 
 			if output, err := command.CombinedOutput(); err != nil {
 				t.Fatalf("stock restore: %v %s", err, output)

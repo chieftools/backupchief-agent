@@ -594,7 +594,7 @@ func isDatabaseJob(jobType JobType) bool {
 func maintenanceRequest(job Job) restic.Request {
 	return restic.Request{
 		Version:    1,
-		Connection: job.Repository.Connection.Restic(),
+		Connection: job.Repository.Connection,
 		Password:   job.Repository.ServicePassword,
 	}
 }

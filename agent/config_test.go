@@ -13,7 +13,17 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/chieftools/backupchief-agent/repository"
 )
+
+func testLocalRepository(path string) RepositoryConnection {
+	return repository.NewLocalConnection(path)
+}
+
+func testLocalDestination(path string) Destination {
+	return repository.NewLocalDestination(path)
+}
 
 func TestSFTPDestinationRoundTripsAndResolvesRepository(t *testing.T) {
 	var document map[string]any
@@ -37,7 +47,8 @@ func TestSFTPDestinationRoundTripsAndResolvesRepository(t *testing.T) {
 		t.Fatal(err)
 	}
 	connection := config.Jobs[0].Repository.Connection
-	if connection.Driver != "sftp" || connection.Path != "/repositories/documents/repository" || connection.Auth == nil || connection.Auth.Password != "synthetic-storage-password" {
+	sftp, ok := connection.SFTP()
+	if !ok || sftp.Path != "/repositories/documents/repository" || sftp.Authentication.Method() != "password" || sftp.Authentication.Secret() != "synthetic-storage-password" {
 		t.Fatalf("connection: %+v", connection)
 	}
 	encoded, err := encodeConfig(config, strings.Repeat("c", 64))

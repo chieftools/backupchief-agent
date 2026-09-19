@@ -1072,7 +1072,7 @@ func (daemon *daemon) reconcileOne(ctx context.Context, commandID string) error 
 		request := restic.Request{
 			Version:         1,
 			Operation:       "snapshots",
-			Connection:      job.Repository.Connection.Restic(),
+			Connection:      job.Repository.Connection,
 			Password:        job.Repository.ServicePassword,
 			Host:            daemon.bootstrap.ServerID,
 			Tags:            []string{"backupchief-job:" + job.ID, "backupchief-run:" + journaled.RunID},

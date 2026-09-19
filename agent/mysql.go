@@ -358,7 +358,7 @@ func mysqlDumpSupportsOption(help []byte, option string) bool {
 }
 
 func resticConnection(job Job) restic.Connection {
-	return job.Repository.Connection.Restic()
+	return job.Repository.Connection
 }
 
 func addDatabaseStatistics(total RunStatistics, summary resticSummary) {

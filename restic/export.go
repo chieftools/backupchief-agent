@@ -13,6 +13,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/chieftools/backupchief-agent/repository"
 )
 
 type ExportRequest struct {
@@ -184,30 +186,25 @@ func (runner Runner) exportCommand(ctx context.Context, request ExportRequest, m
 		return nil, nil, errors.New("cannot write private password input")
 	}
 
-	transport, proxyEnvironment, closeTransport, err := prepareTransport(ctx, runner.State, work, []Connection{request.Connection}, false)
+	session, err := repository.OpenSession(ctx, repository.SessionOptions{
+		State: runner.State, Work: work, AllowLocal: runner.AllowLocal,
+	}, []repository.Binding{{Name: "backupchief_repository", Connection: request.Connection, Strategy: repository.PreferNative}})
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
 	previousCleanup := cleanup
 	cleanup = func() {
-		closeTransport()
+		session.Close()
 		previousCleanup()
 	}
-	rcloneConfigFile := filepath.Join(work, "rclone.conf")
-	transport.rcloneConfig = rcloneConfigFile
-	args, env, rcloneConfig, err := baseRequest.baseArgumentsWithTransport(passwordFile, cache, transport, runner.AllowLocal)
+	prepared, _ := session.Repository("backupchief_repository")
+	args, env, err := baseRequest.baseArgumentsPrepared(passwordFile, cache, prepared)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	env = append(env, proxyEnvironment...)
-	if rcloneConfig != "" {
-		if err = os.WriteFile(rcloneConfigFile, []byte(rcloneConfig), 0600); err != nil {
-			cleanup()
-			return nil, nil, errors.New("cannot write private transport configuration")
-		}
-	}
+	env = append(env, session.Environment()...)
 
 	if mode == "inspect" {
 		args = append(args, "ls", "--recursive", "--json", request.Snapshot, request.Path)

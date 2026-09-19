@@ -20,7 +20,7 @@ func TestRealRepositoryMaintenanceAcrossSnapshotBoundaries(t *testing.T) {
 	repository := filepath.Join(t.TempDir(), "repository")
 	password := "synthetic-maintenance-password"
 	request := restic.Request{
-		Version: 1, Operation: "init", Connection: restic.Connection{Driver: "local", Path: repository},
+		Version: 1, Operation: "init", Connection: testLocalRepository(repository),
 		Password: password, TimeoutSeconds: 300, LockWaitSeconds: 0,
 	}
 	requireMaintenanceComplete(t, runner.Run(context.Background(), request), "init")
@@ -62,7 +62,7 @@ func TestRealRepositoryMaintenanceAcrossSnapshotBoundaries(t *testing.T) {
 		ID: "01k4p4f7m1r9d3t6v8w2x5y7za", Enabled: true,
 		Repository: JobRepository{
 			ID: strings.Repeat("a", 64), ServicePassword: password,
-			Connection: RepositoryConnection{Driver: "local", Path: repository},
+			Connection: testLocalRepository(repository),
 		},
 		Retention: JobRetention{
 			Last: 1, Daily: 2, Monthly: 2, KeepLatestComplete: true,
@@ -130,7 +130,7 @@ func TestRealRepositoryMaintenanceAcrossSnapshotBoundaries(t *testing.T) {
 	}
 
 	missingJob := job
-	missingJob.Repository.Connection.Path = filepath.Join(t.TempDir(), "missing repository")
+	missingJob.Repository.Connection = testLocalRepository(filepath.Join(t.TempDir(), "missing repository"))
 	missing, _, _, _ := executeMaintenance(
 		context.Background(), runner, 1, maintenanceJournalCommand("prune", job.ID), missingJob,
 		nil, func(MaintenancePlan) error { return nil }, time.Now,

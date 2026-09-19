@@ -2,15 +2,10 @@ package agent
 
 import (
 	"bytes"
-	"crypto/ed25519"
 	"crypto/sha256"
-	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"fmt"
-	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -20,8 +15,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/chieftools/backupchief-agent/egress"
 	"github.com/chieftools/backupchief-agent/pusher"
+	"github.com/chieftools/backupchief-agent/repository"
 )
 
 const (
@@ -101,28 +96,7 @@ type HostConfig struct {
 	SetupTokenHash string
 }
 
-type Destination struct {
-	Driver    string
-	Path      string
-	Endpoint  string
-	Region    string
-	Bucket    string
-	Prefix    string
-	AccessKey string
-	SecretKey string
-	Host      string
-	Port      uint16
-	Username  string
-	RootPath  string
-	HostKeys  []string
-	Auth      *SFTPAuthentication
-}
-
-type SFTPAuthentication struct {
-	Method     string `json:"method"`
-	Password   string `json:"password,omitempty"`
-	PrivateKey string `json:"private_key,omitempty"`
-}
+type Destination = repository.Destination
 
 type Job struct {
 	Key           string
@@ -201,21 +175,7 @@ type JobRepository struct {
 	Connection      RepositoryConnection
 }
 
-type RepositoryConnection struct {
-	Driver    string
-	Path      string
-	Endpoint  string
-	Region    string
-	Bucket    string
-	Prefix    string
-	AccessKey string
-	SecretKey string
-	Host      string
-	Port      uint16
-	Username  string
-	HostKeys  []string
-	Auth      *SFTPAuthentication
-}
+type RepositoryConnection = repository.Connection
 
 type JobSchedule struct {
 	Kind       string
@@ -269,23 +229,6 @@ type configMetadataDocument struct {
 type hostDocument struct {
 	Name string `json:"name,omitempty"`
 	ID   string `json:"id,omitempty"`
-}
-
-type destinationDocument struct {
-	Driver    string              `json:"driver"`
-	Path      string              `json:"path,omitempty"`
-	Endpoint  string              `json:"endpoint,omitempty"`
-	Region    string              `json:"region,omitempty"`
-	Bucket    string              `json:"bucket,omitempty"`
-	Prefix    string              `json:"prefix,omitempty"`
-	AccessKey string              `json:"access_key,omitempty"`
-	SecretKey string              `json:"secret_key,omitempty"`
-	Host      string              `json:"host,omitempty"`
-	Port      uint16              `json:"port,omitempty"`
-	Username  string              `json:"username,omitempty"`
-	RootPath  string              `json:"root_path,omitempty"`
-	HostKeys  []string            `json:"host_keys,omitempty"`
-	Auth      *SFTPAuthentication `json:"auth,omitempty"`
 }
 
 type jobDocument struct {
@@ -501,12 +444,8 @@ func normalizeConfig(document configDocument, expectedGeneration uint64) (Config
 			config.addWarning(fmt.Sprintf("destination %q uses unsupported driver %q; skipped", key, driver))
 			continue
 		}
-		var document destinationDocument
-		if err := json.Unmarshal(raw, &document); err != nil {
-			return Config{}, fmt.Errorf("destination %q: decode: %w", key, err)
-		}
-		destination := destinationFromDocument(document)
-		if err := validateDestination(destination); err != nil {
+		destination, err := repository.DecodeDestination(raw)
+		if err != nil {
 			return Config{}, fmt.Errorf("destination %q: %w", key, err)
 		}
 		config.Destinations[key] = destination
@@ -828,209 +767,12 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 	return job, nil
 }
 
-func validateDestination(destination Destination) error {
-	switch destination.Driver {
-	case "local":
-		if !filepath.IsAbs(destination.Path) || strings.ContainsRune(destination.Path, 0) || runeLength(destination.Path) > 4096 ||
-			destination.Endpoint != "" || destination.Region != "" || destination.Bucket != "" || destination.Prefix != "" || destination.AccessKey != "" || destination.SecretKey != "" || hasSFTPSettings(destination) {
-			return errors.New("local settings are invalid")
-		}
-	case "s3":
-		endpoint, err := url.Parse(destination.Endpoint)
-		if err != nil || endpoint.Scheme != "https" || endpoint.Hostname() == "" || endpoint.User != nil ||
-			(endpoint.Port() != "" && endpoint.Port() != "443") || (endpoint.Path != "" && endpoint.Path != "/") || endpoint.RawQuery != "" || endpoint.Fragment != "" {
-			return errors.New("S3 endpoint is invalid")
-		}
-		if !validBucket(destination.Bucket) || destination.Region == "" || runeLength(destination.Region) > 255 ||
-			(destination.Prefix != "" && !validRelativePath(destination.Prefix)) || runeLength(destination.Prefix) > 1024 ||
-			destination.AccessKey == "" || runeLength(destination.AccessKey) > 1000 || destination.SecretKey == "" || runeLength(destination.SecretKey) > 1000 || destination.Path != "" || hasSFTPSettings(destination) {
-			return errors.New("S3 settings are invalid")
-		}
-	case "sftp":
-		if destination.Path != "" || destination.Endpoint != "" || destination.Region != "" || destination.Bucket != "" || destination.Prefix != "" || destination.AccessKey != "" || destination.SecretKey != "" ||
-			!validSFTPTarget(destination.Host, destination.Port) || !lineSafe(destination.Username, 255) || !validSFTPPath(destination.RootPath) || len(destination.HostKeys) == 0 || len(destination.HostKeys) > 16 || destination.Auth == nil {
-			return errors.New("SFTP settings are invalid")
-		}
-		for _, hostKey := range destination.HostKeys {
-			if !validSFTPHostKey(hostKey) {
-				return errors.New("SFTP host keys are invalid")
-			}
-		}
-		if err := validateSFTPAuthentication(*destination.Auth); err != nil {
-			return err
-		}
-	default:
-		return errors.New("driver is invalid")
-	}
-	return nil
-}
-
-func hasSFTPSettings(destination Destination) bool {
-	return destination.Host != "" || destination.Port != 0 || destination.Username != "" || destination.RootPath != "" || len(destination.HostKeys) != 0 || destination.Auth != nil
-}
-
-func validSFTPTarget(host string, port uint16) bool {
-	_, err := egress.Authority(egress.Target{Host: host, Port: port})
-	return err == nil
-}
-
-func lineSafe(value string, maximum int) bool {
-	return value != "" && runeLength(value) <= maximum && !strings.ContainsAny(value, "\r\n\x00")
-}
-
-func validSFTPPath(value string) bool {
-	if value == "" || runeLength(value) > 1024 || strings.ContainsAny(value, "\\\x00") || value == "~" || strings.HasPrefix(value, "~/") {
-		return false
-	}
-	if value == "/" {
-		return true
-	}
-	if strings.HasSuffix(value, "/") || strings.Contains(value, "//") {
-		return false
-	}
-	for _, part := range strings.Split(strings.TrimPrefix(value, "/"), "/") {
-		if part == "" || part == "." || part == ".." {
-			return false
-		}
-	}
-	return true
-}
-
-func validSFTPHostKey(value string) bool {
-	if value == "" || len(value) > 4096 || strings.ContainsAny(value, "\r\n\x00") {
-		return false
-	}
-	parts := strings.Fields(value)
-	if len(parts) != 2 || strings.Join(parts, " ") != value || !lineSafe(parts[0], 255) {
-		return false
-	}
-	decoded, err := base64.StdEncoding.DecodeString(parts[1])
-	return err == nil && len(decoded) > 0 && len(decoded) <= 2048
-}
-
-func validateSFTPAuthentication(authentication SFTPAuthentication) error {
-	switch authentication.Method {
-	case "password":
-		if !lineSafe(authentication.Password, 1000) || authentication.PrivateKey != "" {
-			return errors.New("SFTP password authentication is invalid")
-		}
-	case "ed25519":
-		if authentication.Password != "" || !validEd25519PrivateKey(authentication.PrivateKey) {
-			return errors.New("SFTP Ed25519 authentication is invalid")
-		}
-	default:
-		return errors.New("SFTP authentication method is invalid")
-	}
-	return nil
-}
-
-func validEd25519PrivateKey(value string) bool {
-	if value == "" || len(value) > 16384 || strings.ContainsRune(value, 0) {
-		return false
-	}
-	block, trailing := pem.Decode([]byte(value))
-	if block == nil || block.Type != "PRIVATE KEY" || len(bytes.TrimSpace(trailing)) != 0 {
-		return false
-	}
-	key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
-	if err != nil {
-		return false
-	}
-	_, ok := key.(ed25519.PrivateKey)
-	return ok
-}
-
 func resolveRepository(destination Destination, path string) (RepositoryConnection, string, error) {
-	if !validRelativePath(path) || runeLength(path) > 1024 {
-		return RepositoryConnection{}, "", errors.New("repository path must be a safe relative path")
+	connection, err := destination.Resolve(path)
+	if err != nil {
+		return RepositoryConnection{}, "", err
 	}
-	connection := RepositoryConnection{
-		Driver:    destination.Driver,
-		Endpoint:  destination.Endpoint,
-		Region:    destination.Region,
-		Bucket:    destination.Bucket,
-		AccessKey: destination.AccessKey,
-		SecretKey: destination.SecretKey,
-		Host:      destination.Host,
-		Port:      destination.Port,
-		Username:  destination.Username,
-		HostKeys:  append([]string(nil), destination.HostKeys...),
-		Auth:      cloneSFTPAuthentication(destination.Auth),
-	}
-	if destination.Driver == "local" {
-		connection.Path = filepath.Join(destination.Path, filepath.FromSlash(path))
-		return connection, connection.Path, nil
-	}
-	if destination.Driver == "sftp" {
-		connection.Path = joinSFTPPath(destination.RootPath, path)
-		return connection, sftpLocation(destination.Username, destination.Host, destination.Port, connection.Path), nil
-	}
-	connection.Prefix = path
-	if destination.Prefix != "" {
-		connection.Prefix = destination.Prefix + "/" + path
-	}
-	return connection, "s3:" + destination.Endpoint + "/" + destination.Bucket + "/" + connection.Prefix, nil
-}
-
-func cloneSFTPAuthentication(authentication *SFTPAuthentication) *SFTPAuthentication {
-	if authentication == nil {
-		return nil
-	}
-	clone := *authentication
-	return &clone
-}
-
-func destinationFromDocument(document destinationDocument) Destination {
-	return Destination{
-		Driver:    document.Driver,
-		Path:      document.Path,
-		Endpoint:  document.Endpoint,
-		Region:    document.Region,
-		Bucket:    document.Bucket,
-		Prefix:    document.Prefix,
-		AccessKey: document.AccessKey,
-		SecretKey: document.SecretKey,
-		Host:      document.Host,
-		Port:      document.Port,
-		Username:  document.Username,
-		RootPath:  document.RootPath,
-		HostKeys:  append([]string(nil), document.HostKeys...),
-		Auth:      cloneSFTPAuthentication(document.Auth),
-	}
-}
-
-func destinationToDocument(destination Destination) destinationDocument {
-	return destinationDocument{
-		Driver:    destination.Driver,
-		Path:      destination.Path,
-		Endpoint:  destination.Endpoint,
-		Region:    destination.Region,
-		Bucket:    destination.Bucket,
-		Prefix:    destination.Prefix,
-		AccessKey: destination.AccessKey,
-		SecretKey: destination.SecretKey,
-		Host:      destination.Host,
-		Port:      destination.Port,
-		Username:  destination.Username,
-		RootPath:  destination.RootPath,
-		HostKeys:  append([]string(nil), destination.HostKeys...),
-		Auth:      cloneSFTPAuthentication(destination.Auth),
-	}
-}
-
-func joinSFTPPath(root, path string) string {
-	if root == "/" {
-		return "/" + path
-	}
-	return root + "/" + path
-}
-
-func sftpLocation(username, host string, port uint16, path string) string {
-	prefix := fmt.Sprintf("sftp://%s@%s/", url.User(username).String(), net.JoinHostPort(host, fmt.Sprintf("%d", port)))
-	if strings.HasPrefix(path, "/") {
-		return prefix + "/" + strings.TrimPrefix(path, "/")
-	}
-	return prefix + path
+	return connection, connection.Location(), nil
 }
 
 func validRelativePath(value string) bool {
@@ -1198,7 +940,7 @@ func encodeConfig(config Config, managedDigest string) ([]byte, error) {
 	for key, destination := range config.Destinations {
 		prefixedKey := prefixConfigKey(key, "storage_")
 		destinationKeys[key] = prefixedKey
-		raw, err := json.Marshal(destinationToDocument(destination))
+		raw, err := json.Marshal(destination)
 		if err != nil {
 			return nil, fmt.Errorf("encode destination %q: %w", prefixedKey, err)
 		}
@@ -1343,29 +1085,11 @@ func (config Config) MarshalJSON() ([]byte, error) {
 		}
 		destinationKey := "storage_repository-" + job.ID
 		job.Repository.Destination = destinationKey
-		connection := job.Repository.Connection
-		destination := Destination{
-			Driver:    connection.Driver,
-			Endpoint:  connection.Endpoint,
-			Region:    connection.Region,
-			Bucket:    connection.Bucket,
-			AccessKey: connection.AccessKey,
-			SecretKey: connection.SecretKey,
-			Host:      connection.Host,
-			Port:      connection.Port,
-			Username:  connection.Username,
-			HostKeys:  append([]string(nil), connection.HostKeys...),
-			Auth:      cloneSFTPAuthentication(connection.Auth),
+		destination, repositoryPath, err := job.Repository.Connection.Decompose()
+		if err != nil {
+			return nil, err
 		}
-		if connection.Driver == "local" {
-			destination.Path = filepath.Dir(connection.Path)
-			job.Repository.Path = filepath.Base(connection.Path)
-		} else if connection.Driver == "sftp" {
-			destination.RootPath = pathDir(connection.Path)
-			job.Repository.Path = pathBase(connection.Path)
-		} else {
-			job.Repository.Path = connection.Prefix
-		}
+		job.Repository.Path = repositoryPath
 		config.Destinations[destinationKey] = destination
 	}
 	encoded, err := encodeConfig(config, "")
@@ -1373,25 +1097,6 @@ func (config Config) MarshalJSON() ([]byte, error) {
 		return nil, err
 	}
 	return bytes.TrimSpace(encoded), nil
-}
-
-func pathDir(path string) string {
-	index := strings.LastIndex(path, "/")
-	if index < 0 {
-		return "."
-	}
-	if index == 0 {
-		return "/"
-	}
-	return path[:index]
-}
-
-func pathBase(path string) string {
-	index := strings.LastIndex(path, "/")
-	if index < 0 {
-		return path
-	}
-	return path[index+1:]
 }
 
 func uint64Pointer(value uint64) *uint64 {
@@ -1707,22 +1412,6 @@ func prefixConfigKey(value, prefix string) string {
 		return value
 	}
 	return prefix + value
-}
-
-func validBucket(bucket string) bool {
-	if len(bucket) < 3 || len(bucket) > 63 || !validBucketEdge(bucket[0]) {
-		return false
-	}
-	for _, character := range bucket {
-		if character != '.' && character != '-' && (character < 'a' || character > 'z') && (character < '0' || character > '9') {
-			return false
-		}
-	}
-	return validBucketEdge(bucket[len(bucket)-1])
-}
-
-func validBucketEdge(character byte) bool {
-	return character >= 'a' && character <= 'z' || character >= '0' && character <= '9'
 }
 
 func runeLength(value string) int {

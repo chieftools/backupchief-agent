@@ -80,7 +80,7 @@ func executeBackup(
 	request := restic.Request{
 		Version:         1,
 		Operation:       "backup",
-		Connection:      job.Repository.Connection.Restic(),
+		Connection:      job.Repository.Connection,
 		Password:        job.Repository.ServicePassword,
 		Root:            job.Source.Root,
 		Excludes:        append([]string(nil), job.Source.Excludes...),
