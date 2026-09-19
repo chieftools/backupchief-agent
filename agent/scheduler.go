@@ -170,19 +170,19 @@ func (daemon *daemon) scheduleBackups(ctx context.Context) error {
 			continue
 		}
 		if draining && daemon.hasQueuedScheduledOperation(operation.Job.ID, operation.RunKind, false) {
-			if err := daemon.store.recordSkippedOccurrence(operation.Job.ID, operation.RunKind, scheduledFor); err != nil {
+			if err := daemon.store.recordSkippedOccurrence(operation.Job.ID, operation.RunKind, scheduledFor, nil); err != nil {
 				return err
 			}
 			continue
 		}
 		if operation.Deferred && daemon.hasQueuedScheduledOperation(operation.Job.ID, operation.RunKind, false) {
-			if err := daemon.store.recordSkippedOccurrence(operation.Job.ID, operation.RunKind, scheduledFor); err != nil {
+			if err := daemon.store.recordSkippedOccurrence(operation.Job.ID, operation.RunKind, scheduledFor, nil); err != nil {
 				return err
 			}
 			continue
 		}
 		if operation.RunKind == "backup" && daemon.hasQueuedScheduledOperation(operation.Job.ID, operation.RunKind, true) {
-			if err := daemon.store.recordSkippedOccurrence(operation.Job.ID, operation.RunKind, scheduledFor); err != nil {
+			if err := daemon.store.recordSkippedOccurrence(operation.Job.ID, operation.RunKind, scheduledFor, nil); err != nil {
 				return err
 			}
 			continue
@@ -425,15 +425,19 @@ func (daemon *daemon) finishScheduledOverlap(command *JournalCommand, now time.T
 }
 
 func (daemon *daemon) refuseOccurrenceForPressure(jobID, runKind, scheduledFor string) error {
-	err := daemon.store.recordSkippedOccurrence(jobID, runKind, scheduledFor)
+	daemon.mu.Lock()
+	nextState := daemon.state
+	nextState.SpoolGapDetected = true
+	nextState.SpoolGapVersion++
+	err := daemon.store.recordSkippedOccurrence(jobID, runKind, scheduledFor, &nextState)
 	if errors.Is(err, ErrSpoolCapacity) {
-		err = daemon.store.recordSkippedOccurrence(jobID, runKind, scheduledFor)
+		err = daemon.store.recordSkippedOccurrence(jobID, runKind, scheduledFor, &nextState)
 	}
 	if err != nil {
+		daemon.mu.Unlock()
 		return err
 	}
-	daemon.mu.Lock()
-	daemon.state.SpoolGapDetected = true
+	daemon.state = nextState
 	daemon.mu.Unlock()
 	return nil
 }

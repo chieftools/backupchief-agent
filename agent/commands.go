@@ -612,7 +612,8 @@ func (daemon *daemon) finishOperation(ctx context.Context, commandID, runID stri
 				map[string]any{"reason": reason, "dropped_event_count": uint64(0), "dropped_log_bytes": uint64(len(log)) + dropped},
 			))
 		}
-		daemon.state.SpoolGapDetected = true
+		daemon.markSpoolGapLocked()
+		_ = daemon.store.SaveRuntimeState(daemon.state)
 	}
 
 	daemon.recordOutcomeLocked(job, result)
@@ -837,27 +838,30 @@ func (daemon *daemon) flushCommand(ctx context.Context, commandID string) error 
 		}
 		retained := make([]AgentEvent, 0, len(events))
 		var rejection error
+		discarded := false
 		for index, item := range response.Results {
 			if item.Status != "rejected" {
 				continue
 			}
 			if batch[index].Kind == "run_finished" || batch[index].Kind == "snapshot_inventory_chunk" || batch[index].Kind == "replication_finished" {
 				retained = append(retained, batch[index])
+			} else {
+				discarded = true
 			}
 			rejection = fmt.Errorf("event %s was rejected: %s", item.ID, item.Code)
 		}
 		daemon.mu.Lock()
 		if current := daemon.journal.Commands[commandID]; current != nil {
 			current.Events = append(retained, current.Events[len(batch):]...)
-			if rejection != nil {
-				daemon.state.SpoolGapDetected = true
+			if discarded {
+				daemon.markSpoolGapLocked()
 			}
 			if err := daemon.store.SaveCommandJournal(daemon.journal); err != nil {
 				daemon.mu.Unlock()
 				return err
 			}
 		}
-		if rejection != nil {
+		if discarded {
 			if err := daemon.store.SaveRuntimeState(daemon.state); err != nil {
 				daemon.mu.Unlock()
 				return err

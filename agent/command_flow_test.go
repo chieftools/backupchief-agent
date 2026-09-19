@@ -175,6 +175,46 @@ func TestDaemonCompletesTheDurableCommandReportingFlow(t *testing.T) {
 	}
 }
 
+func TestRejectedTerminalEventIsRetainedWithoutClaimingEvidenceWasLost(t *testing.T) {
+	store := newAgentTestStore(t)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set(ProtocolHeader, ProtocolRevision)
+		_ = json.NewEncoder(response).Encode(EventsResponse{
+			ProtocolRevision: ProtocolRevision,
+			Results: []EventResult{{
+				ID:     "01k4p4f7m1r9d3t6v8w2x5y7zd",
+				Status: "rejected",
+				Code:   "identity_mismatch",
+			}},
+		})
+	}))
+	defer server.Close()
+
+	commandID := "01k4p4f7m1r9d3t6v8w2x5y7zb"
+	journal := newCommandJournal()
+	journal.Commands[commandID] = &JournalCommand{
+		Command:      AgentCommand{ID: commandID, Generation: 1, Kind: "run_backup"},
+		RunID:        "01k4p4f7m1r9d3t6v8w2x5y7zc",
+		Acknowledged: true,
+		Events: []AgentEvent{{
+			ID: "01k4p4f7m1r9d3t6v8w2x5y7zd", Kind: "run_finished",
+		}},
+	}
+	runtime := &daemon{
+		store:     store,
+		client:    NewClient(server.URL, "synthetic-credential", "2.0.0", server.Client()),
+		bootstrap: Bootstrap{Generation: 1},
+		journal:   journal,
+	}
+
+	if err := runtime.flushCommand(context.Background(), commandID); err == nil {
+		t.Fatal("rejected event did not return an error")
+	}
+	if runtime.state.SpoolGapDetected || len(runtime.journal.Commands[commandID].Events) != 1 {
+		t.Fatalf("terminal rejection state: %+v", runtime.state)
+	}
+}
+
 func runtimeConfig(root, jobID string) Config {
 	destinationKey := "storage_01k4p4f7m1r9d3t6v8w2x5y7zb"
 

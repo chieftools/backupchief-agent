@@ -466,7 +466,25 @@ func (daemon *daemon) sendHeartbeat(ctx context.Context) error {
 		return daemon.handleRequestError(err)
 	}
 
+	if protocolRevisionSupports(daemon.client.selectedProtocolRevision(), "1.12.0") && configState.SpoolGapDetected {
+		daemon.mu.Lock()
+		if daemon.state.SpoolGapDetected && daemon.state.SpoolGapVersion == configState.SpoolGapVersion {
+			daemon.state.SpoolGapDetected = false
+			if err := daemon.store.SaveRuntimeState(daemon.state); err != nil {
+				daemon.state.SpoolGapDetected = true
+				daemon.mu.Unlock()
+				return fmt.Errorf("acknowledge reporting gap: %w", err)
+			}
+		}
+		daemon.mu.Unlock()
+	}
+
 	return daemon.clearAuthenticationPause()
+}
+
+func (daemon *daemon) markSpoolGapLocked() {
+	daemon.state.SpoolGapDetected = true
+	daemon.state.SpoolGapVersion++
 }
 
 func logConfigWarnings(config Config) {

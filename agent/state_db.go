@@ -182,7 +182,7 @@ func (store *FileStore) occurrenceExists(jobID, runKind, scheduledFor string) (b
 	return found, err
 }
 
-func (store *FileStore) recordSkippedOccurrence(jobID, runKind, scheduledFor string) error {
+func (store *FileStore) recordSkippedOccurrence(jobID, runKind, scheduledFor string, state *RuntimeState) error {
 	store.stateMu.Lock()
 	defer store.stateMu.Unlock()
 
@@ -190,18 +190,14 @@ func (store *FileStore) recordSkippedOccurrence(jobID, runKind, scheduledFor str
 		if err := transaction.Bucket(occurrencesBucket).Put(occurrenceKey(jobID, runKind, scheduledFor), []byte("gap")); err != nil {
 			return err
 		}
-		state := RuntimeState{SpoolGapDetected: true}
-		if data := transaction.Bucket(metadataBucket).Get(runtimeStateKey); data != nil {
-			if err := json.Unmarshal(data, &state); err != nil {
+		if state != nil {
+			data, err := json.Marshal(state)
+			if err != nil {
 				return err
 			}
-			state.SpoolGapDetected = true
+			return transaction.Bucket(metadataBucket).Put(runtimeStateKey, data)
 		}
-		data, err := json.Marshal(state)
-		if err != nil {
-			return err
-		}
-		return transaction.Bucket(metadataBucket).Put(runtimeStateKey, data)
+		return nil
 	})
 }
 

@@ -180,6 +180,43 @@ func TestHeartbeatReportsAcceptedConfigurationWarnings(t *testing.T) {
 	}
 }
 
+func TestHeartbeatAcknowledgesOnlyTheReportedGapGeneration(t *testing.T) {
+	store := newAgentTestStore(t)
+	bootstrap := testBootstrap()
+	var heartbeat HeartbeatRequest
+	client := NewClient(bootstrap.Endpoint, bootstrap.Credential, "2.0.0", &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(request.Body).Decode(&heartbeat); err != nil {
+			t.Fatal(err)
+		}
+		header := make(http.Header)
+		header.Set(ProtocolHeader, ProtocolRevision)
+		return &http.Response{StatusCode: http.StatusNoContent, Header: header, Body: http.NoBody}, nil
+	})})
+	state := RuntimeState{SpoolGapDetected: true, SpoolGapVersion: 4}
+	if err := store.SaveRuntimeState(state); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &daemon{
+		store: store, client: client, bootstrap: bootstrap,
+		bootID:   "01k4p4f7m1r9d3t6v8w2x5y7zc",
+		now:      func() time.Time { return time.Date(2026, 9, 9, 8, 15, 0, 0, time.UTC) },
+		metadata: ConfigMetadata{Generation: 1, Revision: 2, Digest: strings.Repeat("a", 64)},
+		config:   Config{ProtocolRevision: ProtocolRevision},
+		state:    state,
+	}
+
+	if err := runtime.sendHeartbeat(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := store.LoadRuntimeState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !heartbeat.Spool.GapDetected || persisted.SpoolGapDetected || persisted.SpoolGapVersion != 4 {
+		t.Fatalf("gap acknowledgement: heartbeat=%+v state=%+v", heartbeat.Spool, persisted)
+	}
+}
+
 func TestDaemonRetainsAcceptedConfigWhileControlPlaneIsUnreachable(t *testing.T) {
 	store := newAgentTestStore(t)
 	prepareDaemonStore(t, store, "http://127.0.0.1:1/agent/v1")

@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	ProtocolRevision          = "1.11.0"
+	ProtocolRevision          = "1.12.0"
 	ProtocolHeader            = "BackupChief-Protocol-Revision"
 	LatestProtocolHeader      = "BackupChief-Latest-Protocol-Revision"
 	DefaultEndpoint           = "https://backup.chief.app/agent/v1"
@@ -97,6 +97,7 @@ type RuntimeState struct {
 	RejectedConfigDigest   string                        `json:"rejected_config_digest,omitempty"`
 	LastConfigError        string                        `json:"last_config_error,omitempty"`
 	SpoolGapDetected       bool                          `json:"spool_gap_detected,omitempty"`
+	SpoolGapVersion        uint64                        `json:"spool_gap_version,omitempty"`
 	ClockOffsetSeconds     int64                         `json:"clock_offset_seconds,omitempty"`
 	ClockOffsetObservedAt  string                        `json:"clock_offset_observed_at,omitempty"`
 	Maintenance            map[string]MaintenanceRuntime `json:"maintenance,omitempty"`
