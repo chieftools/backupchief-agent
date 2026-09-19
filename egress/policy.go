@@ -3,6 +3,7 @@ package egress
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"net/url"
@@ -11,6 +12,11 @@ import (
 
 const invalidEndpointMessage = "S3 requires a public HTTPS endpoint on port 443 " +
 	"without a path, credentials, query or fragment"
+
+type Target struct {
+	Host string
+	Port uint16
+}
 
 var blockedNetworks = []netip.Prefix{
 	netip.MustParsePrefix("0.0.0.0/8"),
@@ -68,9 +74,21 @@ func Endpoint(raw string) (*url.URL, error) {
 		return nil, errors.New(invalidEndpointMessage)
 	}
 
-	host := strings.ToLower(endpoint.Hostname())
-	if strings.HasSuffix(host, ".") || host == "localhost" || strings.HasSuffix(host, ".localhost") {
+	authority, err := Authority(Target{Host: endpoint.Hostname(), Port: 443})
+	if err != nil {
 		return nil, errors.New("S3 endpoint is not public")
+	}
+
+	endpoint.Host = authority
+	endpoint.Path = ""
+
+	return endpoint, nil
+}
+
+func Authority(target Target) (string, error) {
+	host := strings.ToLower(strings.TrimSpace(target.Host))
+	if target.Port == 0 || host == "" || strings.HasSuffix(host, ".") || host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return "", errors.New("storage target is not public")
 	}
 
 	for _, character := range host {
@@ -79,18 +97,24 @@ func Endpoint(raw string) (*url.URL, error) {
 			character == '.' ||
 			character == '-' ||
 			character == ':') {
-			return nil, errors.New("invalid S3 hostname")
+			return "", errors.New("invalid storage hostname")
 		}
 	}
 
 	if ip, err := netip.ParseAddr(host); err == nil && !Public(ip) {
-		return nil, errors.New("S3 endpoint is not public")
+		return "", errors.New("storage target is not public")
+	} else if err != nil {
+		if strings.Contains(host, ":") {
+			return "", errors.New("invalid storage hostname")
+		}
+		for _, label := range strings.Split(host, ".") {
+			if label == "" || len(label) > 63 || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+				return "", errors.New("invalid storage hostname")
+			}
+		}
 	}
 
-	endpoint.Host = net.JoinHostPort(host, "443")
-	endpoint.Path = ""
-
-	return endpoint, nil
+	return net.JoinHostPort(host, fmt.Sprintf("%d", target.Port)), nil
 }
 
 type Resolver interface {
@@ -100,12 +124,12 @@ type Resolver interface {
 func Addresses(ctx context.Context, resolver Resolver, host string) ([]netip.Addr, error) {
 	ips, err := resolver.LookupNetIP(ctx, "ip", host)
 	if err != nil || len(ips) == 0 {
-		return nil, errors.New("S3 DNS lookup failed")
+		return nil, errors.New("storage DNS lookup failed")
 	}
 
 	for _, ip := range ips {
 		if !Public(ip) {
-			return nil, errors.New("S3 DNS returned a prohibited address")
+			return nil, errors.New("storage DNS returned a prohibited address")
 		}
 	}
 

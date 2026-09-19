@@ -79,7 +79,7 @@
       "additionalProperties": false,
       "required": ["protocol_revision", "generation", "revision", "schema_version", "issued_at"],
       "properties": {
-		"protocol_revision": { "const": "1.10.0" },
+        "protocol_revision": { "const": "1.11.0" },
         "generation": { "type": "integer", "minimum": 1 },
         "revision": { "type": "integer", "minimum": 1 },
         "schema_version": { "const": 1 },
@@ -134,6 +134,48 @@
             "prefix": { "type": "string", "minLength": 1, "maxLength": 1024 },
             "access_key": { "type": "string", "minLength": 1, "maxLength": 1000 },
             "secret_key": { "type": "string", "minLength": 1, "maxLength": 1000 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["driver", "host", "port", "username", "root_path", "host_keys", "auth"],
+          "properties": {
+            "driver": { "const": "sftp" },
+            "host": { "type": "string", "pattern": "^[A-Za-z0-9.:-]+$", "maxLength": 253 },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "username": { "type": "string", "minLength": 1, "maxLength": 255 },
+            "root_path": { "type": "string", "minLength": 1, "maxLength": 1024 },
+            "host_keys": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 16,
+              "uniqueItems": true,
+              "items": { "type": "string", "pattern": "^[^ ]+ [A-Za-z0-9+/]+=*$", "maxLength": 4096 }
+            },
+            "auth": { "$ref": "#/$defs/sftp_auth" }
+          }
+        }
+      ]
+    },
+    "sftp_auth": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["method", "password"],
+          "properties": {
+            "method": { "const": "password" },
+            "password": { "type": "string", "minLength": 1, "maxLength": 1000 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["method", "private_key"],
+          "properties": {
+            "method": { "const": "ed25519" },
+            "private_key": { "type": "string", "minLength": 1, "maxLength": 16384 }
           }
         }
       ]

@@ -82,6 +82,23 @@ func TestEndpointRestrictions(t *testing.T) {
 	}
 }
 
+func TestTargetRestrictions(t *testing.T) {
+	if authority, err := Authority(Target{Host: "storage.example.test", Port: 2222}); err != nil || authority != "storage.example.test:2222" {
+		t.Fatalf("unexpected authority %q: %v", authority, err)
+	}
+
+	for _, target := range []Target{
+		{Host: "localhost", Port: 22},
+		{Host: "127.0.0.1", Port: 22},
+		{Host: "storage.example.test.", Port: 22},
+		{Host: "storage.example.test", Port: 0},
+	} {
+		if _, err := Authority(target); err == nil {
+			t.Fatalf("accepted target %#v", target)
+		}
+	}
+}
+
 func TestRejectMixedAndChangedDNS(t *testing.T) {
 	public := netip.MustParseAddr("1.1.1.1")
 	private := netip.MustParseAddr("127.0.0.1")

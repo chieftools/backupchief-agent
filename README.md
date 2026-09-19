@@ -22,7 +22,7 @@ The optional [Backup Chief control plane](https://backup.chief.app/) manages ser
 
 ### Storage and repositories
 
-- Writes to S3-compatible storage or a local path.
+- Writes to S3-compatible storage, SFTP, or a local path.
 - Produces standard Restic repositories that the stock CLI can read.
 - Embeds a pinned, checksum-verified Restic for each supported architecture.
 - Restricts storage traffic to the configured endpoint through a per-operation egress policy.
@@ -140,7 +140,22 @@ The repository includes [config.schema.json](config.schema.json) for editor comp
 
 Configuration keys use `job_` and `storage_` prefixes. Paths must be safe, schedules are fixed five-field UTC cron expressions with at least five minutes between occurrences, and duplicate fields are rejected. Additive fields unknown to the installed agent are ignored. Jobs with unsupported types, destinations with unsupported drivers, and jobs that depend on those destinations are skipped with warnings while supported jobs continue to run. The JSON Schema remains strict so editors and manual validation can catch typos in fields supported by the current release.
 
-Every job declares a type; schema version 1 supports `file` and gives it a filesystem-specific `source` object. Retention and integrity settings have deterministic defaults when omitted. An `s3` destination needs a public HTTPS endpoint, a region, a bucket, an access key, and a secret key. An optional `host.name` sets the Restic host label; otherwise Restic uses the system hostname.
+Every job declares a type; schema version 1 supports `file` and gives it a filesystem-specific `source` object. Retention and integrity settings have deterministic defaults when omitted. An `s3` destination needs a public HTTPS endpoint, a region, a bucket, an access key, and a secret key. An `sftp` destination needs a public host, port, username, normalized root path, one or more complete pinned host keys, and either password or Ed25519 authentication. Standalone configuration may contain the unencrypted PKCS#8 private key inline and must therefore remain readable only by the service account. An optional `host.name` sets the Restic host label; otherwise Restic uses the system hostname.
+
+```json
+{
+  "driver": "sftp",
+  "host": "archive.example.test",
+  "port": 22,
+  "username": "backup",
+  "root_path": "/repositories",
+  "host_keys": ["ssh-ed25519 <base64 public host key>"],
+  "auth": {
+    "method": "ed25519",
+    "private_key": "-----BEGIN PRIVATE KEY-----\n<PKCS#8 key>\n-----END PRIVATE KEY-----\n"
+  }
+}
+```
 
 ### Validate and start
 

@@ -107,6 +107,40 @@ func TestProxyPinsDialAndRejectsRebinding(t *testing.T) {
 	}
 }
 
+func TestProxyDialsApprovedCustomPort(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	proxy, err := StartTargets(ctx, []Target{{Host: "files.example.test", Port: 2222}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxy.Close()
+
+	proxy.resolver = resolverFunc(func(context.Context, string, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("1.1.1.1")}, nil
+	})
+	proxy.dial = func(_ context.Context, network, address string) (net.Conn, error) {
+		if network != "tcp" || address != "1.1.1.1:2222" {
+			t.Fatalf("unexpected dial %s %s", network, address)
+		}
+		client, server := net.Pipe()
+		go server.Close()
+		return client, nil
+	}
+
+	proxyURL, _ := url.Parse(proxy.URL)
+	client, err := net.DialTimeout("tcp", proxyURL.Host, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	_, _ = fmt.Fprint(client, "CONNECT files.example.test:2222 HTTP/1.1\r\nHost: files.example.test:2222\r\n\r\n")
+	line, _ := bufio.NewReader(client).ReadString('\n')
+	if !strings.Contains(line, "200") {
+		t.Fatal(line)
+	}
+}
+
 type resolverFunc func(context.Context, string, string) ([]netip.Addr, error)
 
 func (f resolverFunc) LookupNetIP(ctx context.Context, network, host string) ([]netip.Addr, error) {

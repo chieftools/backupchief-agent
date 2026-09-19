@@ -33,6 +33,7 @@ func NewRootCommand(version string) *cobra.Command {
 	root.PersistentFlags().StringVar(&configPath, "config", configPath, "Standalone configuration file")
 	root.AddCommand(newResticCommand())
 	root.AddCommand(newResticExportCommand())
+	root.AddCommand(newStorageCommand())
 
 	root.AddCommand(&cobra.Command{
 		Use:   "version",

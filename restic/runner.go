@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -83,26 +84,33 @@ func (runner Runner) Run(ctx context.Context, request Request) Result {
 		return result
 	}
 
+	connections := []Connection{request.Connection}
+	if request.SourceConnection != nil {
+		connections = append(connections, *request.SourceConnection)
+	}
+	dual := request.Operation == "init_from" || request.Operation == "copy"
+	transport, proxyEnvironment, closeTransport, err := prepareTransport(ctx, runner.State, work, connections, dual)
+	if err != nil {
+		result.Diagnostic = err.Error()
+		return result
+	}
+	defer closeTransport()
+
 	var args []string
 	var env []string
 	var rcloneConfig string
 	if request.Operation == "init_from" || request.Operation == "copy" {
-		var rcloneProgram string
-		if request.SourceConnection != nil && (request.Connection.Driver != "local" || request.SourceConnection.Driver != "local") {
-			rcloneProgram, err = bundledrclone.Binary(ctx, runner.State)
-			if err != nil {
-				result.Diagnostic = "cannot prepare bundled rclone executable"
-				return result
-			}
-		}
-		args, env, rcloneConfig, err = request.dualArguments(passwordFile, sourcePasswordFile, cache, rcloneConfigFile, rcloneProgram, runner.AllowLocal)
+		transport.rcloneConfig = rcloneConfigFile
+		args, env, rcloneConfig, err = request.dualArguments(passwordFile, sourcePasswordFile, cache, transport, runner.AllowLocal)
 	} else {
-		args, env, err = request.arguments(passwordFile, newPasswordFile, cache, runner.AllowLocal)
+		transport.rcloneConfig = rcloneConfigFile
+		args, env, rcloneConfig, err = request.argumentsWithTransport(passwordFile, newPasswordFile, cache, transport, runner.AllowLocal)
 	}
 	if err != nil {
 		result.Diagnostic = err.Error()
 		return result
 	}
+	env = append(env, proxyEnvironment...)
 
 	binary, err := Binary(ctx, runner.State)
 	if err != nil {
@@ -151,41 +159,6 @@ func (runner Runner) Run(ctx context.Context, request Request) Result {
 		}
 	}
 
-	endpoints := make([]string, 0, 2)
-	connections := []Connection{request.Connection}
-	if request.SourceConnection != nil {
-		connections = append(connections, *request.SourceConnection)
-	}
-	for _, connection := range connections {
-		if connection.Driver != "s3" {
-			continue
-		}
-		endpoint, endpointErr := canonicalS3Endpoint(connection)
-		if endpointErr != nil {
-			result.Diagnostic = "cannot establish guarded S3 transport"
-			return result
-		}
-		endpoints = append(endpoints, endpoint.String())
-	}
-	if len(endpoints) > 0 {
-		proxy, err := egress.StartMany(ctx, endpoints)
-		if err != nil {
-			result.Diagnostic = "cannot establish guarded S3 transport"
-			return result
-		}
-		defer proxy.Close()
-
-		env = append(
-			env,
-			"HTTPS_PROXY="+proxy.URL,
-			"HTTP_PROXY="+proxy.URL,
-			"NO_PROXY=",
-			"https_proxy="+proxy.URL,
-			"http_proxy="+proxy.URL,
-			"no_proxy=",
-		)
-	}
-
 	execute := func(arguments []string, executionRequest Request) Result {
 		command := exec.Command(binary, arguments...)
 		command.Env = env
@@ -195,9 +168,13 @@ func (runner Runner) Run(ctx context.Context, request Request) Result {
 	}
 
 	if request.RecoverStaleLocks {
-		unlockArgs, _, unlockErr := request.staleLockArguments(passwordFile, cache, runner.AllowLocal)
+		unlockArgs, _, unlockConfig, unlockErr := request.staleLockArgumentsWithTransport(passwordFile, cache, transport, runner.AllowLocal)
 		if unlockErr != nil {
 			result.Diagnostic = unlockErr.Error()
+			return result
+		}
+		if unlockConfig != "" && unlockConfig != rcloneConfig {
+			result.Diagnostic = "cannot prepare private transport configuration"
 			return result
 		}
 		unlocked := execute(unlockArgs, request)
@@ -211,6 +188,86 @@ func (runner Runner) Run(ctx context.Context, request Request) Result {
 	}
 
 	return execute(args, request)
+}
+
+func prepareTransport(ctx context.Context, state, work string, connections []Connection, dual bool) (transportOptions, []string, func(), error) {
+	options := transportOptions{}
+	environment := []string{}
+	cleanup := func() {}
+	targets := make([]egress.Target, 0, len(connections))
+	requiresRclone := false
+
+	for _, connection := range connections {
+		switch connection.Driver {
+		case "s3":
+			endpoint, err := canonicalS3Endpoint(connection)
+			if err != nil {
+				return transportOptions{}, nil, cleanup, errors.New("cannot establish guarded storage transport")
+			}
+			targets = append(targets, egress.Target{Host: endpoint.Hostname(), Port: 443})
+			if dual {
+				requiresRclone = true
+			}
+		case "sftp":
+			targets = append(targets, egress.Target{Host: connection.Host, Port: connection.Port})
+			requiresRclone = true
+		case "local":
+		default:
+			return transportOptions{}, nil, cleanup, errors.New("unsupported repository driver")
+		}
+	}
+	if dual {
+		for _, connection := range connections {
+			if connection.Driver != "local" {
+				requiresRclone = true
+			}
+		}
+	}
+
+	if len(targets) > 0 {
+		proxy, err := egress.StartTargets(ctx, targets)
+		if err != nil {
+			return transportOptions{}, nil, cleanup, errors.New("cannot establish guarded storage transport")
+		}
+		cleanup = proxy.Close
+		options.proxyURL = proxy.URL
+		environment = append(environment,
+			"HTTPS_PROXY="+proxy.URL,
+			"HTTP_PROXY="+proxy.URL,
+			"NO_PROXY=",
+			"https_proxy="+proxy.URL,
+			"http_proxy="+proxy.URL,
+			"no_proxy=",
+		)
+	}
+
+	if requiresRclone {
+		program, err := bundledrclone.Binary(ctx, state)
+		if err != nil {
+			cleanup()
+			return transportOptions{}, nil, func() {}, errors.New("cannot prepare bundled rclone executable")
+		}
+		options.rcloneProgram = program
+		obscuredPasswords := map[string]string{}
+		options.obscure = func(password string) (string, error) {
+			if obscured, exists := obscuredPasswords[password]; exists {
+				return obscured, nil
+			}
+			command := exec.CommandContext(ctx, program, "obscure", "-")
+			command.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + work, "TMPDIR=" + work, "LANG=C"}
+			command.Dir = work
+			command.Stdin = strings.NewReader(password)
+			output, err := command.Output()
+			if err != nil {
+				return "", err
+			}
+			obscured := strings.TrimSpace(string(output))
+			obscuredPasswords[password] = obscured
+			return obscured, nil
+		}
+	}
+
+	return options, environment, cleanup, nil
 }
 
 func joinResultLogs(prefix string, results ...Result) string {
@@ -427,9 +484,11 @@ func redact(text string, request Request) string {
 		request.NewPassword,
 		request.Connection.AccessKey,
 		request.Connection.SecretKey,
+		request.Connection.SFTPPassword,
+		request.Connection.SFTPPrivateKey,
 	}
 	if request.SourceConnection != nil {
-		secrets = append(secrets, request.SourceConnection.AccessKey, request.SourceConnection.SecretKey)
+		secrets = append(secrets, request.SourceConnection.AccessKey, request.SourceConnection.SecretKey, request.SourceConnection.SFTPPassword, request.SourceConnection.SFTPPrivateKey)
 	}
 
 	for _, secret := range secrets {

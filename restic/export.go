@@ -13,8 +13,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"github.com/chieftools/backupchief-agent/egress"
 )
 
 type ExportRequest struct {
@@ -186,10 +184,29 @@ func (runner Runner) exportCommand(ctx context.Context, request ExportRequest, m
 		return nil, nil, errors.New("cannot write private password input")
 	}
 
-	args, env, err := baseRequest.baseArguments(passwordFile, cache, runner.AllowLocal)
+	transport, proxyEnvironment, closeTransport, err := prepareTransport(ctx, runner.State, work, []Connection{request.Connection}, false)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
+	}
+	previousCleanup := cleanup
+	cleanup = func() {
+		closeTransport()
+		previousCleanup()
+	}
+	rcloneConfigFile := filepath.Join(work, "rclone.conf")
+	transport.rcloneConfig = rcloneConfigFile
+	args, env, rcloneConfig, err := baseRequest.baseArgumentsWithTransport(passwordFile, cache, transport, runner.AllowLocal)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	env = append(env, proxyEnvironment...)
+	if rcloneConfig != "" {
+		if err = os.WriteFile(rcloneConfigFile, []byte(rcloneConfig), 0600); err != nil {
+			cleanup()
+			return nil, nil, errors.New("cannot write private transport configuration")
+		}
 	}
 
 	if mode == "inspect" {
@@ -209,23 +226,6 @@ func (runner Runner) exportCommand(ctx context.Context, request ExportRequest, m
 		cleanup()
 		return nil, nil, err
 	}
-	if request.Connection.Driver == "s3" {
-		proxy, proxyErr := egress.Start(ctx, request.Connection.Endpoint)
-		if proxyErr != nil {
-			cleanup()
-			return nil, nil, errors.New("cannot establish guarded S3 transport")
-		}
-		previousCleanup := cleanup
-		cleanup = func() {
-			proxy.Close()
-			previousCleanup()
-		}
-		env = append(env,
-			"HTTPS_PROXY="+proxy.URL, "HTTP_PROXY="+proxy.URL, "NO_PROXY=",
-			"https_proxy="+proxy.URL, "http_proxy="+proxy.URL, "no_proxy=",
-		)
-	}
-
 	command := exec.CommandContext(ctx, binary, args...)
 	command.Env = env
 	command.Dir = work

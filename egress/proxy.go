@@ -28,16 +28,36 @@ func Start(ctx context.Context, endpoint string) (*Proxy, error) {
 }
 
 func StartMany(ctx context.Context, endpoints []string) (*Proxy, error) {
-	hosts := make(map[string]struct{}, len(endpoints))
+	authorities := make([]string, 0, len(endpoints))
 	for _, endpoint := range endpoints {
 		authorizedEndpoint, err := Endpoint(endpoint)
 		if err != nil {
 			return nil, err
 		}
-		hosts[authorizedEndpoint.Host] = struct{}{}
+		authorities = append(authorities, authorizedEndpoint.Host)
+	}
+	return StartAuthorities(ctx, authorities)
+}
+
+func StartTargets(ctx context.Context, targets []Target) (*Proxy, error) {
+	authorities := make([]string, 0, len(targets))
+	for _, target := range targets {
+		authority, err := Authority(target)
+		if err != nil {
+			return nil, err
+		}
+		authorities = append(authorities, authority)
+	}
+	return StartAuthorities(ctx, authorities)
+}
+
+func StartAuthorities(ctx context.Context, authorities []string) (*Proxy, error) {
+	hosts := make(map[string]struct{}, len(authorities))
+	for _, authority := range authorities {
+		hosts[authority] = struct{}{}
 	}
 	if len(hosts) == 0 {
-		return nil, errors.New("at least one egress endpoint is required")
+		return nil, errors.New("at least one egress authority is required")
 	}
 
 	proxy := &Proxy{
@@ -105,7 +125,11 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	host, _, _ := net.SplitHostPort(r.Host)
+	host, port, err := net.SplitHostPort(r.Host)
+	if err != nil {
+		http.Error(w, "destination denied", http.StatusForbidden)
+		return
+	}
 	ips, err := Addresses(ctx, p.resolver, host)
 	if err != nil {
 		http.Error(w, "destination denied", http.StatusForbidden)
@@ -115,7 +139,7 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request) {
 	var upstream net.Conn
 
 	for _, ip := range ips {
-		upstream, err = p.dial(ctx, "tcp", net.JoinHostPort(ip.Unmap().String(), "443"))
+		upstream, err = p.dial(ctx, "tcp", net.JoinHostPort(ip.Unmap().String(), port))
 		if err == nil {
 			break
 		}

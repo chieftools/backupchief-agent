@@ -2,7 +2,11 @@ package restic
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +16,85 @@ import (
 	"testing"
 	"time"
 )
+
+func TestSFTPRepositoryUsesPinnedBundledRcloneTransport(t *testing.T) {
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := testRequest(t)
+	request.Connection = Connection{
+		Driver:         "sftp",
+		Host:           "archive.example.test",
+		Port:           2222,
+		Username:       "synthetic-backup",
+		Path:           "/repositories/job-example",
+		HostKeys:       []string{"ssh-ed25519 c3ludGhldGljLWhvc3Qta2V5"},
+		SFTPPrivateKey: string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: encoded})),
+	}
+	transport := transportOptions{
+		rcloneConfig:  "/private/runtime/rclone.conf",
+		rcloneProgram: "/private/runtime/rclone",
+		proxyURL:      "http://127.0.0.1:43210",
+	}
+
+	arguments, environment, configuration, err := request.argumentsWithTransport("password", "", "cache", transport, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"type = sftp",
+		"host = archive.example.test",
+		"port = 2222",
+		"host_keys = ssh-ed25519 c3ludGhldGljLWhvc3Qta2V5",
+		"http_proxy = http://127.0.0.1:43210",
+		"shell_type = none",
+		"disable_hashcheck = true",
+	} {
+		if !strings.Contains(configuration, expected) {
+			t.Fatalf("missing %q in configuration: %s", expected, configuration)
+		}
+	}
+	if !slices.Contains(arguments, "rclone.program=/private/runtime/rclone") || !slices.Contains(environment, "RCLONE_CONFIG=/private/runtime/rclone.conf") {
+		t.Fatalf("arguments=%v environment=%v", arguments, environment)
+	}
+}
+
+func TestSFTPPasswordIsObscuredBeforeWritingRcloneConfiguration(t *testing.T) {
+	request := testRequest(t)
+	request.Connection = Connection{
+		Driver:       "sftp",
+		Host:         "password.example.test",
+		Port:         22,
+		Username:     "synthetic-backup",
+		Path:         "/repositories/job-password",
+		HostKeys:     []string{"ssh-ed25519 c3ludGhldGljLWhvc3Qta2V5"},
+		SFTPPassword: "synthetic-sftp-password",
+	}
+	transport := transportOptions{
+		rcloneConfig:  "/private/runtime/rclone.conf",
+		rcloneProgram: "/private/runtime/rclone",
+		proxyURL:      "http://127.0.0.1:43210",
+		obscure: func(password string) (string, error) {
+			if password != "synthetic-sftp-password" {
+				t.Fatalf("password: %q", password)
+			}
+			return "obscured-synthetic-password", nil
+		},
+	}
+
+	_, _, configuration, err := request.argumentsWithTransport("password", "", "cache", transport, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(configuration, "pass = obscured-synthetic-password") || strings.Contains(configuration, "synthetic-sftp-password") {
+		t.Fatalf("configuration: %s", configuration)
+	}
+}
 
 func testRunner(t *testing.T) Runner {
 	t.Helper()
@@ -260,7 +343,8 @@ func TestDualRepositoryTransportUsesBundledRclone(t *testing.T) {
 	}
 
 	args, environment, config, err := request.dualArguments(
-		"destination-password", "source-password", "cache", "rclone.conf", "/private/runtime/rclone", false,
+		"destination-password", "source-password", "cache",
+		transportOptions{rcloneConfig: "rclone.conf", rcloneProgram: "/private/runtime/rclone"}, false,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -281,7 +365,7 @@ func TestDualRepositoryTransportUsesBundledRclone(t *testing.T) {
 	}
 
 	if _, _, _, err := request.dualArguments(
-		"destination-password", "source-password", "cache", "rclone.conf", "", false,
+		"destination-password", "source-password", "cache", transportOptions{rcloneConfig: "rclone.conf"}, false,
 	); err == nil {
 		t.Fatal("accepted a system-resolved rclone executable")
 	}
@@ -632,7 +716,9 @@ func TestSecretRedaction(t *testing.T) {
 		Password:       "synthetic&password",
 		SourcePassword: "synthetic-source-password",
 		Connection: Connection{
-			SecretKey: "synthetic/storage+secret",
+			SecretKey:      "synthetic/storage+secret",
+			SFTPPassword:   "synthetic-sftp-password",
+			SFTPPrivateKey: "synthetic-sftp-private-key",
 		},
 		SourceConnection: &Connection{
 			AccessKey: "synthetic-source-access",
@@ -640,9 +726,9 @@ func TestSecretRedaction(t *testing.T) {
 		},
 	}
 
-	got := redact("synthetic&password synthetic/storage+secret synthetic%26password synthetic-source-password synthetic-source-access synthetic-source-secret", request)
+	got := redact("synthetic&password synthetic/storage+secret synthetic%26password synthetic-source-password synthetic-source-access synthetic-source-secret synthetic-sftp-password synthetic-sftp-private-key", request)
 
-	if got != "[REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED]" {
+	if got != "[REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED]" {
 		t.Fatal(got)
 	}
 }

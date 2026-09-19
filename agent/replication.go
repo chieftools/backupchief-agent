@@ -250,10 +250,7 @@ func boundedReplicationDiagnostic(diagnostic string) string {
 }
 
 func replicaResticConnection(connection RepositoryConnection) restic.Connection {
-	return restic.Connection{
-		Driver: connection.Driver, Path: connection.Path, Endpoint: connection.Endpoint, Bucket: connection.Bucket,
-		Prefix: connection.Prefix, Region: connection.Region, AccessKey: connection.AccessKey, SecretKey: connection.SecretKey,
-	}
+	return connection.Restic()
 }
 
 func connectionPointer(connection restic.Connection) *restic.Connection {

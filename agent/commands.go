@@ -1070,18 +1070,9 @@ func (daemon *daemon) reconcileOne(ctx context.Context, commandID string) error 
 	var result CommandResult
 	if journaled.RunKind == "backup" {
 		request := restic.Request{
-			Version:   1,
-			Operation: "snapshots",
-			Connection: restic.Connection{
-				Driver:    job.Repository.Connection.Driver,
-				Path:      job.Repository.Connection.Path,
-				Endpoint:  job.Repository.Connection.Endpoint,
-				Bucket:    job.Repository.Connection.Bucket,
-				Prefix:    job.Repository.Connection.Prefix,
-				Region:    job.Repository.Connection.Region,
-				AccessKey: job.Repository.Connection.AccessKey,
-				SecretKey: job.Repository.Connection.SecretKey,
-			},
+			Version:         1,
+			Operation:       "snapshots",
+			Connection:      job.Repository.Connection.Restic(),
 			Password:        job.Repository.ServicePassword,
 			Host:            daemon.bootstrap.ServerID,
 			Tags:            []string{"backupchief-job:" + job.ID, "backupchief-run:" + journaled.RunID},

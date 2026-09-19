@@ -78,18 +78,9 @@ func executeBackup(
 	}
 
 	request := restic.Request{
-		Version:   1,
-		Operation: "backup",
-		Connection: restic.Connection{
-			Driver:    job.Repository.Connection.Driver,
-			Path:      job.Repository.Connection.Path,
-			Endpoint:  job.Repository.Connection.Endpoint,
-			Bucket:    job.Repository.Connection.Bucket,
-			Prefix:    job.Repository.Connection.Prefix,
-			Region:    job.Repository.Connection.Region,
-			AccessKey: job.Repository.Connection.AccessKey,
-			SecretKey: job.Repository.Connection.SecretKey,
-		},
+		Version:         1,
+		Operation:       "backup",
+		Connection:      job.Repository.Connection.Restic(),
 		Password:        job.Repository.ServicePassword,
 		Root:            job.Source.Root,
 		Excludes:        append([]string(nil), job.Source.Excludes...),

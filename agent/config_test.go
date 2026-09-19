@@ -15,6 +15,40 @@ import (
 	"testing"
 )
 
+func TestSFTPDestinationRoundTripsAndResolvesRepository(t *testing.T) {
+	var document map[string]any
+	if err := json.Unmarshal(validJobConfigBody(), &document); err != nil {
+		t.Fatal(err)
+	}
+	document["metadata"].(map[string]any)["protocol_revision"] = ProtocolRevision
+	destinations := document["destinations"].(map[string]any)
+	destinations["storage_01k4p4f7m1r9d3t6v8w2x5y7zc"] = map[string]any{
+		"driver": "sftp", "host": "archive.example.test", "port": 2222, "username": "synthetic-backup",
+		"root_path": "/repositories", "host_keys": []string{"ssh-ed25519 c3ludGhldGljLWhvc3Qta2V5"},
+		"auth": map[string]any{"method": "password", "password": "synthetic-storage-password"},
+	}
+	body, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	config, _, err := DecodeConfig(body, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection := config.Jobs[0].Repository.Connection
+	if connection.Driver != "sftp" || connection.Path != "/repositories/documents/repository" || connection.Auth == nil || connection.Auth.Password != "synthetic-storage-password" {
+		t.Fatalf("connection: %+v", connection)
+	}
+	encoded, err := encodeConfig(config, strings.Repeat("c", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(encoded, []byte(`"driver": "sftp"`)) || !bytes.Contains(encoded, []byte(`"host_keys"`)) {
+		t.Fatalf("encoded SFTP configuration: %s", encoded)
+	}
+}
+
 func TestMySQLDumpFlagsRejectManagedAndOutputChangingOptions(t *testing.T) {
 	for _, flag := range []string{"--result-file=/tmp/synthetic.sql", "--skip-single-transaction", "--password=synthetic-secret", "--where=synthetic"} {
 		if validMySQLFlag(flag) {
