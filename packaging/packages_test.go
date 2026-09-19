@@ -126,6 +126,7 @@ func TestPackageContents(t *testing.T) {
 				{"usr/lib/systemd/system/backupchief.service", 0644},
 				{"usr/lib/systemd/system/backupchief-updater.service", 0644},
 				{"usr/lib/systemd/system/backupchief-updater.path", 0644},
+				{"usr/lib/systemd/system-generators/backupchief-cpu-quota-generator", 0755},
 				{"etc/backupchief/config.json", 0640},
 				{"etc/backupchief", 0750},
 			} {
@@ -182,6 +183,44 @@ func TestAgentUnitLimitsResourceUsage(t *testing.T) {
 		if !strings.Contains(service, expected) {
 			t.Fatalf("agent service is missing %q", expected)
 		}
+	}
+}
+
+func TestCPUQuotaGeneratorUsesHalfTheProcessorsWithinBounds(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		processorCount string
+		wantQuota      string
+	}{
+		{name: "one processor", processorCount: "1", wantQuota: "100%"},
+		{name: "three processors", processorCount: "3", wantQuota: "150%"},
+		{name: "four processors", processorCount: "4", wantQuota: "200%"},
+		{name: "sixteen processors", processorCount: "16", wantQuota: "400%"},
+		{name: "invalid processor count", processorCount: "invalid", wantQuota: "100%"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			bin := filepath.Join(root, "bin")
+			if err := os.Mkdir(bin, 0755); err != nil {
+				t.Fatal(err)
+			}
+			getconf := filepath.Join(bin, "getconf")
+			if err := os.WriteFile(getconf, []byte("#!/bin/sh\nprintf '%s\\n' '"+test.processorCount+"'\n"), 0755); err != nil {
+				t.Fatal(err)
+			}
+
+			output := filepath.Join(root, "generator")
+			command := exec.Command("sh", "backupchief-cpu-quota-generator", output)
+			command.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
+			if generated, err := command.CombinedOutput(); err != nil {
+				t.Fatalf("generate quota: %v: %s", err, generated)
+			}
+
+			dropin := string(read(t, filepath.Join(output, "backupchief.service.d", "50-cpu-quota.conf")))
+			if dropin != "[Service]\nCPUQuota="+test.wantQuota+"\n" {
+				t.Fatalf("generated quota %q, want %q", dropin, test.wantQuota)
+			}
+		})
 	}
 }
 

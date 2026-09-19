@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+
+output_directory="${1:?systemd generator output directory is required}"
+processor_count="$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)"
+
+case "$processor_count" in
+    ''|*[!0-9]*) processor_count=1 ;;
+esac
+
+if [ "$processor_count" -le 2 ]; then
+    quota_percent=100
+elif [ "$processor_count" -ge 8 ]; then
+    quota_percent=400
+else
+    quota_percent=$((processor_count * 50))
+fi
+
+dropin_directory="${output_directory}/backupchief.service.d"
+mkdir -p "$dropin_directory"
+
+printf '[Service]\nCPUQuota=%s%%\n' "$quota_percent" > "${dropin_directory}/50-cpu-quota.conf"

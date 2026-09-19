@@ -55,6 +55,7 @@ cp packaging/config.json "${RPMBUILD_DIR}/SOURCES/"
 cp packaging/backupchief.service "${RPMBUILD_DIR}/SOURCES/"
 cp packaging/backupchief-updater.service "${RPMBUILD_DIR}/SOURCES/"
 cp packaging/backupchief-updater.path "${RPMBUILD_DIR}/SOURCES/"
+cp packaging/backupchief-cpu-quota-generator "${RPMBUILD_DIR}/SOURCES/"
 cp packaging/postinstall.sh "${RPMBUILD_DIR}/SOURCES/"
 install -m 0644 LICENSE "${RPMBUILD_DIR}/SOURCES/LICENSE"
 install -m 0644 restic/LICENSE "${RPMBUILD_DIR}/SOURCES/restic-LICENSE"
@@ -79,6 +80,7 @@ Source4:        rclone-COPYING
 Source5:        config.schema.json
 Source6:        backupchief-updater.service
 Source7:        backupchief-updater.path
+Source8:        backupchief-cpu-quota-generator
 
 %global debug_package %{nil}
 %global _build_id_links none
@@ -95,6 +97,7 @@ Run from a local configuration or connect the agent to the Backup Chief control 
 mkdir -p %{buildroot}/usr/bin
 mkdir -p %{buildroot}/etc/backupchief
 mkdir -p %{buildroot}/usr/lib/systemd/system
+mkdir -p %{buildroot}/usr/lib/systemd/system-generators
 mkdir -p %{buildroot}/usr/share/licenses/backupchief
 
 install -m 0755 %{_sourcedir}/backupchief %{buildroot}/usr/bin/backupchief
@@ -102,6 +105,7 @@ install -m 0640 %{SOURCE0} %{buildroot}/etc/backupchief/config.json
 install -m 0644 %{SOURCE1} %{buildroot}/usr/lib/systemd/system/backupchief.service
 install -m 0644 %{SOURCE6} %{buildroot}/usr/lib/systemd/system/backupchief-updater.service
 install -m 0644 %{SOURCE7} %{buildroot}/usr/lib/systemd/system/backupchief-updater.path
+install -m 0755 %{SOURCE8} %{buildroot}/usr/lib/systemd/system-generators/backupchief-cpu-quota-generator
 install -m 0644 %{SOURCE2} %{buildroot}/usr/share/licenses/backupchief/LICENSE
 install -m 0644 %{SOURCE3} %{buildroot}/usr/share/licenses/backupchief/restic-LICENSE
 install -m 0644 %{SOURCE4} %{buildroot}/usr/share/licenses/backupchief/rclone-COPYING
@@ -118,6 +122,7 @@ install -m 0644 %{SOURCE5} %{buildroot}/usr/share/licenses/backupchief/config.sc
 %attr(0644, root, root) /usr/lib/systemd/system/backupchief.service
 %attr(0644, root, root) /usr/lib/systemd/system/backupchief-updater.service
 %attr(0644, root, root) /usr/lib/systemd/system/backupchief-updater.path
+%attr(0755, root, root) /usr/lib/systemd/system-generators/backupchief-cpu-quota-generator
 
 %post -f %{_sourcedir}/postinstall.sh
 
