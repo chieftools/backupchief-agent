@@ -4,6 +4,17 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Reported whether Plesk is installed so the control plane can hide Plesk-specific setup on unrelated servers.
+- Allowed MySQL and PostgreSQL jobs to read a server-local password file at inspection and backup time without sending the password to the control plane.
+- Allowed file jobs to back up multiple selected files and directories beneath a shared root in one snapshot.
+- Added a MySQL selection mode that includes every persistent database, including `mysql`, while excluding virtual system schemas.
+
+### Changed
+
+- Updated the agent protocol to 1.14 for Plesk capability detection, multi-path file sources, persistent MySQL database selection, and server-local database credential references.
+
 ## [0.14.1]
 
 ### Changed
