@@ -68,11 +68,18 @@ func executeBackup(
 		SnapshotIDs: []string{},
 	}
 
-	info, err := os.Lstat(job.Source.Root)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+	targets := job.Source.Paths
+	if len(targets) == 0 {
+		targets = []string{job.Source.Root}
+	}
+	for _, target := range targets {
+		info, err := os.Lstat(target)
+		if err == nil && (info.IsDir() || info.Mode().IsRegular()) && info.Mode()&os.ModeSymlink == 0 {
+			continue
+		}
 		base.Status = "failed"
 		base.ResultCode = "invalid_root"
-		base.Summary = "The configured backup root is missing, inaccessible, or not a directory."
+		base.Summary = "A configured backup path is missing, inaccessible, or is a symbolic link."
 		base.FinishedAt = protocolTimestamp(now())
 		return base, []byte(base.Summary + "\n"), false, 0
 	}
@@ -83,6 +90,7 @@ func executeBackup(
 		Connection:      job.Repository.Connection,
 		Password:        job.Repository.ServicePassword,
 		Root:            job.Source.Root,
+		Paths:           append([]string(nil), job.Source.Paths...),
 		Excludes:        append([]string(nil), job.Source.Excludes...),
 		Host:            serverID,
 		Tags:            []string{"backupchief-job:" + job.ID, "backupchief-run:" + command.RunID},

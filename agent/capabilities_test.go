@@ -29,3 +29,24 @@ esac
 		t.Fatalf("tool: %#v", tool)
 	}
 }
+
+func TestProbePleskVersionFileDetectsAnInstallation(t *testing.T) {
+	versionFile := filepath.Join(t.TempDir(), "version")
+	if err := os.WriteFile(versionFile, []byte("18.0.72 synthetic build\nignored detail\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	capability := probePleskVersionFile(versionFile)
+
+	if capability["available"] != true || capability["version"] != "18.0.72 synthetic build" {
+		t.Fatalf("Plesk capability: %#v", capability)
+	}
+}
+
+func TestProbePleskVersionFileReportsAnAbsentInstallation(t *testing.T) {
+	capability := probePleskVersionFile(filepath.Join(t.TempDir(), "missing"))
+
+	if capability["available"] != false || capability["reason"] != "not_detected" {
+		t.Fatalf("Plesk capability: %#v", capability)
+	}
+}

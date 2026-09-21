@@ -28,6 +28,11 @@ func executePostgreSQLBackup(ctx context.Context, executor BackupExecutor, state
 	if postgresql == nil {
 		return failedPostgreSQLResult(result, "execution_failed", "The PostgreSQL source configuration is unavailable.", now)
 	}
+	resolvedPostgreSQL, err := resolvePostgreSQLPassword(*postgresql)
+	if err != nil {
+		return failedPostgreSQLResult(result, "execution_failed", "Could not read the PostgreSQL password file.", now)
+	}
+	postgresql = &resolvedPostgreSQL
 
 	psqlBinary, psqlErr := resolveExternalTool("psql")
 	dumpBinary, dumpErr := resolveExternalTool("pg_dump")
@@ -197,6 +202,21 @@ func postgresqlPassfileContents(source PostgreSQLSource, database string) string
 		return strings.NewReplacer("\\", "\\\\", ":", "\\:").Replace(value)
 	}
 	return escape(source.Host) + ":" + strconv.Itoa(int(source.Port)) + ":" + escape(database) + ":" + escape(source.Username) + ":" + escape(source.Password) + "\n"
+}
+
+func resolvePostgreSQLPassword(source PostgreSQLSource) (PostgreSQLSource, error) {
+	if source.PasswordFile == "" {
+		return source, nil
+	}
+	password, err := readDatabasePasswordFile(source.PasswordFile)
+	if err != nil {
+		return PostgreSQLSource{}, err
+	}
+
+	source.Password = password
+	source.PasswordFile = ""
+
+	return source, nil
 }
 
 func postgresqlPassfile(source PostgreSQLSource, database, stateDirectory string) (string, func(), error) {

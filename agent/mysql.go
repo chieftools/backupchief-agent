@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,11 +20,10 @@ import (
 	"github.com/chieftools/backupchief-agent/restic"
 )
 
-var mysqlSystemDatabases = map[string]bool{
+var mysqlVirtualDatabases = map[string]bool{
 	"information_schema": true,
 	"performance_schema": true,
 	"sys":                true,
-	"mysql":              true,
 }
 
 var portableMySQLFilenamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -35,6 +35,11 @@ func executeMySQLBackup(ctx context.Context, executor BackupExecutor, stateDirec
 	if mysql == nil {
 		return failedMySQLResult(result, "execution_failed", "The MySQL source configuration is unavailable.", now)
 	}
+	resolvedMySQL, err := resolveMySQLPassword(*mysql)
+	if err != nil {
+		return failedMySQLResult(result, "execution_failed", "Could not read the MySQL password file.", now)
+	}
+	mysql = &resolvedMySQL
 
 	mysqlBinary, mysqlErr := resolveExternalTool("mysql")
 	dumpBinary, dumpErr := resolveExternalTool("mysqldump")
@@ -50,7 +55,7 @@ func executeMySQLBackup(ctx context.Context, executor BackupExecutor, stateDirec
 		}
 		defer cleanup()
 
-		discovered, discoveryErr := discoverMySQLDatabases(ctx, mysqlBinary, optionFile)
+		discovered, discoveryErr := discoverMySQLDatabases(ctx, mysqlBinary, optionFile, mysql.SelectionMode == "all_persistent")
 		if discoveryErr != nil {
 			return failedMySQLResult(result, "source_authentication_failed", "Could not discover accessible MySQL databases.", now)
 		}
@@ -145,7 +150,7 @@ func executeMySQLBackup(ctx context.Context, executor BackupExecutor, stateDirec
 }
 
 func selectedMySQLDatabases(source MySQLSource, discovered []string) ([]string, bool) {
-	if source.SelectionMode == "all_accessible" {
+	if source.SelectionMode == "all_accessible" || source.SelectionMode == "all_persistent" {
 		return append([]string(nil), discovered...), len(discovered) > 0 && len(discovered) <= maximumMySQLDatabases
 	}
 	if source.SelectionMode == "selected" {
@@ -249,7 +254,50 @@ func mysqlOptionFile(source MySQLSource, stateDirectory string) (string, func(),
 	return path, func() { _ = os.RemoveAll(directory) }, nil
 }
 
-func discoverMySQLDatabases(ctx context.Context, binary, optionFile string) ([]string, error) {
+func resolveMySQLPassword(source MySQLSource) (MySQLSource, error) {
+	if source.PasswordFile == "" {
+		return source, nil
+	}
+	password, err := readDatabasePasswordFile(source.PasswordFile)
+	if err != nil {
+		return MySQLSource{}, err
+	}
+
+	source.Password = password
+	source.PasswordFile = ""
+
+	return source, nil
+}
+
+func readDatabasePasswordFile(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("open password file: %w", err)
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return "", fmt.Errorf("password file is not a regular file")
+	}
+
+	contents, err := io.ReadAll(io.LimitReader(file, 4097))
+	if err != nil {
+		return "", fmt.Errorf("read password file: %w", err)
+	}
+	if len(contents) > 4096 {
+		return "", fmt.Errorf("password file exceeds 4096 bytes")
+	}
+
+	password := strings.TrimRight(string(contents), "\r\n")
+	if password == "" || runeLength(password) > 4096 || strings.ContainsRune(password, 0) {
+		return "", fmt.Errorf("password file contents are invalid")
+	}
+
+	return password, nil
+}
+
+func discoverMySQLDatabases(ctx context.Context, binary, optionFile string, includeMySQL bool) ([]string, error) {
 	query := "SELECT HEX(SCHEMA_NAME) FROM INFORMATION_SCHEMA.SCHEMATA ORDER BY SCHEMA_NAME"
 	command := exec.CommandContext(ctx, binary, "--defaults-extra-file="+optionFile, "--batch", "--skip-column-names", "--execute="+query)
 	command.Env = []string{"PATH=/usr/bin:/bin:/usr/local/bin:/usr/local/mysql/bin", "LANG=C"}
@@ -268,7 +316,8 @@ func discoverMySQLDatabases(ctx context.Context, binary, optionFile string) ([]s
 			return nil, decodeErr
 		}
 		name := string(decoded)
-		if !mysqlSystemDatabases[strings.ToLower(name)] {
+		lowerName := strings.ToLower(name)
+		if !mysqlVirtualDatabases[lowerName] && (includeMySQL || lowerName != "mysql") {
 			databases = append(databases, name)
 		}
 	}

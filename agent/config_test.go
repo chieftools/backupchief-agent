@@ -90,6 +90,110 @@ func TestMySQLDatabaseSelectionAllowsOneThousandDatabases(t *testing.T) {
 	}
 }
 
+func TestPleskSourceExtensionsRoundTrip(t *testing.T) {
+	var document map[string]any
+	if err := json.Unmarshal(validJobConfigBody(), &document); err != nil {
+		t.Fatal(err)
+	}
+	document["metadata"].(map[string]any)["protocol_revision"] = ProtocolRevision
+	job := document["jobs"].(map[string]any)["job_01k4p4f7m1r9d3t6v8w2x5y7za"].(map[string]any)
+	job["source"].(map[string]any)["root"] = "/"
+	job["source"].(map[string]any)["paths"] = []string{"/srv/panel-sites", "/var/mail/panel.test", "/var/lib/panel/config"}
+	body, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	config, _, err := DecodeConfig(body, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := config.Jobs[0].Source.Paths; !reflect.DeepEqual(got, []string{"/srv/panel-sites", "/var/mail/panel.test", "/var/lib/panel/config"}) {
+		t.Fatalf("file paths: %v", got)
+	}
+	encoded, err := encodeConfig(config, strings.Repeat("a", 64))
+	if err != nil || !bytes.Contains(encoded, []byte(`"paths": [`)) {
+		t.Fatalf("encoded file paths: %v %s", err, encoded)
+	}
+
+	job["type"] = "mysql"
+	job["source"] = map[string]any{
+		"host": "localhost", "port": float64(3306), "username": "panel-admin", "password": "synthetic-secret",
+		"selection": map[string]any{"mode": "all_persistent"}, "dump": map[string]any{"include_routines": true, "include_events": true},
+	}
+	body, err = json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, _, err = DecodeConfig(body, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Jobs[0].Source.MySQL == nil || config.Jobs[0].Source.MySQL.SelectionMode != "all_persistent" {
+		t.Fatalf("persistent MySQL source: %+v", config.Jobs[0].Source)
+	}
+	encoded, err = encodeConfig(config, strings.Repeat("b", 64))
+	if err != nil || !bytes.Contains(encoded, []byte(`"mode": "all_persistent"`)) {
+		t.Fatalf("encoded persistent MySQL source: %v %s", err, encoded)
+	}
+}
+
+func TestMySQLPasswordFileRequiresProtocolRevisionAndRoundTrips(t *testing.T) {
+	var document map[string]any
+	if err := json.Unmarshal(filteredMySQLConfigBody(t, ProtocolRevision), &document); err != nil {
+		t.Fatal(err)
+	}
+	job := document["jobs"].(map[string]any)["job_01k4p4f7m1r9d3t6v8w2x5y7za"].(map[string]any)
+	source := job["source"].(map[string]any)
+	delete(source, "password")
+	source["password_file"] = "/etc/example/mysql-password"
+	body, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	config, _, err := DecodeConfig(body, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Jobs[0].Source.MySQL == nil || config.Jobs[0].Source.MySQL.PasswordFile != "/etc/example/mysql-password" || config.Jobs[0].Source.MySQL.Password != "" {
+		t.Fatalf("MySQL password file source: %+v", config.Jobs[0].Source.MySQL)
+	}
+	encoded, err := encodeConfig(config, strings.Repeat("b", 64))
+	if err != nil || !bytes.Contains(encoded, []byte(`"password_file": "/etc/example/mysql-password"`)) || bytes.Contains(encoded, []byte(`"password": "synthetic-secret"`)) {
+		t.Fatalf("encoded MySQL password file: %v %s", err, encoded)
+	}
+
+	document["metadata"].(map[string]any)["protocol_revision"] = "1.13.0"
+	legacyBody, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, _, err := DecodeConfig(legacyBody, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(legacy.Jobs) != 0 || len(legacy.Warnings) != 1 || !strings.Contains(legacy.Warnings[0], "requires protocol revision 1.14.0") {
+		t.Fatalf("legacy password file configuration: jobs=%+v warnings=%q", legacy.Jobs, legacy.Warnings)
+	}
+}
+
+func TestMySQLPasswordFileRejectsInlinePasswordAndUnsafePath(t *testing.T) {
+	source := JobSource{MySQL: &MySQLSource{
+		Host: "database.example.test", Port: 3306, Username: "synthetic_reader", Password: "synthetic-secret", PasswordFile: "/etc/example/mysql-password",
+		SelectionMode: "selected", Databases: []string{"synthetic_app"},
+	}}
+	if err := validateMySQLSource(source); err == nil {
+		t.Fatal("accepted two MySQL credential sources")
+	}
+
+	source.MySQL.Password = ""
+	source.MySQL.PasswordFile = "relative/mysql-password"
+	if err := validateMySQLSource(source); err == nil {
+		t.Fatal("accepted a relative MySQL password file")
+	}
+}
+
 func TestMySQLTableSelectionRejectsUnrepresentableExclusions(t *testing.T) {
 	source := JobSource{MySQL: &MySQLSource{
 		Host: "database.example.test", Port: 3306, Username: "synthetic_reader",
@@ -127,6 +231,62 @@ func TestPostgreSQLConfigurationRequiresProtocolRevisionAndRoundTrips(t *testing
 	}
 	if len(legacy.Jobs) != 0 || len(legacy.Warnings) != 1 || !strings.Contains(legacy.Warnings[0], "requires protocol revision 1.2.0") {
 		t.Fatalf("legacy PostgreSQL configuration: jobs=%+v warnings=%q", legacy.Jobs, legacy.Warnings)
+	}
+}
+
+func TestPostgreSQLPasswordFileRequiresProtocolRevisionAndRoundTrips(t *testing.T) {
+	var document map[string]any
+	if err := json.Unmarshal(postgresqlConfigBody(t, ProtocolRevision), &document); err != nil {
+		t.Fatal(err)
+	}
+	job := document["jobs"].(map[string]any)["job_01k4p4f7m1r9d3t6v8w2x5y7za"].(map[string]any)
+	source := job["source"].(map[string]any)
+	delete(source, "password")
+	source["password_file"] = "/etc/example/postgresql-password"
+	body, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	config, _, err := DecodeConfig(body, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Jobs[0].Source.PostgreSQL == nil || config.Jobs[0].Source.PostgreSQL.PasswordFile != "/etc/example/postgresql-password" || config.Jobs[0].Source.PostgreSQL.Password != "" {
+		t.Fatalf("PostgreSQL password file source: %+v", config.Jobs[0].Source.PostgreSQL)
+	}
+	encoded, err := encodeConfig(config, strings.Repeat("b", 64))
+	if err != nil || !bytes.Contains(encoded, []byte(`"password_file": "/etc/example/postgresql-password"`)) || bytes.Contains(encoded, []byte(`"password": "synthetic-secret"`)) {
+		t.Fatalf("encoded PostgreSQL password file: %v %s", err, encoded)
+	}
+
+	document["metadata"].(map[string]any)["protocol_revision"] = "1.13.0"
+	legacyBody, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, _, err := DecodeConfig(legacyBody, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(legacy.Jobs) != 0 || len(legacy.Warnings) != 1 || !strings.Contains(legacy.Warnings[0], "requires protocol revision 1.14.0") {
+		t.Fatalf("legacy password file configuration: jobs=%+v warnings=%q", legacy.Jobs, legacy.Warnings)
+	}
+}
+
+func TestPostgreSQLPasswordFileRejectsInlinePasswordAndUnsafePath(t *testing.T) {
+	source := JobSource{PostgreSQL: &PostgreSQLSource{
+		Host: "database.example.test", Port: 5432, Username: "synthetic_reader", Password: "synthetic-secret", PasswordFile: "/etc/example/postgresql-password",
+		ConnectionDatabase: "postgres", SelectionMode: "selected", Databases: []string{"synthetic_app"},
+	}}
+	if err := validatePostgreSQLSource(source); err == nil {
+		t.Fatal("accepted two PostgreSQL credential sources")
+	}
+
+	source.PostgreSQL.Password = ""
+	source.PostgreSQL.PasswordFile = "relative/postgresql-password"
+	if err := validatePostgreSQLSource(source); err == nil {
+		t.Fatal("accepted a relative PostgreSQL password file")
 	}
 }
 

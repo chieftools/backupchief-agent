@@ -446,6 +446,13 @@ func TestRequestBoundaries(t *testing.T) {
 		t.Fatalf("explicit host: %v %v", args, err)
 	}
 
+	request.Root = "/"
+	request.Paths = []string{"/srv/synthetic-sites", "/var/mail/synthetic.test"}
+	args, _, err = request.arguments("password", "new-password", "cache", true)
+	if err != nil || !reflect.DeepEqual(args[len(args)-2:], request.Paths) {
+		t.Fatalf("multiple backup paths: %v %v", args, err)
+	}
+
 	request = testRequest(t)
 	request.Operation = "stats"
 	args, _, err = request.arguments("password", "new-password", "cache", true)

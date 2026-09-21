@@ -122,6 +122,7 @@ type JobMaintenance struct {
 
 type JobSource struct {
 	Root          string
+	Paths         []string
 	OneFileSystem bool
 	Excludes      []string
 	MySQL         *MySQLSource
@@ -133,6 +134,7 @@ type MySQLSource struct {
 	Port            uint16
 	Username        string
 	Password        string
+	PasswordFile    string
 	SelectionMode   string
 	Databases       []string
 	IncludeRoutines bool
@@ -146,6 +148,7 @@ type PostgreSQLSource struct {
 	Port               uint16
 	Username           string
 	Password           string
+	PasswordFile       string
 	ConnectionDatabase string
 	SelectionMode      string
 	Databases          []string
@@ -255,12 +258,14 @@ type maintenanceDocument struct {
 
 type sourceDocument struct {
 	Root               string                     `json:"root,omitempty"`
+	Paths              []string                   `json:"paths,omitempty"`
 	OneFileSystem      *bool                      `json:"one_file_system,omitempty"`
 	Excludes           []string                   `json:"excludes,omitempty"`
 	Host               string                     `json:"host,omitempty"`
 	Port               uint16                     `json:"port,omitempty"`
 	Username           string                     `json:"username,omitempty"`
 	Password           string                     `json:"password,omitempty"`
+	PasswordFile       string                     `json:"password_file,omitempty"`
 	ConnectionDatabase string                     `json:"connection_database,omitempty"`
 	Selection          *databaseSelectionDocument `json:"selection,omitempty"`
 	Dump               *mysqlDumpDocument         `json:"dump,omitempty"`
@@ -479,6 +484,17 @@ func normalizeConfig(document configDocument, expectedGeneration uint64) (Config
 			config.addWarning(fmt.Sprintf("job %q requires protocol revision %s; skipped", key, jobTypeIntroducedIn(JobType(jobType))))
 			continue
 		}
+		if isMySQLJob(JobType(jobType)) || isPostgreSQLJob(JobType(jobType)) {
+			hasPassword, hasPasswordFile, credentialErr := databaseCredentialFields(raw)
+			if credentialErr != nil || hasPassword && hasPasswordFile {
+				return Config{}, fmt.Errorf("job %q: database credentials are invalid", key)
+			}
+			if managed && hasPasswordFile && !protocolRevisionSupports(document.Metadata.ProtocolRevision, "1.14.0") {
+				config.unsupportedJobs[key] = cloneRawMessage(raw)
+				config.addWarning(fmt.Sprintf("job %q requires protocol revision 1.14.0; skipped", key))
+				continue
+			}
+		}
 
 		var document jobDocument
 		if err := json.Unmarshal(raw, &document); err != nil {
@@ -499,6 +515,19 @@ func normalizeConfig(document configDocument, expectedGeneration uint64) (Config
 
 	slices.SortFunc(config.Jobs, func(left, right Job) int { return strings.Compare(left.Key, right.Key) })
 	return config, nil
+}
+
+func databaseCredentialFields(data json.RawMessage) (bool, bool, error) {
+	var document struct {
+		Source map[string]json.RawMessage `json:"source"`
+	}
+	if err := json.Unmarshal(data, &document); err != nil {
+		return false, false, err
+	}
+	_, hasPassword := document.Source["password"]
+	_, hasPasswordFile := document.Source["password_file"]
+
+	return hasPassword, hasPasswordFile, nil
 }
 
 func validateRealtime(config *pusher.Config, hostID string, generation uint64) error {
@@ -725,6 +754,7 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 
 	jobSource := JobSource{
 		Root:          raw.Source.Root,
+		Paths:         append([]string{}, raw.Source.Paths...),
 		OneFileSystem: oneFileSystem,
 		Excludes:      append([]string{}, raw.Source.Excludes...),
 	}
@@ -737,6 +767,7 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 			Port:            raw.Source.Port,
 			Username:        raw.Source.Username,
 			Password:        raw.Source.Password,
+			PasswordFile:    raw.Source.PasswordFile,
 			SelectionMode:   raw.Source.Selection.Mode,
 			Databases:       append([]string{}, raw.Source.Selection.Databases...),
 			IncludeRoutines: raw.Source.Dump.IncludeRoutines,
@@ -753,6 +784,7 @@ func normalizeJob(key string, raw jobDocument, destinations map[string]Destinati
 			Port:               raw.Source.Port,
 			Username:           raw.Source.Username,
 			Password:           raw.Source.Password,
+			PasswordFile:       raw.Source.PasswordFile,
 			ConnectionDatabase: raw.Source.ConnectionDatabase,
 			SelectionMode:      raw.Source.Selection.Mode,
 			Databases:          append([]string{}, raw.Source.Selection.Databases...),
@@ -1004,12 +1036,12 @@ func encodeConfig(config Config, managedDigest string) ([]byte, error) {
 
 		jobKey := prefixConfigKey(job.Key, "job_")
 		source := sourceDocument{
-			Root: job.Source.Root, OneFileSystem: &oneFileSystem, Excludes: job.Source.Excludes,
+			Root: job.Source.Root, Paths: job.Source.Paths, OneFileSystem: &oneFileSystem, Excludes: job.Source.Excludes,
 		}
 		if isMySQLJob(job.Type) && job.Source.MySQL != nil {
 			mysql := job.Source.MySQL
 			source = sourceDocument{
-				Host: mysql.Host, Port: mysql.Port, Username: mysql.Username, Password: mysql.Password,
+				Host: mysql.Host, Port: mysql.Port, Username: mysql.Username, Password: mysql.Password, PasswordFile: mysql.PasswordFile,
 				Selection:      &databaseSelectionDocument{Mode: mysql.SelectionMode, Databases: mysql.Databases},
 				Dump:           &mysqlDumpDocument{IncludeRoutines: mysql.IncludeRoutines, IncludeEvents: mysql.IncludeEvents, CustomFlags: mysql.CustomFlags},
 				TableSelection: encodeTableSelection(mysql.TableSelection),
@@ -1017,7 +1049,7 @@ func encodeConfig(config Config, managedDigest string) ([]byte, error) {
 		} else if isPostgreSQLJob(job.Type) && job.Source.PostgreSQL != nil {
 			postgresql := job.Source.PostgreSQL
 			source = sourceDocument{
-				Host: postgresql.Host, Port: postgresql.Port, Username: postgresql.Username, Password: postgresql.Password,
+				Host: postgresql.Host, Port: postgresql.Port, Username: postgresql.Username, Password: postgresql.Password, PasswordFile: postgresql.PasswordFile,
 				ConnectionDatabase: postgresql.ConnectionDatabase,
 				Selection:          &databaseSelectionDocument{Mode: postgresql.SelectionMode, Databases: postgresql.Databases},
 				TableSelection:     encodeTableSelection(postgresql.TableSelection),
@@ -1160,8 +1192,16 @@ func validateJob(job Job) error {
 	}
 
 	if job.Type == JobTypeFile {
-		if !filepath.IsAbs(job.Source.Root) || runeLength(job.Source.Root) > 4096 || !job.Source.OneFileSystem || len(job.Source.Excludes) > 100 || job.Source.MySQL != nil || job.Source.PostgreSQL != nil {
+		if !filepath.IsAbs(job.Source.Root) || runeLength(job.Source.Root) > 4096 || !job.Source.OneFileSystem || len(job.Source.Paths) > 100 || len(job.Source.Excludes) > 100 || job.Source.MySQL != nil || job.Source.PostgreSQL != nil {
 			return fmt.Errorf("source is invalid")
+		}
+		seenPaths := map[string]bool{}
+		for _, path := range job.Source.Paths {
+			relative, err := filepath.Rel(job.Source.Root, path)
+			if err != nil || !filepath.IsAbs(path) || filepath.Clean(path) != path || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || seenPaths[path] {
+				return fmt.Errorf("source path is invalid")
+			}
+			seenPaths[path] = true
 		}
 		for _, exclude := range job.Source.Excludes {
 			if exclude == "" || runeLength(exclude) > 4096 || strings.ContainsRune(exclude, 0) {
@@ -1294,10 +1334,13 @@ func validPostgreSQLJobSource(jobType JobType, source *PostgreSQLSource) bool {
 
 func validateMySQLSource(source JobSource) error {
 	mysql := source.MySQL
-	if mysql == nil || source.PostgreSQL != nil || source.Root != "" || len(source.Excludes) != 0 || mysql.Host == "" || runeLength(mysql.Host) > 255 || strings.ContainsAny(mysql.Host, "\r\n\x00") || mysql.Port == 0 || mysql.Username == "" || runeLength(mysql.Username) > 255 || strings.ContainsAny(mysql.Username, "\r\n\x00") || runeLength(mysql.Password) > 4096 || strings.ContainsRune(mysql.Password, 0) {
+	if mysql == nil || source.PostgreSQL != nil || source.Root != "" || len(source.Paths) != 0 || len(source.Excludes) != 0 || mysql.Host == "" || runeLength(mysql.Host) > 255 || strings.ContainsAny(mysql.Host, "\r\n\x00") || mysql.Port == 0 || mysql.Username == "" || runeLength(mysql.Username) > 255 || strings.ContainsAny(mysql.Username, "\r\n\x00") || runeLength(mysql.Password) > 4096 || strings.ContainsRune(mysql.Password, 0) {
 		return fmt.Errorf("MySQL source is invalid")
 	}
-	if !slices.Contains([]string{"selected", "all_accessible", "exclude"}, mysql.SelectionMode) || len(mysql.Databases) > maximumMySQLDatabases || mysql.SelectionMode != "all_accessible" && len(mysql.Databases) == 0 || mysql.SelectionMode == "all_accessible" && len(mysql.Databases) != 0 {
+	if mysql.PasswordFile != "" && (mysql.Password != "" || !filepath.IsAbs(mysql.PasswordFile) || filepath.Clean(mysql.PasswordFile) != mysql.PasswordFile || runeLength(mysql.PasswordFile) > 4096 || strings.ContainsAny(mysql.PasswordFile, "\r\n\x00")) {
+		return fmt.Errorf("MySQL password file is invalid")
+	}
+	if !slices.Contains([]string{"selected", "all_accessible", "all_persistent", "exclude"}, mysql.SelectionMode) || len(mysql.Databases) > maximumMySQLDatabases || !slices.Contains([]string{"all_accessible", "all_persistent"}, mysql.SelectionMode) && len(mysql.Databases) == 0 || slices.Contains([]string{"all_accessible", "all_persistent"}, mysql.SelectionMode) && len(mysql.Databases) != 0 {
 		return fmt.Errorf("MySQL database selection is invalid")
 	}
 	seen := map[string]bool{}
@@ -1323,8 +1366,11 @@ func validateMySQLSource(source JobSource) error {
 
 func validatePostgreSQLSource(source JobSource) error {
 	postgresql := source.PostgreSQL
-	if postgresql == nil || source.MySQL != nil || source.Root != "" || len(source.Excludes) != 0 || postgresql.Host == "" || runeLength(postgresql.Host) > 255 || strings.ContainsAny(postgresql.Host, "\r\n\x00") || postgresql.Port == 0 || postgresql.Username == "" || runeLength(postgresql.Username) > 255 || strings.ContainsAny(postgresql.Username, "\r\n\x00") || runeLength(postgresql.Password) > 4096 || strings.ContainsAny(postgresql.Password, "\r\n\x00") || postgresql.ConnectionDatabase == "" || runeLength(postgresql.ConnectionDatabase) > 63 || strings.ContainsAny(postgresql.ConnectionDatabase, "\r\n\x00") {
+	if postgresql == nil || source.MySQL != nil || source.Root != "" || len(source.Paths) != 0 || len(source.Excludes) != 0 || postgresql.Host == "" || runeLength(postgresql.Host) > 255 || strings.ContainsAny(postgresql.Host, "\r\n\x00") || postgresql.Port == 0 || postgresql.Username == "" || runeLength(postgresql.Username) > 255 || strings.ContainsAny(postgresql.Username, "\r\n\x00") || runeLength(postgresql.Password) > 4096 || strings.ContainsAny(postgresql.Password, "\r\n\x00") || postgresql.ConnectionDatabase == "" || runeLength(postgresql.ConnectionDatabase) > 63 || strings.ContainsAny(postgresql.ConnectionDatabase, "\r\n\x00") {
 		return fmt.Errorf("PostgreSQL source is invalid")
+	}
+	if postgresql.PasswordFile != "" && (postgresql.Password != "" || !filepath.IsAbs(postgresql.PasswordFile) || filepath.Clean(postgresql.PasswordFile) != postgresql.PasswordFile || runeLength(postgresql.PasswordFile) > 4096 || strings.ContainsAny(postgresql.PasswordFile, "\r\n\x00")) {
+		return fmt.Errorf("PostgreSQL password file is invalid")
 	}
 	if !slices.Contains([]string{"selected", "all_accessible", "exclude"}, postgresql.SelectionMode) || len(postgresql.Databases) > maximumPostgreSQLDatabases || postgresql.SelectionMode != "all_accessible" && len(postgresql.Databases) == 0 || postgresql.SelectionMode == "all_accessible" && len(postgresql.Databases) != 0 {
 		return fmt.Errorf("PostgreSQL database selection is invalid")
@@ -1371,7 +1417,7 @@ func validateTableSelection(selection *TableSelection, selectionMode string, dat
 			if table.Schema == "" || runeLength(table.Schema) > maximum || containsControl(table.Schema) || strings.EqualFold(table.Database, "template0") || strings.EqualFold(table.Database, "template1") {
 				return fmt.Errorf("table selection is invalid")
 			}
-		} else if table.Schema != "" || mysqlSystemDatabases[strings.ToLower(table.Database)] || strings.HasPrefix(table.Database, "-") || strings.HasPrefix(table.Table, "-") || selection.Mode == "exclude" && (strings.Contains(table.Database, ".") || strings.Contains(table.Table, ".")) {
+		} else if table.Schema != "" || mysqlVirtualDatabases[strings.ToLower(table.Database)] || strings.EqualFold(table.Database, "mysql") || strings.HasPrefix(table.Database, "-") || strings.HasPrefix(table.Table, "-") || selection.Mode == "exclude" && (strings.Contains(table.Database, ".") || strings.Contains(table.Table, ".")) {
 			return fmt.Errorf("table selection is invalid")
 		}
 		if selectionMode == "selected" && !selected[table.Database] {

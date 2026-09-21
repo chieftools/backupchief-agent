@@ -45,6 +45,7 @@ func probeCapabilities() map[string]any {
 				},
 			},
 			"tools": map[string]any{
+				"plesk":            probePlesk(),
 				"restic":           map[string]any{"available": true, "bundled": true, "version": restic.Version},
 				"rclone":           map[string]any{"available": true, "bundled": true, "version": rclone.Version},
 				"snapshot_export":  map[string]any{"available": true, "archive": "zip"},
@@ -56,6 +57,34 @@ func probeCapabilities() map[string]any {
 	})
 
 	return capabilities
+}
+
+func probePlesk() map[string]any {
+	if runtime.GOOS != "linux" {
+		return map[string]any{"available": false, "reason": "unsupported_platform"}
+	}
+
+	return probePleskVersionFile("/usr/local/psa/version")
+}
+
+func probePleskVersionFile(path string) map[string]any {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return map[string]any{"available": false, "reason": "not_detected"}
+	}
+
+	version := strings.TrimSpace(string(contents))
+	if newline := strings.IndexByte(version, '\n'); newline >= 0 {
+		version = strings.TrimSpace(version[:newline])
+	}
+	if version == "" {
+		return map[string]any{"available": false, "reason": "not_detected"}
+	}
+	if len(version) > 255 {
+		version = version[:255]
+	}
+
+	return map[string]any{"available": true, "version": version}
 }
 
 func probeAgentUpdate() map[string]any {

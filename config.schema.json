@@ -79,7 +79,7 @@
       "additionalProperties": false,
       "required": ["protocol_revision", "generation", "revision", "schema_version", "issued_at"],
       "properties": {
-        "protocol_revision": { "const": "1.12.0" },
+        "protocol_revision": { "const": "1.14.0" },
         "generation": { "type": "integer", "minimum": 1 },
         "revision": { "type": "integer", "minimum": 1 },
         "schema_version": { "const": 1 },
@@ -215,6 +215,7 @@
       "required": ["root"],
       "properties": {
         "root": { "type": "string", "pattern": "^/", "maxLength": 4096 },
+        "paths": { "type": "array", "minItems": 1, "maxItems": 100, "uniqueItems": true, "items": { "type": "string", "pattern": "^/", "maxLength": 4096 } },
         "one_file_system": { "const": true, "default": true },
         "excludes": { "type": "array", "maxItems": 100, "items": { "type": "string", "minLength": 1, "maxLength": 4096 } }
       }
@@ -224,7 +225,7 @@
 	  "required": ["type", "source", "repository", "schedule"],
 	  "properties": {
 		"name": { "type": "string", "minLength": 1, "maxLength": 255 }, "type": { "const": "mysql" },
-		"enabled": { "type": "boolean", "default": true }, "source": { "allOf": [{ "$ref": "#/$defs/mysql_source" }, { "not": { "required": ["table_selection"] } }, { "properties": { "selection": { "properties": { "mode": { "enum": ["selected", "all_accessible"] } } } } }] },
+		"enabled": { "type": "boolean", "default": true }, "source": { "allOf": [{ "$ref": "#/$defs/mysql_source" }, { "not": { "required": ["table_selection"] } }, { "properties": { "selection": { "properties": { "mode": { "enum": ["selected", "all_accessible", "all_persistent"] } } } } }] },
 		"repository": { "$ref": "#/$defs/repository" }, "schedule": { "$ref": "#/$defs/cron" },
 		"maintenance": { "$ref": "#/$defs/maintenance" },
 		"retention": { "$ref": "#/$defs/retention" }, "integrity": { "$ref": "#/$defs/integrity" }, "safety": { "$ref": "#/$defs/safety" }, "replicas": { "$ref": "#/$defs/replicas" }, "replica_setups": { "$ref": "#/$defs/replicas" }, "replication": { "$ref": "#/$defs/replication" }
@@ -243,14 +244,16 @@
 	},
 	"mysql_source": {
 	  "type": "object", "additionalProperties": false,
-	  "required": ["host", "port", "username", "password", "selection", "dump"],
+	  "required": ["host", "port", "username", "selection", "dump"],
 	  "properties": {
 		"host": { "type": "string", "minLength": 1, "maxLength": 255 }, "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
 		"username": { "type": "string", "minLength": 1, "maxLength": 255 }, "password": { "type": "string", "maxLength": 4096 },
-		"selection": { "type": "object", "additionalProperties": false, "required": ["mode"], "properties": { "mode": { "enum": ["selected", "all_accessible", "exclude"] }, "databases": { "type": "array", "maxItems": 1000, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 64 } } }, "allOf": [{ "if": { "properties": { "mode": { "enum": ["selected", "exclude"] } } }, "then": { "required": ["databases"], "properties": { "databases": { "minItems": 1 } } } }, { "if": { "properties": { "mode": { "const": "all_accessible" } } }, "then": { "properties": { "databases": { "maxItems": 0 } } } }] },
+		"password_file": { "type": "string", "pattern": "^/", "maxLength": 4096 },
+		"selection": { "type": "object", "additionalProperties": false, "required": ["mode"], "properties": { "mode": { "enum": ["selected", "all_accessible", "all_persistent", "exclude"] }, "databases": { "type": "array", "maxItems": 1000, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 64 } } }, "allOf": [{ "if": { "properties": { "mode": { "enum": ["selected", "exclude"] } } }, "then": { "required": ["databases"], "properties": { "databases": { "minItems": 1 } } } }, { "if": { "properties": { "mode": { "enum": ["all_accessible", "all_persistent"] } } }, "then": { "properties": { "databases": { "maxItems": 0 } } } }] },
 		"dump": { "type": "object", "additionalProperties": false, "properties": { "include_routines": { "type": "boolean" }, "include_events": { "type": "boolean" }, "custom_flags": { "type": "array", "maxItems": 50, "uniqueItems": true, "items": { "type": "string", "pattern": "^--[a-z0-9][a-z0-9-]*(=.*)?$", "maxLength": 512 } } } },
 		"table_selection": { "$ref": "#/$defs/mysql_table_selection" }
-	  }
+	  },
+	  "not": { "required": ["password", "password_file"] }
 	},
 	"mysql_table_selection": {
 	  "type": "object", "additionalProperties": false, "required": ["mode", "tables"],
@@ -283,14 +286,16 @@
 	},
 	"postgresql_source": {
 	  "type": "object", "additionalProperties": false,
-	  "required": ["host", "port", "username", "password", "connection_database", "selection"],
+	  "required": ["host", "port", "username", "connection_database", "selection"],
 	  "properties": {
 		"host": { "type": "string", "minLength": 1, "maxLength": 255 }, "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
 		"username": { "type": "string", "minLength": 1, "maxLength": 255 }, "password": { "type": "string", "maxLength": 4096 },
+		"password_file": { "type": "string", "pattern": "^/", "maxLength": 4096 },
 		"connection_database": { "type": "string", "minLength": 1, "maxLength": 63 },
 		"selection": { "type": "object", "additionalProperties": false, "required": ["mode"], "properties": { "mode": { "enum": ["selected", "all_accessible", "exclude"] }, "databases": { "type": "array", "maxItems": 1000, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 63, "not": { "enum": ["template0", "template1"] } } } }, "allOf": [{ "if": { "properties": { "mode": { "enum": ["selected", "exclude"] } } }, "then": { "required": ["databases"], "properties": { "databases": { "minItems": 1 } } } }, { "if": { "properties": { "mode": { "const": "all_accessible" } } }, "then": { "properties": { "databases": { "maxItems": 0 } } } }] },
 		"table_selection": { "$ref": "#/$defs/postgresql_table_selection" }
-	  }
+	  },
+	  "not": { "required": ["password", "password_file"] }
 	},
 	"postgresql_table_selection": {
 	  "type": "object", "additionalProperties": false, "required": ["mode", "tables"],

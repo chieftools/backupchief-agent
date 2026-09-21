@@ -28,6 +28,23 @@ func TestSourceInspectionUsesAgentStateForPrivateMySQLCredentials(t *testing.T) 
 	}
 }
 
+func TestSourceInspectionReadsMySQLPasswordFileAtRunTime(t *testing.T) {
+	installInspectionTools(t, successfulMySQLTool, successfulMySQLDumpTool)
+	passwordFile := filepath.Join(t.TempDir(), "mysql-password")
+	if err := os.WriteFile(passwordFile, []byte("synthetic-file-secret\r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	payload := inspectionMySQLPayload()
+	delete(payload.Source, "password")
+	payload.Source["password_file"] = passwordFile
+
+	result := inspectSource(context.Background(), 1, "01k4p4k2n8d3r6t9v1w5x7yabc", t.TempDir(), payload)
+
+	if result.Status != "complete" || result.ResultCode != "success" || result.Failure != nil {
+		t.Fatalf("result: %+v", result)
+	}
+}
+
 func TestSourceInspectionAllowsMySQLDumpWithoutGTIDOption(t *testing.T) {
 	installInspectionTools(t, successfulMySQLTool, successfulMySQLDumpWithoutGTIDTool)
 
@@ -91,6 +108,23 @@ func TestSourceInspectionVerifiesPostgreSQLSelectionAndSchemaDump(t *testing.T) 
 	entries, err := os.ReadDir(stateDirectory)
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("credential workspace was not cleaned up: %v %v", entries, err)
+	}
+}
+
+func TestSourceInspectionReadsPostgreSQLPasswordFileAtRunTime(t *testing.T) {
+	installPostgreSQLInspectionTools(t, successfulPostgreSQLTool, successfulPostgreSQLDumpTool)
+	passwordFile := filepath.Join(t.TempDir(), "postgresql-password")
+	if err := os.WriteFile(passwordFile, []byte("synthetic-file-secret\r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	payload := inspectionPostgreSQLPayload()
+	delete(payload.Source, "password")
+	payload.Source["password_file"] = passwordFile
+
+	result := inspectSource(context.Background(), 1, "01k4p4k2n8d3r6t9v1w5x7yabc", t.TempDir(), payload)
+
+	if result.Status != "complete" || result.ResultCode != "success" || result.Failure != nil {
+		t.Fatalf("result: %+v", result)
 	}
 }
 

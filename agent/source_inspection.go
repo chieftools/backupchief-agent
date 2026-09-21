@@ -55,20 +55,24 @@ func inspectSource(ctx context.Context, generation uint64, runID, stateDirectory
 
 	jobType := JobType(payload.Type)
 	if isPostgreSQLJob(jobType) {
-		if source.Selection == nil || !validPostgreSQLJobSource(jobType, &PostgreSQLSource{SelectionMode: source.Selection.Mode, TableSelection: normalizeTableSelection(source.TableSelection)}) {
+		_, hasPassword := payload.Source["password"]
+		_, hasPasswordFile := payload.Source["password_file"]
+		if hasPassword && hasPasswordFile || source.Selection == nil || !validPostgreSQLJobSource(jobType, &PostgreSQLSource{SelectionMode: source.Selection.Mode, TableSelection: normalizeTableSelection(source.TableSelection)}) {
 			result.Failure = inspectionFailure("source_validation", "The source type does not match its database selection fields.", source.Password)
 			return result
 		}
 		return inspectPostgreSQLSource(ctx, result, source, stateDirectory)
 	}
 
-	if !isMySQLJob(jobType) || source.Selection == nil || source.Dump == nil || !validMySQLJobSource(jobType, &MySQLSource{SelectionMode: source.Selection.Mode, TableSelection: normalizeTableSelection(source.TableSelection)}) {
+	_, hasPassword := payload.Source["password"]
+	_, hasPasswordFile := payload.Source["password_file"]
+	if !isMySQLJob(jobType) || hasPassword && hasPasswordFile || source.Selection == nil || source.Dump == nil || !validMySQLJobSource(jobType, &MySQLSource{SelectionMode: source.Selection.Mode, TableSelection: normalizeTableSelection(source.TableSelection)}) {
 		result.Failure = inspectionFailure("source_validation", "The source type or required source fields are not supported by this agent.")
 		return result
 	}
 
 	mysql := MySQLSource{
-		Host: source.Host, Port: source.Port, Username: source.Username, Password: source.Password,
+		Host: source.Host, Port: source.Port, Username: source.Username, Password: source.Password, PasswordFile: source.PasswordFile,
 		SelectionMode: source.Selection.Mode, Databases: source.Selection.Databases,
 		IncludeRoutines: source.Dump.IncludeRoutines, IncludeEvents: source.Dump.IncludeEvents,
 		CustomFlags:    source.Dump.CustomFlags,
@@ -79,6 +83,13 @@ func inspectSource(ctx context.Context, generation uint64, runID, stateDirectory
 		result.Failure = inspectionFailure("source_validation", err.Error(), mysql.Password)
 		return result
 	}
+	resolvedMySQL, err := resolveMySQLPassword(mysql)
+	if err != nil {
+		result.Summary = "The MySQL password file could not be read."
+		result.Failure = inspectionFailure("credential_setup", err.Error())
+		return result
+	}
+	mysql = resolvedMySQL
 
 	mysqlBinary, mysqlErr := resolveExternalTool("mysql")
 	dumpBinary, dumpErr := resolveExternalTool("mysqldump")
@@ -97,7 +108,7 @@ func inspectSource(ctx context.Context, generation uint64, runID, stateDirectory
 	}
 	defer cleanup()
 
-	discovered, err := discoverMySQLDatabases(ctx, mysqlBinary, optionFile)
+	discovered, err := discoverMySQLDatabases(ctx, mysqlBinary, optionFile, mysql.SelectionMode == "all_persistent")
 	if err != nil {
 		result.ResultCode = "source_authentication_failed"
 		result.Summary = "MySQL rejected the connection or database discovery query."
@@ -182,7 +193,7 @@ func inspectPostgreSQLSource(ctx context.Context, result CommandResult, source s
 	}
 
 	postgresql := PostgreSQLSource{
-		Host: source.Host, Port: source.Port, Username: source.Username, Password: source.Password,
+		Host: source.Host, Port: source.Port, Username: source.Username, Password: source.Password, PasswordFile: source.PasswordFile,
 		ConnectionDatabase: source.ConnectionDatabase, SelectionMode: source.Selection.Mode, Databases: source.Selection.Databases,
 		TableSelection: normalizeTableSelection(source.TableSelection),
 	}
@@ -191,6 +202,13 @@ func inspectPostgreSQLSource(ctx context.Context, result CommandResult, source s
 		result.Failure = inspectionFailure("source_validation", err.Error(), postgresql.Password)
 		return result
 	}
+	resolvedPostgreSQL, err := resolvePostgreSQLPassword(postgresql)
+	if err != nil {
+		result.Summary = "The PostgreSQL password file could not be read."
+		result.Failure = inspectionFailure("credential_setup", err.Error())
+		return result
+	}
+	postgresql = resolvedPostgreSQL
 
 	psqlBinary, psqlErr := resolveExternalTool("psql")
 	dumpBinary, dumpErr := resolveExternalTool("pg_dump")

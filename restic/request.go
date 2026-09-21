@@ -28,6 +28,7 @@ type Request struct {
 	NewPassword       string      `json:"new_password,omitempty"`
 	KeyID             string      `json:"key_id,omitempty"`
 	Root              string      `json:"root,omitempty"`
+	Paths             []string    `json:"paths,omitempty"`
 	Excludes          []string    `json:"excludes,omitempty"`
 	Host              string      `json:"host,omitempty"`
 	Tags              []string    `json:"tags,omitempty"`
@@ -176,7 +177,21 @@ func (r Request) argumentsPrepared(passwordFile, newPasswordFile, cache string, 
 			arguments = append(arguments, "--exclude", exclude)
 		}
 
-		arguments = append(arguments, "--", r.Root)
+		targets := r.Paths
+		if len(targets) == 0 {
+			targets = []string{r.Root}
+		}
+		if len(targets) > 100 {
+			return nil, nil, errors.New("too many backup paths")
+		}
+		for _, target := range targets {
+			relative, err := filepath.Rel(r.Root, target)
+			if err != nil || !filepath.IsAbs(target) || filepath.Clean(target) != target || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+				return nil, nil, errors.New("backup path must be within root")
+			}
+		}
+		arguments = append(arguments, "--")
+		arguments = append(arguments, targets...)
 	case "backup_stdin":
 		if !safeStdinFilename(r.StdinFilename) || len(r.StdinCommand) < 1 || len(r.StdinCommand) > 100 || !filepath.IsAbs(r.StdinCommand[0]) || r.CommandConfig == "" || len(r.CommandConfig) > 1<<20 || strings.ContainsRune(r.CommandConfig, 0) {
 			return nil, nil, errors.New("stdin backup command is invalid")

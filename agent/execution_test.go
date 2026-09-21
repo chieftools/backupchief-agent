@@ -131,6 +131,40 @@ func TestExecuteMySQLBackupStreamsOneDatabaseIntoRestic(t *testing.T) {
 	}
 }
 
+func TestExecuteMySQLBackupReadsPasswordFileAtRunTime(t *testing.T) {
+	installInspectionTools(t, successfulMySQLTool, successfulMySQLDumpTool)
+	passwordFile := filepath.Join(t.TempDir(), "mysql-password")
+	if err := os.WriteFile(passwordFile, []byte("synthetic-file-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshotID := strings.Repeat("e", 64)
+	executor := &recordingExecutor{result: restic.Result{ExitCode: 0, Outcome: "complete", Output: `{"message_type":"summary","total_files_processed":1,"snapshot_id":"` + snapshotID + `"}`}}
+	command := &JournalCommand{RunID: "01k4p4f7m1r9d3t6v8w2x5y7zc"}
+	job := executionJob(t.TempDir())
+	job.Type = JobTypeMySQL
+	job.Source = JobSource{MySQL: &MySQLSource{Host: "mysql.example.test", Port: 3306, Username: "synthetic_reader", PasswordFile: passwordFile, SelectionMode: "selected", Databases: []string{"synthetic_app"}}}
+
+	result, _, _, _ := executeBackup(context.Background(), executor, t.TempDir(), "01k4p4f7m1r9d3t6v8w2x5y7ze", 1, command, job, time.Now)
+
+	if result.Status != "complete" || len(executor.requests) != 1 || !strings.Contains(executor.requests[0].CommandConfig, `password="synthetic-file-secret"`) {
+		t.Fatalf("result=%+v requests=%+v", result, executor.requests)
+	}
+}
+
+func TestExecuteMySQLBackupFailsWhenPasswordFileCannotBeRead(t *testing.T) {
+	executor := &recordingExecutor{}
+	command := &JournalCommand{RunID: "01k4p4f7m1r9d3t6v8w2x5y7zc"}
+	job := executionJob(t.TempDir())
+	job.Type = JobTypeMySQL
+	job.Source = JobSource{MySQL: &MySQLSource{Host: "mysql.example.test", Port: 3306, Username: "synthetic_reader", PasswordFile: filepath.Join(t.TempDir(), "missing-password"), SelectionMode: "selected", Databases: []string{"synthetic_app"}}}
+
+	result, log, _, _ := executeBackup(context.Background(), executor, t.TempDir(), "01k4p4f7m1r9d3t6v8w2x5y7ze", 1, command, job, time.Now)
+
+	if result.Status != "failed" || result.ResultCode != "execution_failed" || len(executor.requests) != 0 || strings.Contains(string(log), job.Source.MySQL.PasswordFile) {
+		t.Fatalf("result=%+v requests=%+v log=%q", result, executor.requests, log)
+	}
+}
+
 func TestMySQLBackupHonorsExplicitGTIDDumpOption(t *testing.T) {
 	installInspectionTools(t, successfulMySQLTool, successfulMySQLDumpTool)
 	snapshotID := strings.Repeat("c", 64)
@@ -279,6 +313,14 @@ func TestDatabaseExclusionsFilterDiscoveredTargets(t *testing.T) {
 	}
 }
 
+func TestAllPersistentMySQLSelectionKeepsEveryDiscoveredPersistentDatabase(t *testing.T) {
+	databases, valid := selectedMySQLDatabases(MySQLSource{SelectionMode: "all_persistent"}, []string{"mysql", "psa", "synthetic_store"})
+
+	if !valid || !reflect.DeepEqual(databases, []string{"mysql", "psa", "synthetic_store"}) {
+		t.Fatalf("MySQL targets: %v valid=%v", databases, valid)
+	}
+}
+
 func TestExecutePostgreSQLBackupUsesAPrivatePassfileAndPortableDumpFlags(t *testing.T) {
 	installPostgreSQLInspectionTools(t, successfulPostgreSQLTool, successfulPostgreSQLDumpTool)
 	snapshotID := strings.Repeat("e", 64)
@@ -314,6 +356,40 @@ func TestExecutePostgreSQLBackupUsesAPrivatePassfileAndPortableDumpFlags(t *test
 		if strings.Contains(argument, "synthetic-secret") || strings.Contains(argument, "--create") || strings.Contains(argument, "--clean") {
 			t.Fatalf("unsafe pg_dump argument: %q", argument)
 		}
+	}
+}
+
+func TestExecutePostgreSQLBackupReadsPasswordFileAtRunTime(t *testing.T) {
+	installPostgreSQLInspectionTools(t, successfulPostgreSQLTool, successfulPostgreSQLDumpTool)
+	passwordFile := filepath.Join(t.TempDir(), "postgresql-password")
+	if err := os.WriteFile(passwordFile, []byte("synthetic-file-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshotID := strings.Repeat("e", 64)
+	executor := &recordingExecutor{result: restic.Result{ExitCode: 0, Outcome: "complete", Output: `{"message_type":"summary","total_files_processed":1,"snapshot_id":"` + snapshotID + `"}`}}
+	command := &JournalCommand{RunID: "01k4p4f7m1r9d3t6v8w2x5y7zc"}
+	job := executionJob(t.TempDir())
+	job.Type = JobTypePostgreSQL
+	job.Source = JobSource{PostgreSQL: &PostgreSQLSource{Host: "postgresql.example.test", Port: 5432, Username: "synthetic_reader", PasswordFile: passwordFile, ConnectionDatabase: "postgres", SelectionMode: "selected", Databases: []string{"synthetic_app"}}}
+
+	result, _, _, _ := executeBackup(context.Background(), executor, t.TempDir(), "01k4p4f7m1r9d3t6v8w2x5y7ze", 1, command, job, time.Now)
+
+	if result.Status != "complete" || len(executor.requests) != 1 || !strings.Contains(executor.requests[0].CommandConfig, "synthetic-file-secret") {
+		t.Fatalf("result=%+v requests=%+v", result, executor.requests)
+	}
+}
+
+func TestExecutePostgreSQLBackupFailsWhenPasswordFileCannotBeRead(t *testing.T) {
+	executor := &recordingExecutor{}
+	command := &JournalCommand{RunID: "01k4p4f7m1r9d3t6v8w2x5y7zc"}
+	job := executionJob(t.TempDir())
+	job.Type = JobTypePostgreSQL
+	job.Source = JobSource{PostgreSQL: &PostgreSQLSource{Host: "postgresql.example.test", Port: 5432, Username: "synthetic_reader", PasswordFile: filepath.Join(t.TempDir(), "missing-password"), ConnectionDatabase: "postgres", SelectionMode: "selected", Databases: []string{"synthetic_app"}}}
+
+	result, log, _, _ := executeBackup(context.Background(), executor, t.TempDir(), "01k4p4f7m1r9d3t6v8w2x5y7ze", 1, command, job, time.Now)
+
+	if result.Status != "failed" || result.ResultCode != "execution_failed" || len(executor.requests) != 0 || strings.Contains(string(log), job.Source.PostgreSQL.PasswordFile) {
+		t.Fatalf("result=%+v requests=%+v log=%q", result, executor.requests, log)
 	}
 }
 

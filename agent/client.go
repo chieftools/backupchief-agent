@@ -646,6 +646,11 @@ func requestBodyForProtocol(path string, body []byte, protocolRevision string) (
 					delete(tools, "agent_update")
 				}
 			}
+			if !protocolRevisionSupports(protocolRevision, "1.14.0") {
+				if tools, ok := capabilities["tools"].(map[string]any); ok {
+					delete(tools, "plesk")
+				}
+			}
 
 			encodedCapabilities, err := json.Marshal(capabilities)
 			if err != nil {

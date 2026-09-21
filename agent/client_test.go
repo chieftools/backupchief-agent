@@ -83,6 +83,30 @@ func TestHeartbeatOmitsAgentUpdateCapabilityBeforeProtocolOneTen(t *testing.T) {
 	}
 }
 
+func TestHeartbeatOmitsPleskCapabilityBeforeProtocolOneFourteen(t *testing.T) {
+	body, err := json.Marshal(HeartbeatRequest{
+		Capabilities: map[string]any{"tools": map[string]any{
+			"plesk": map[string]any{"available": true, "version": "18.0.72 synthetic"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewritten, err := requestBodyForProtocol("/heartbeat", body, "1.13.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var heartbeat map[string]any
+	if err := json.Unmarshal(rewritten, &heartbeat); err != nil {
+		t.Fatal(err)
+	}
+	capabilities := heartbeat["capabilities"].(map[string]any)
+	tools := capabilities["tools"].(map[string]any)
+	if _, exists := tools["plesk"]; exists {
+		t.Fatal("legacy heartbeat retained Plesk capability")
+	}
+}
+
 func TestClientNegotiatesDownAfterRollbackAndBackUpAfterUpgrade(t *testing.T) {
 	var requests atomic.Int32
 	var upgraded atomic.Bool
