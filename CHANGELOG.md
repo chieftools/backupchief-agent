@@ -4,6 +4,8 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.15.0]
+
 ### Added
 
 - Reported whether Plesk is installed so the control plane can hide Plesk-specific setup on unrelated servers.
