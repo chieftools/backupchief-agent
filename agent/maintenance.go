@@ -309,7 +309,7 @@ func executeForget(
 			Kind: "forget", CandidateSnapshotIDs: candidateIDs,
 			ProtectedSnapshotIDs: snapshotIDs(protected),
 			CandidateRunIDs:      runIDsForSnapshots(records, candidateIDs),
-			ProtectedRunIDs:      append([]string{proof.RunID}, job.Retention.ProtectedRunIDs...),
+			ProtectedRunIDs:      uniqueSortedStrings(append([]string{proof.RunID}, job.Retention.ProtectedRunIDs...)),
 			ForgetPlanned:        true,
 		}
 		if plan != nil {
@@ -467,6 +467,19 @@ func snapshotIDs(inventory map[string]bool) []string {
 	result := make([]string, 0, len(inventory))
 	for snapshotID := range inventory {
 		result = append(result, snapshotID)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func uniqueSortedStrings(values []string) []string {
+	unique := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		unique[value] = struct{}{}
+	}
+	result := make([]string, 0, len(unique))
+	for value := range unique {
+		result = append(result, value)
 	}
 	sort.Strings(result)
 	return result

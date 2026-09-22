@@ -104,6 +104,32 @@ func TestRetentionResolvesProtectedSnapshotsToReplicaLocalIDs(t *testing.T) {
 	}
 }
 
+func TestRetentionPlanDeduplicatesTheLatestProtectedRun(t *testing.T) {
+	latestRunID := "01k4p4f7m1r9d3t6v8w2x5y7za"
+	latestSnapshotID := strings.Repeat("a", 64)
+	executor := &scriptedMaintenanceExecutor{results: []restic.Result{
+		{
+			ExitCode: 0, Outcome: "complete",
+			Output: `[{"id":"` + latestSnapshotID + `","tags":["backupchief-run:` + latestRunID + `"]}]`,
+		},
+		{ExitCode: 0, Outcome: "complete", Output: `{"total_size":1024}`},
+	}}
+	job := maintenanceExecutionJob(t)
+	job.Retention.LatestComplete = &CompleteSnapshotProof{
+		RunID: latestRunID, FinishedAt: "2026-09-10T08:00:00.000000Z", SnapshotIDs: []string{latestSnapshotID},
+	}
+	job.Retention.ProtectedRunIDs = []string{latestRunID}
+
+	result, _, _, _ := executeMaintenanceRepositories(
+		context.Background(), executor, 1, maintenanceJournalCommand("forget", job.ID), job, nil,
+		func(MaintenancePlan) error { return nil }, time.Now, nil,
+	)
+
+	if !reflect.DeepEqual(result.MaintenancePlan.ProtectedRunIDs, []string{latestRunID}) {
+		t.Fatalf("protected run ids: %v", result.MaintenancePlan.ProtectedRunIDs)
+	}
+}
+
 func TestRetentionFailsClosedWhenAProtectedReplicaSnapshotIsMissing(t *testing.T) {
 	latestRunID := "01k4p4f7m1r9d3t6v8w2x5y7ze"
 	heldRunID := "01k4p4f7m1r9d3t6v8w2x5y7zf"

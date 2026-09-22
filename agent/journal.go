@@ -91,10 +91,44 @@ func normalizeJournalCommand(command *JournalCommand) {
 		if event.ScheduledFor == "" {
 			event.ScheduledFor = command.ScheduledFor
 		}
+		normalizeTerminalEventMaintenancePlan(event)
 	}
-	if command.Result != nil && command.Result.RunKind == "" {
-		command.Result.RunKind = command.RunKind
+	normalizeMaintenancePlan(command.MaintenancePlan)
+	if command.Result != nil {
+		if command.Result.RunKind == "" {
+			command.Result.RunKind = command.RunKind
+		}
+		normalizeMaintenancePlan(command.Result.MaintenancePlan)
 	}
+}
+
+func normalizeMaintenancePlan(plan *MaintenancePlan) {
+	if plan != nil {
+		plan.ProtectedRunIDs = uniqueSortedStrings(plan.ProtectedRunIDs)
+	}
+}
+
+func normalizeTerminalEventMaintenancePlan(event *AgentEvent) {
+	if event.Kind != "run_finished" {
+		return
+	}
+	plan, ok := event.Payload["maintenance_plan"].(map[string]any)
+	if !ok {
+		return
+	}
+	rawRunIDs, ok := plan["protected_run_ids"].([]any)
+	if !ok {
+		return
+	}
+	runIDs := make([]string, 0, len(rawRunIDs))
+	for _, rawRunID := range rawRunIDs {
+		runID, ok := rawRunID.(string)
+		if !ok {
+			return
+		}
+		runIDs = append(runIDs, runID)
+	}
+	plan["protected_run_ids"] = uniqueSortedStrings(runIDs)
 }
 
 func (store *FileStore) SaveCommandJournal(journal CommandJournal) error {

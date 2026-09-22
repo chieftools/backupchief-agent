@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -582,6 +583,62 @@ func TestStateDatabaseBackfillsRunKindForDurableBackupRecords(t *testing.T) {
 	reloaded, err := store.LoadCommandJournal()
 	if err != nil || reloaded.Commands[commandID].Events[0].RunKind != "backup" {
 		t.Fatalf("backfilled event was not durable: %+v %v", reloaded, err)
+	}
+}
+
+func TestStateDatabaseRepairsDuplicateProtectedRunsInDurableMaintenanceRecords(t *testing.T) {
+	store := newAgentTestStore(t)
+	commandID := "01k4p4f7m1r9d3t6v8w2x5y7za"
+	runID := "01k4p4f7m1r9d3t6v8w2x5y7zb"
+	jobID := "01k4p4f7m1r9d3t6v8w2x5y7zc"
+	eventID := "01k4p4f7m1r9d3t6v8w2x5y7zd"
+	protectedRunID := "01k4p4f7m1r9d3t6v8w2x5y7ze"
+	plan := &MaintenancePlan{
+		Kind: "forget", ProtectedRunIDs: []string{protectedRunID, protectedRunID}, ForgetPlanned: true,
+	}
+	result := &CommandResult{
+		Generation: 1, RunID: runID, JobID: jobID, RunKind: "forget", Status: "complete", ResultCode: "success",
+		StartedAt: "2026-09-10T04:10:00.000000Z", FinishedAt: "2026-09-10T04:12:00.000000Z",
+		SnapshotIDs: []string{}, MaintenancePlan: plan,
+	}
+	journal := newCommandJournal()
+	journal.Commands[commandID] = &JournalCommand{
+		Command: AgentCommand{
+			ID: commandID, Generation: 1, Kind: "run_maintenance",
+			Payload: CommandPayload{JobID: jobID, RequiredConfigRevision: 3, Maintenance: "forget"},
+		},
+		RunID: runID, ConfigRevision: 3, RunKind: "forget", Trigger: "manual",
+		State: "finished", Sequence: 1, MaintenancePlan: plan, Result: result,
+		Events: []AgentEvent{{
+			ID: eventID, RunID: runID, JobID: jobID, RunKind: "forget", ConfigRevision: 3,
+			Trigger: "manual", Sequence: 1, OccurredAt: result.FinishedAt, Kind: "run_finished",
+			Payload: terminalEventPayload(*result),
+		}},
+	}
+	if err := store.SaveCommandJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := store.LoadCommandJournal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := loaded.Commands[commandID]
+	if !reflect.DeepEqual(command.MaintenancePlan.ProtectedRunIDs, []string{protectedRunID}) ||
+		!reflect.DeepEqual(command.Result.MaintenancePlan.ProtectedRunIDs, []string{protectedRunID}) {
+		t.Fatalf("durable maintenance plans were not repaired: %+v", command)
+	}
+	if err := store.SaveCommandJournal(loaded); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded, err := store.LoadCommandJournal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventPlan := reloaded.Commands[commandID].Events[0].Payload["maintenance_plan"].(map[string]any)
+	if !reflect.DeepEqual(eventPlan["protected_run_ids"], []string{protectedRunID}) {
+		t.Fatalf("durable terminal event was not repaired: %+v", eventPlan)
 	}
 }
 
