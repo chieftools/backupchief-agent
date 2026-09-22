@@ -440,6 +440,12 @@ func TestRequestBoundaries(t *testing.T) {
 		t.Fatalf("empty host should use Restic's default: %v", args)
 	}
 
+	request.Root = "/srv/synthetic-sites/"
+	args, _, err = request.arguments("password", "new-password", "cache", true)
+	if err != nil || args[len(args)-1] != "/srv/synthetic-sites" {
+		t.Fatalf("normalized root fallback: %v %v", args, err)
+	}
+
 	request.Host = "synthetic-host.example.test"
 	args, _, err = request.arguments("password", "new-password", "cache", true)
 	if err != nil || !slices.Contains(args, "--host") || !slices.Contains(args, request.Host) {

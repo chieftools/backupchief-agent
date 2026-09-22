@@ -179,7 +179,7 @@ func (r Request) argumentsPrepared(passwordFile, newPasswordFile, cache string, 
 
 		targets := r.Paths
 		if len(targets) == 0 {
-			targets = []string{r.Root}
+			targets = []string{filepath.Clean(r.Root)}
 		}
 		if len(targets) > 100 {
 			return nil, nil, errors.New("too many backup paths")
