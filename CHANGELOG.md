@@ -4,6 +4,13 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.15.2]
+
+### Fixed
+
+- Repaired queued retention reports containing duplicate protected run identifiers during agent upgrades.
+- Prevented retention plans from duplicating the latest recovery point when it is already protected.
+
 ## [0.15.1]
 
 ### Fixed
@@ -241,7 +248,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.15.1...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.15.2...HEAD
+[0.15.2]: https://github.com/chieftools/backupchief-agent/compare/v0.15.1...v0.15.2
 [0.15.1]: https://github.com/chieftools/backupchief-agent/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/chieftools/backupchief-agent/compare/v0.14.1...v0.15.0
 [0.14.1]: https://github.com/chieftools/backupchief-agent/compare/v0.14.0...v0.14.1
