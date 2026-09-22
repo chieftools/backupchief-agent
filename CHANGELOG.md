@@ -4,6 +4,12 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.15.1]
+
+### Fixed
+
+- Normalized file backup roots with a trailing directory separator before using them as the default backup target.
+
 ## [0.15.0]
 
 ### Added
@@ -235,7 +241,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.15.1...HEAD
+[0.15.1]: https://github.com/chieftools/backupchief-agent/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/chieftools/backupchief-agent/compare/v0.14.1...v0.15.0
 [0.14.1]: https://github.com/chieftools/backupchief-agent/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/chieftools/backupchief-agent/compare/v0.13.0...v0.14.0
