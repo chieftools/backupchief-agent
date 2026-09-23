@@ -199,25 +199,25 @@ func Run(ctx context.Context, options RunOptions) error {
 
 	errorsChannel := make(chan error, 8)
 	go func() {
-		errorsChannel <- runTriggeredAgentLoop(runContext, options.HeartbeatEvery, 0.10, options.Jitter, runtime.heartbeatWake, runtime.sendHeartbeat)
+		errorsChannel <- runTriggeredAgentLoop(runContext, "heartbeat", options.HeartbeatEvery, 0.10, options.Jitter, runtime.heartbeatWake, runtime.sendHeartbeat)
 	}()
 	go func() {
-		errorsChannel <- runTriggeredAgentLoop(runContext, options.ConfigEvery, 0.10, options.Jitter, runtime.configWake, runtime.refreshConfig)
+		errorsChannel <- runTriggeredAgentLoop(runContext, "config", options.ConfigEvery, 0.10, options.Jitter, runtime.configWake, runtime.refreshConfig)
 	}()
 	go func() {
 		errorsChannel <- runAgentLoop(runContext, time.Second, 0, options.Jitter, runtime.reloadLocalConfig)
 	}()
 	go func() {
-		errorsChannel <- runTriggeredAgentLoop(runContext, options.CommandEvery, 0.20, options.Jitter, runtime.commandWake, runtime.processCommands)
+		errorsChannel <- runTriggeredAgentLoop(runContext, "command poll", options.CommandEvery, 0.20, options.Jitter, runtime.commandWake, runtime.processCommands)
 	}()
 	go func() {
 		errorsChannel <- runAgentLoop(runContext, options.ScheduleEvery, 0, options.Jitter, runtime.scheduleBackups)
 	}()
 	go func() {
-		errorsChannel <- runTriggeredAgentLoop(runContext, options.DispatchEvery, 0.20, options.Jitter, runtime.dispatchWake, runtime.dispatchCommands)
+		errorsChannel <- runTriggeredAgentLoop(runContext, "command dispatch", options.DispatchEvery, 0.20, options.Jitter, runtime.dispatchWake, runtime.dispatchCommands)
 	}()
 	go func() {
-		errorsChannel <- runTriggeredAgentLoop(runContext, options.ReporterEvery, 0.20, options.Jitter, runtime.reportWake, runtime.reportJournal)
+		errorsChannel <- runTriggeredAgentLoop(runContext, "journal report", options.ReporterEvery, 0.20, options.Jitter, runtime.reportWake, runtime.reportJournal)
 	}()
 	go func() {
 		errorsChannel <- runAgentLoop(runContext, options.ReporterEvery, 0.20, options.Jitter, runtime.reportRetiredJournal)
@@ -611,10 +611,10 @@ func notifyLoop(wake chan<- struct{}) {
 }
 
 func runAgentLoop(ctx context.Context, normalInterval time.Duration, jitterFraction float64, jitter func(time.Duration) time.Duration, action func(context.Context) error) error {
-	return runTriggeredAgentLoop(ctx, normalInterval, jitterFraction, jitter, nil, action)
+	return runTriggeredAgentLoop(ctx, "agent action", normalInterval, jitterFraction, jitter, nil, action)
 }
 
-func runTriggeredAgentLoop(ctx context.Context, normalInterval time.Duration, jitterFraction float64, jitter func(time.Duration) time.Duration, wake <-chan struct{}, action func(context.Context) error) error {
+func runTriggeredAgentLoop(ctx context.Context, operation string, normalInterval time.Duration, jitterFraction float64, jitter func(time.Duration) time.Duration, wake <-chan struct{}, action func(context.Context) error) error {
 	backoff := 2 * time.Second
 
 	for {
@@ -634,6 +634,11 @@ func runTriggeredAgentLoop(ctx context.Context, normalInterval time.Duration, ji
 			backoff *= 2
 			if backoff > 5*time.Minute {
 				backoff = 5 * time.Minute
+			}
+			if errors.As(err, &apiError) {
+				log.Printf("backupchief: %s failed: API status=%d code=%s; retrying in %s", operation, apiError.Status, apiError.Code, wait)
+			} else {
+				log.Printf("backupchief: %s failed: %v; retrying in %s", operation, err, wait)
 			}
 		} else {
 			backoff = 2 * time.Second

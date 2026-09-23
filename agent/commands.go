@@ -48,11 +48,9 @@ func (daemon *daemon) dispatchCommands(ctx context.Context) error {
 	if paused {
 		return nil
 	}
-	if err := daemon.advanceCommands(ctx); err != nil {
-		return daemon.handleRequestError(err)
-	}
+	err := daemon.advanceCommands(ctx)
 	daemon.resumeReplications(ctx)
-	return nil
+	return daemon.handleRequestError(err)
 }
 
 func (daemon *daemon) reportJournal(ctx context.Context) error {
@@ -136,138 +134,163 @@ func (daemon *daemon) advanceCommands(ctx context.Context) error {
 	daemon.mu.Unlock()
 	sort.Strings(ids)
 
+	var dispatchErrors []error
 	for _, id := range ids {
-		daemon.mu.Lock()
-		journaled := daemon.journal.Commands[id]
-		if journaled == nil {
-			daemon.mu.Unlock()
-			continue
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		acknowledged := journaled.Acknowledged
-		command := journaled.Command
-		runID := journaled.RunID
-		state := journaled.State
-		receivedAt := journaled.ReceivedAt
+		if err := daemon.advanceCommand(ctx, id); err != nil {
+			dispatchErrors = append(dispatchErrors, err)
+		}
+	}
+	return errors.Join(dispatchErrors...)
+}
+
+func (daemon *daemon) advanceCommand(ctx context.Context, id string) (dispatchErr error) {
+	daemon.mu.Lock()
+	journaled := daemon.journal.Commands[id]
+	if journaled == nil {
 		daemon.mu.Unlock()
-
-		if !acknowledged {
-			discarded, err := daemon.discardExpiredUnacknowledgedCommand(id)
-			if err != nil {
-				return err
-			}
-			if discarded {
-				continue
-			}
-
-			err = daemon.client.AcknowledgeCommand(ctx, command.ID, CommandAcknowledgement{
-				Generation: command.Generation,
-				RunID:      runID,
-				ReceivedAt: receivedAt,
-			})
-			if err != nil {
-				return err
-			}
-			daemon.mu.Lock()
-			if current := daemon.journal.Commands[id]; current != nil {
-				current.Acknowledged = true
-				err = daemon.store.SaveCommandJournal(daemon.journal)
-			}
-			daemon.mu.Unlock()
-			if err != nil {
-				return err
-			}
-		}
-
-		if command.Kind == "cancel_run" {
-			if err := daemon.cancelRun(runID); err != nil {
-				return err
-			}
-			daemon.mu.Lock()
-			delete(daemon.journal.Commands, id)
-			err := daemon.store.SaveCommandJournal(daemon.journal)
-			daemon.mu.Unlock()
-			if err != nil {
-				return err
-			}
-			continue
-		}
-		if command.Kind == "update_agent" {
-			if state == "received" {
-				if err := daemon.startAgentUpdate(id); err != nil {
-					return err
-				}
-			}
-			continue
-		}
-		daemon.mu.Lock()
-		draining := daemon.state.AgentUpdate != nil
-		daemon.mu.Unlock()
-		if draining {
-			continue
-		}
-		if command.Kind == "inspect_source" && state == "received" {
-			result := inspectSource(ctx, daemon.bootstrap.Generation, runID, daemon.store.stateDirectory(), command.Payload)
-			if result.Status == "failed" {
-				logInspectionFailure(runID, result.Failure)
-			}
-			daemon.mu.Lock()
-			if current := daemon.journal.Commands[id]; current != nil {
-				current.State = "finished"
-				current.Result = &result
-				if err := daemon.store.SaveCommandJournal(daemon.journal); err != nil {
-					daemon.mu.Unlock()
-					return err
-				}
-			}
-			daemon.mu.Unlock()
-			continue
-		}
-		if (!contains([]string{"run_backup", "run_maintenance", "sync_replica"}, command.Kind) && !strings.HasPrefix(command.Kind, "scheduled_")) || state != "received" {
-			continue
-		}
-		if journaled.WaitForBackup {
-			continue
-		}
-
-		expiresAt, _ := time.Parse("2006-01-02T15:04:05.000000Z", command.ExpiresAt)
-		if (command.Kind == "run_backup" || command.Kind == "run_maintenance" || command.Kind == "sync_replica") && !daemon.now().Before(expiresAt) {
-			daemon.mu.Lock()
-			configUnavailable := daemon.metadata.Revision < command.Payload.RequiredConfigRevision
-			daemon.mu.Unlock()
-			var finishErr error
-			if configUnavailable {
-				finishErr = daemon.finishWithoutExecution(id, "skipped", "config_unavailable", "The required configuration was unavailable before expiry.")
+		return nil
+	}
+	acknowledged := journaled.Acknowledged
+	command := journaled.Command
+	runID := journaled.RunID
+	state := journaled.State
+	receivedAt := journaled.ReceivedAt
+	daemon.mu.Unlock()
+	defer func() {
+		if dispatchErr != nil {
+			var apiError *APIError
+			if errors.As(dispatchErr, &apiError) {
+				log.Printf("backupchief: command dispatch failed for %s (%s): API status=%d code=%s", id, command.Kind, apiError.Status, apiError.Code)
 			} else {
-				finishErr = daemon.finishWithoutExecution(id, "skipped", "expired", "The command expired before execution.")
+				log.Printf("backupchief: command dispatch failed for %s (%s): %v", id, command.Kind, dispatchErr)
 			}
-			if finishErr != nil {
-				return finishErr
-			}
-			continue
+			dispatchErr = fmt.Errorf("command %s (%s): %w", id, command.Kind, dispatchErr)
 		}
+	}()
 
-		job, ready, err := daemon.jobForExecution(ctx, journaled)
+	if !acknowledged {
+		discarded, err := daemon.discardExpiredUnacknowledgedCommand(id)
 		if err != nil {
 			return err
 		}
-		if !ready {
-			continue
+		if discarded {
+			return nil
 		}
-		if job == nil || !job.Enabled {
-			if err := daemon.finishWithoutExecution(id, "skipped", "config_unavailable", "The required job configuration is unavailable."); err != nil {
-				return err
-			}
-			continue
-		}
-		if command.Kind == "sync_replica" {
-			if err := daemon.startReplicaSync(ctx, id, *job); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := daemon.startOperation(ctx, id, *job); err != nil {
+
+		err = daemon.client.AcknowledgeCommand(ctx, command.ID, CommandAcknowledgement{
+			Generation: command.Generation,
+			RunID:      runID,
+			ReceivedAt: receivedAt,
+		})
+		if err != nil {
 			return err
 		}
+		daemon.mu.Lock()
+		if current := daemon.journal.Commands[id]; current != nil {
+			current.Acknowledged = true
+			err = daemon.store.SaveCommandJournal(daemon.journal)
+		}
+		daemon.mu.Unlock()
+		if err != nil {
+			return err
+		}
+	}
+
+	if command.Kind == "cancel_run" {
+		if err := daemon.cancelRun(runID); err != nil {
+			return err
+		}
+		daemon.mu.Lock()
+		delete(daemon.journal.Commands, id)
+		err := daemon.store.SaveCommandJournal(daemon.journal)
+		daemon.mu.Unlock()
+		if err != nil {
+			return err
+		}
+		return nil
+	}
+	if command.Kind == "update_agent" {
+		if state == "received" {
+			if err := daemon.startAgentUpdate(id); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	daemon.mu.Lock()
+	draining := daemon.state.AgentUpdate != nil
+	daemon.mu.Unlock()
+	if draining {
+		return nil
+	}
+	if command.Kind == "inspect_source" && state == "received" {
+		result := inspectSource(ctx, daemon.bootstrap.Generation, runID, daemon.store.stateDirectory(), command.Payload)
+		if result.Status == "failed" {
+			logInspectionFailure(runID, result.Failure)
+		}
+		daemon.mu.Lock()
+		if current := daemon.journal.Commands[id]; current != nil {
+			current.State = "finished"
+			current.Result = &result
+			if err := daemon.store.SaveCommandJournal(daemon.journal); err != nil {
+				daemon.mu.Unlock()
+				return err
+			}
+		}
+		daemon.mu.Unlock()
+		return nil
+	}
+	if (!contains([]string{"run_backup", "run_maintenance", "sync_replica"}, command.Kind) && !strings.HasPrefix(command.Kind, "scheduled_")) || state != "received" {
+		return nil
+	}
+	if journaled.WaitForBackup {
+		return nil
+	}
+
+	expiresAt, _ := time.Parse("2006-01-02T15:04:05.000000Z", command.ExpiresAt)
+	if (command.Kind == "run_backup" || command.Kind == "run_maintenance" || command.Kind == "sync_replica") && !daemon.now().Before(expiresAt) {
+		daemon.mu.Lock()
+		configUnavailable := daemon.metadata.Revision < command.Payload.RequiredConfigRevision
+		daemon.mu.Unlock()
+		var finishErr error
+		if configUnavailable {
+			finishErr = daemon.finishWithoutExecution(id, "skipped", "config_unavailable", "The required configuration was unavailable before expiry.")
+		} else {
+			finishErr = daemon.finishWithoutExecution(id, "skipped", "expired", "The command expired before execution.")
+		}
+		if finishErr != nil {
+			return finishErr
+		}
+		return nil
+	}
+
+	job, ready, err := daemon.jobForExecution(ctx, journaled)
+	if err != nil {
+		if journaled.Trigger == "scheduled" && errors.Is(err, errInvalidJobSnapshot) {
+			return daemon.finishWithoutExecution(id, "skipped", "config_unavailable", "The saved job configuration is invalid.")
+		}
+		return err
+	}
+	if !ready {
+		return nil
+	}
+	if job == nil || !job.Enabled {
+		if err := daemon.finishWithoutExecution(id, "skipped", "config_unavailable", "The required job configuration is unavailable."); err != nil {
+			return err
+		}
+		return nil
+	}
+	if command.Kind == "sync_replica" {
+		if err := daemon.startReplicaSync(ctx, id, *job); err != nil {
+			return err
+		}
+		return nil
+	}
+	if err := daemon.startOperation(ctx, id, *job); err != nil {
+		return err
 	}
 	return nil
 }

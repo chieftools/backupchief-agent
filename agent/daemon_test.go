@@ -398,7 +398,7 @@ func TestAgentLoopRunsEarlyWhenRealtimeWakeArrives(t *testing.T) {
 	done := make(chan error, 1)
 
 	go func() {
-		done <- runTriggeredAgentLoop(ctx, time.Hour, 0, func(duration time.Duration) time.Duration { return duration }, wake, func(context.Context) error {
+		done <- runTriggeredAgentLoop(ctx, "test action", time.Hour, 0, func(duration time.Duration) time.Duration { return duration }, wake, func(context.Context) error {
 			calls <- struct{}{}
 			return nil
 		})
