@@ -4,6 +4,16 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.16.0]
+
+### Added
+
+- Validated every selected directory during file-source inspection for jobs that back up multiple paths together.
+
+### Changed
+
+- Updated the agent protocol to 1.15 for multi-path file-source inspection.
+
 ## [0.15.3]
 
 ### Fixed
@@ -256,7 +266,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.15.3...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/chieftools/backupchief-agent/compare/v0.15.3...v0.16.0
 [0.15.3]: https://github.com/chieftools/backupchief-agent/compare/v0.15.2...v0.15.3
 [0.15.2]: https://github.com/chieftools/backupchief-agent/compare/v0.15.1...v0.15.2
 [0.15.1]: https://github.com/chieftools/backupchief-agent/compare/v0.15.0...v0.15.1
