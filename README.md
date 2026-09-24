@@ -14,7 +14,7 @@ The optional [Backup Chief control plane](https://backup.chief.app/) manages ser
 
 ### Backups
 
-- Backs up one absolute directory per job into its own Restic repository.
+- Backs up one or more absolute directories per job into its own Restic repository.
 - Runs jobs from a locally cached schedule, or on demand from the command line.
 - Keeps schedules and pending results on disk, so a control-plane outage does not stop work that is already due.
 - Supports Restic exclude patterns and single-filesystem traversal.

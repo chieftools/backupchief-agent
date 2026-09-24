@@ -393,3 +393,50 @@ if [ "$1" = "--version" ]; then
 fi
 exit 0
 `
+
+func TestFileSourceInspectionChecksEveryConfiguredDirectory(t *testing.T) {
+	root := t.TempDir()
+	legacy := inspectSource(context.Background(), 1, "01k4p4k2n8d3r6t9v1w5x7yabc", t.TempDir(), CommandPayload{
+		Type: "file", Source: map[string]any{"root": root},
+	})
+	if legacy.Status != "complete" || legacy.Summary != "The source directory is available." {
+		t.Fatalf("single directory inspection changed: %+v", legacy)
+	}
+	first := filepath.Join(root, "synthetic-first")
+	second := filepath.Join(root, "synthetic-second")
+	for _, path := range []string{first, second} {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	payload := CommandPayload{Type: "file", Source: map[string]any{
+		"root": root, "paths": []string{first, second},
+	}}
+
+	result := inspectSource(context.Background(), 1, "01k4p4k2n8d3r6t9v1w5x7yabc", t.TempDir(), payload)
+	if result.Status != "complete" || result.ResultCode != "success" {
+		t.Fatalf("inspection result: %+v", result)
+	}
+
+	if err := os.Remove(second); err != nil {
+		t.Fatal(err)
+	}
+	result = inspectSource(context.Background(), 1, "01k4p4k2n8d3r6t9v1w5x7yabc", t.TempDir(), payload)
+	assertInspectionFailure(t, result, "invalid_root", "source_access")
+	if !strings.Contains(result.Failure.Detail, second) {
+		t.Fatalf("failure does not identify missing directory: %q", result.Failure.Detail)
+	}
+
+	if err := os.Symlink(first, second); err != nil {
+		t.Fatal(err)
+	}
+	result = inspectSource(context.Background(), 1, "01k4p4k2n8d3r6t9v1w5x7yabc", t.TempDir(), payload)
+	assertInspectionFailure(t, result, "invalid_root", "source_access")
+	if !strings.Contains(result.Failure.Detail, second) {
+		t.Fatalf("failure does not identify symbolic link: %q", result.Failure.Detail)
+	}
+
+	payload.Source["paths"] = []string{first, filepath.Join(root, "..", "synthetic-outside")}
+	result = inspectSource(context.Background(), 1, "01k4p4k2n8d3r6t9v1w5x7yabc", t.TempDir(), payload)
+	assertInspectionFailure(t, result, "execution_failed", "source_validation")
+}

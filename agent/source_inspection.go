@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"unicode"
 )
@@ -46,9 +47,37 @@ func inspectSource(ctx context.Context, generation uint64, runID, stateDirectory
 			return result
 		}
 
+		if len(source.Paths) > 100 {
+			result.Failure = inspectionFailure("source_validation", "The source has more than 100 directories.")
+			return result
+		}
+		seenPaths := map[string]bool{}
+		for _, path := range source.Paths {
+			relative, pathErr := filepath.Rel(source.Root, path)
+			if pathErr != nil || !filepath.IsAbs(path) || filepath.Clean(path) != path || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || seenPaths[path] {
+				result.Failure = inspectionFailure("source_validation", fmt.Sprintf("invalid source directory %q", path))
+				return result
+			}
+			seenPaths[path] = true
+			info, pathErr := os.Lstat(path)
+			if pathErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+				result.ResultCode = "invalid_root"
+				result.Summary = "A configured source directory is missing, inaccessible, or a symbolic link."
+				detail := fmt.Sprintf("inspect source directory %q: it is not a directory or is a symlink", path)
+				if pathErr != nil {
+					detail = fmt.Sprintf("inspect source directory %q: %v", path, pathErr)
+				}
+				result.Failure = inspectionFailure("source_access", detail)
+				return result
+			}
+		}
+
 		result.Status = "complete"
 		result.ResultCode = "success"
 		result.Summary = "The source directory is available."
+		if len(source.Paths) > 0 {
+			result.Summary = "The source directories are available."
+		}
 		result.Failure = nil
 		return result
 	}
