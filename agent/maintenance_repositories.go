@@ -33,6 +33,9 @@ func executeMaintenanceRepositories(
 		capturePlan, now, retryDelays,
 	)
 	primary.RepositoryBytes = measureRepositoryBytes(ctx, executor, job)
+	if observed, ok := executor.(*activityExecutor); ok {
+		observed.activity.update("", map[string]uint64{"repositories_completed": 1, "repositories_total": uint64(1 + len(job.Replicas))})
+	}
 	primary.MaintenancePlan = currentPlan
 	primary.RepositoryResults = []RepositoryResult{repositoryResult(job.Repository, primary, primaryAttempts)}
 	primary.Diagnostic = ""
@@ -45,7 +48,7 @@ func executeMaintenanceRepositories(
 
 	allComplete := primary.Status == "complete"
 	pruneCompleted := primary.PruneCompleted
-	for _, repository := range job.Replicas {
+	for repositoryIndex, repository := range job.Replicas {
 		childJob := job
 		childJob.Repository = repository
 		childJob.Replicas = nil
@@ -63,6 +66,9 @@ func executeMaintenanceRepositories(
 			func(MaintenancePlan) error { return nil }, now, retryDelays,
 		)
 		child.RepositoryBytes = measureRepositoryBytes(ctx, executor, childJob)
+		if observed, ok := executor.(*activityExecutor); ok {
+			observed.activity.update("", map[string]uint64{"repositories_completed": uint64(repositoryIndex + 2)})
+		}
 		primary.RepositoryResults = append(primary.RepositoryResults, repositoryResult(repository, child, childAttempts))
 		appendBoundedMaintenanceLog(&log, childLog, &truncated, &dropped)
 		truncated = truncated || childTruncated
@@ -112,6 +118,9 @@ func executeRepositoryMaintenance(
 			break
 		}
 
+		if observed, ok := executor.(*activityExecutor); ok {
+			observed.activity.update("retry_waiting", nil)
+		}
 		timer := time.NewTimer(retryDelays[attempts-1])
 		select {
 		case <-ctx.Done():

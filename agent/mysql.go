@@ -65,6 +65,10 @@ func executeMySQLBackup(ctx context.Context, executor BackupExecutor, stateDirec
 		return failedMySQLResult(result, "database_selection_invalid", "The MySQL selection must contain between 1 and 1000 databases.", now)
 	}
 
+	if observed, ok := executor.(*activityExecutor); ok {
+		observed.activity.update("backing_up", map[string]uint64{"databases_completed": 0, "databases_total": uint64(len(databases))})
+	}
+
 	var retained bytes.Buffer
 	var total RunStatistics = RunStatistics{"files_new": uint64(0), "files_changed": uint64(0), "files_unmodified": uint64(0), "directories_new": uint64(0), "directories_changed": uint64(0), "directories_unmodified": uint64(0), "source_files": uint64(0), "source_bytes": uint64(0), "stored_bytes": uint64(0)}
 	failed := 0

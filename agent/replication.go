@@ -84,8 +84,10 @@ func (daemon *daemon) replicateJob(ctx context.Context, job Job) {
 		daemon.repositories[target.ID] = true
 		daemon.mu.Unlock()
 
+		activity := daemon.beginActivity("replication", commands, job, target.Key)
+		executor := &activityExecutor{executor: daemon.executor, activity: activity}
 		startedAt := daemon.now()
-		copyResult := daemon.executor.Run(ctx, restic.Request{
+		copyResult := executor.Run(ctx, restic.Request{
 			Version: 1, Operation: "copy", Connection: replicaResticConnection(target.Connection),
 			SourceConnection: connectionPointer(replicaResticConnection(job.Repository.Connection)),
 			Password:         target.ServicePassword, SourcePassword: job.Repository.ServicePassword,
@@ -102,6 +104,7 @@ func (daemon *daemon) replicateJob(ctx context.Context, job Job) {
 		mappings := map[string]string{}
 		var repositoryBytes *uint64
 		if copyResult.ExitCode == 0 {
+			activity.update("verifying_snapshots", nil)
 			mappings, repositoryBytes, diagnostic = daemon.replicaInventory(ctx, *target)
 			for _, command := range commands {
 				for _, snapshotID := range command.Result.SnapshotIDs {
@@ -125,6 +128,7 @@ func (daemon *daemon) replicateJob(ctx context.Context, job Job) {
 		}
 
 		daemon.finishReplicationBatch(job, *target, commands, mappings, repositoryBytes, status, resultCode, diagnostic, startedAt, finishedAt)
+		activity.close()
 		if status == "failed" {
 			return
 		}

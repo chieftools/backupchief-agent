@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	ProtocolRevision          = "1.15.0"
+	ProtocolRevision          = "1.16.0"
 	ProtocolHeader            = "BackupChief-Protocol-Revision"
 	LatestProtocolHeader      = "BackupChief-Latest-Protocol-Revision"
 	DefaultEndpoint           = "https://backup.chief.app/agent/v1"

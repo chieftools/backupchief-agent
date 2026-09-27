@@ -493,12 +493,25 @@ func (daemon *daemon) startBackup(ctx context.Context, commandID string, job Job
 
 func (daemon *daemon) runBackup(ctx context.Context, commandID, runID string, job Job) {
 	defer daemon.activeWG.Done()
+
+	activity := daemon.beginActivity("run", []*JournalCommand{daemon.journalCommand(commandID)}, job, "")
+	defer activity.close()
+
+	executor := &activityExecutor{executor: daemon.executor, activity: activity}
+	activity.update("discovering_databases", nil)
+	if job.Type == "file" {
+		activity.update("preparing", nil)
+	}
+
 	result, log, truncated, dropped := executeBackup(
-		ctx, daemon.executor, daemon.store.stateDirectory(), daemon.bootstrap.ServerID, daemon.bootstrap.Generation,
-		daemon.journalCommand(commandID), job, daemon.now, daemon.databaseBackupProgress(commandID),
+		ctx, executor, daemon.store.stateDirectory(), daemon.bootstrap.ServerID, daemon.bootstrap.Generation,
+		daemon.journalCommand(commandID), job, daemon.now, func(artifact BackupArtifact, completed, total int) {
+			activity.update("backing_up", map[string]uint64{"databases_completed": uint64(completed), "databases_total": uint64(total)})
+			daemon.databaseBackupProgress(commandID)(artifact, completed, total)
+		},
 	)
 	if ctx.Err() == nil {
-		result.RepositoryBytes = measureRepositoryBytes(ctx, daemon.executor, job)
+		result.RepositoryBytes = measureRepositoryBytes(ctx, executor, job)
 	}
 	daemon.finishOperation(ctx, commandID, runID, job, result, log, truncated, dropped)
 }
@@ -554,6 +567,11 @@ func (daemon *daemon) databaseBackupProgress(commandID string) DatabaseBackupPro
 
 func (daemon *daemon) runMaintenance(ctx context.Context, commandID, runID string, job Job, plan *MaintenancePlan) {
 	defer daemon.activeWG.Done()
+
+	activity := daemon.beginActivity("run", []*JournalCommand{daemon.journalCommand(commandID)}, job, "")
+	defer activity.close()
+
+	executor := &activityExecutor{executor: daemon.executor, activity: activity}
 	persistPlan := func(updated MaintenancePlan) error {
 		daemon.mu.Lock()
 		defer daemon.mu.Unlock()
@@ -565,7 +583,7 @@ func (daemon *daemon) runMaintenance(ctx context.Context, commandID, runID strin
 		return daemon.store.SaveCommandJournal(daemon.journal)
 	}
 	result, log, truncated, dropped := executeMaintenanceRepositories(
-		ctx, daemon.executor, daemon.bootstrap.Generation, daemon.journalCommand(commandID), job, plan,
+		ctx, executor, daemon.bootstrap.Generation, daemon.journalCommand(commandID), job, plan,
 		persistPlan, daemon.now, daemon.maintenanceRetries,
 	)
 	daemon.finishOperation(ctx, commandID, runID, job, result, log, truncated, dropped)

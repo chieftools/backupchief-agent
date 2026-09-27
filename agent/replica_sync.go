@@ -60,12 +60,19 @@ func (daemon *daemon) startReplicaSync(ctx context.Context, commandID string, jo
 
 func (daemon *daemon) runReplicaSync(ctx context.Context, commandID string, job Job, target JobRepository) {
 	defer daemon.activeWG.Done()
+
+	activity := daemon.beginActivity("sync", []*JournalCommand{daemon.journalCommand(commandID)}, job, target.Key)
+	defer activity.close()
+
+	executor := &activityExecutor{executor: daemon.executor, activity: activity}
 	startedAt := daemon.now()
 	delays := append([]time.Duration{0}, daemon.replicaSyncRetries...)
 	var copyResult restic.Result
 
 	for attempt, delay := range delays {
 		if delay > 0 {
+			activity.update("retry_waiting", nil)
+
 			timer := time.NewTimer(delay)
 			select {
 			case <-ctx.Done():
@@ -79,7 +86,7 @@ func (daemon *daemon) runReplicaSync(ctx context.Context, commandID string, job 
 			}
 		}
 
-		copyResult = daemon.executor.Run(ctx, restic.Request{
+		copyResult = executor.Run(ctx, restic.Request{
 			Version: 1, Operation: "copy", Connection: replicaResticConnection(target.Connection),
 			SourceConnection: connectionPointer(replicaResticConnection(job.Repository.Connection)),
 			Password:         target.ServicePassword, SourcePassword: job.Repository.ServicePassword,
@@ -96,6 +103,7 @@ func (daemon *daemon) runReplicaSync(ctx context.Context, commandID string, job 
 	diagnostic := ""
 	var repositoryBytes *uint64
 	if copyResult.ExitCode == 0 {
+		activity.update("verifying_snapshots", nil)
 		_, repositoryBytes, diagnostic = daemon.replicaInventory(ctx, target)
 	} else {
 		status, resultCode = "failed", "copy_failed"

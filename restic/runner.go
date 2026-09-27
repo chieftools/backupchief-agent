@@ -34,6 +34,7 @@ func (runner Runner) Run(ctx context.Context, request Request) Result {
 		return result
 	}
 
+	reportProgress(ctx, Progress{Stage: "waiting_for_lock"})
 	shared := request.Operation == "backup" || request.Operation == "backup_stdin"
 	var repositoryLock *os.File
 	var err error
@@ -65,6 +66,7 @@ func (runner Runner) Run(ctx context.Context, request Request) Result {
 		}()
 	}
 
+	reportProgress(ctx, Progress{Stage: "preparing"})
 	work, cleanup, err := workspace(ctx, runner.State)
 	if err != nil {
 		result.Diagnostic = "cannot prepare private execution workspace"
@@ -279,9 +281,13 @@ func runProcess(ctx context.Context, command *exec.Cmd, request Request) Result 
 		stderr.tailLimit = 64 << 10
 	}
 	command.Stdout = stdout
+	if (request.Operation == "backup" || request.Operation == "backup_stdin") && ctx.Value(progressKey{}) != nil {
+		command.Stdout = io.MultiWriter(stdout, &progressOutput{ctx: ctx})
+	}
 	command.Stderr = stderr
 	command.WaitDelay = 10 * time.Second
 
+	reportProgress(ctx, Progress{Stage: "executing"})
 	if err := command.Start(); err != nil {
 		result.Diagnostic = "cannot start verified restic executable"
 		return result

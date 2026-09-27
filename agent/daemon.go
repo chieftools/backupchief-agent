@@ -43,13 +43,14 @@ type daemon struct {
 	version   string
 	now       func() time.Time
 
-	mu       sync.Mutex
-	metadata ConfigMetadata
-	config   Config
-	etag     string
-	state    RuntimeState
-	journal  CommandJournal
-	executor BackupExecutor
+	mu         sync.Mutex
+	metadata   ConfigMetadata
+	config     Config
+	etag       string
+	state      RuntimeState
+	journal    CommandJournal
+	executor   BackupExecutor
+	activities map[string]ActivitySnapshot
 
 	realtimeMu     sync.Mutex
 	realtimeClient *pusher.Client
@@ -197,7 +198,7 @@ func Run(ctx context.Context, options RunOptions) error {
 	runContext, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	errorsChannel := make(chan error, 8)
+	errorsChannel := make(chan error, 9)
 	go func() {
 		errorsChannel <- runTriggeredAgentLoop(runContext, "heartbeat", options.HeartbeatEvery, 0.10, options.Jitter, runtime.heartbeatWake, runtime.sendHeartbeat)
 	}()
@@ -223,8 +224,12 @@ func Run(ctx context.Context, options RunOptions) error {
 		errorsChannel <- runAgentLoop(runContext, options.ReporterEvery, 0.20, options.Jitter, runtime.reportRetiredJournal)
 	}()
 
+	go func() {
+		errorsChannel <- runTriggeredAgentLoop(runContext, "activity", 10*time.Second, 0.10, options.Jitter, nil, runtime.reportActivity)
+	}()
+
 	var runErr error
-	for completed := 0; completed < 8; completed++ {
+	for completed := 0; completed < 9; completed++ {
 		if err := <-errorsChannel; err != nil && runErr == nil {
 			runErr = err
 			cancel()
