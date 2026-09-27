@@ -4,6 +4,21 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.17.0]
+
+### Added
+
+- Reported lightweight progress roughly every ten seconds during backups, maintenance, replication, and replica synchronization so the control panel can show the current stage before completion.
+- Reported processed bytes and files, database counts, and repository counts where available, without estimating completion time.
+
+### Changed
+
+- Updated the agent protocol to 1.16 for optional activity reports. Progress reporting stays separate from durable run events, skips older control planes, and does not interrupt tasks when reporting fails.
+
+### Fixed
+
+- Accepted replica synchronization commands during polling, preventing a queued replica sync from blocking the entire command batch.
+
 ## [0.16.0]
 
 ### Added
@@ -266,7 +281,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/chieftools/backupchief-agent/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/chieftools/backupchief-agent/compare/v0.15.3...v0.16.0
 [0.15.3]: https://github.com/chieftools/backupchief-agent/compare/v0.15.2...v0.15.3
 [0.15.2]: https://github.com/chieftools/backupchief-agent/compare/v0.15.1...v0.15.2
