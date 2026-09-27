@@ -712,6 +712,22 @@ func validateCommand(command AgentCommand, expectedGeneration uint64, protocolRe
 				seen[snapshotID] = true
 			}
 		}
+	case "sync_replica":
+		if !protocolRevisionSupports(protocolRevision, "1.9.0") ||
+			!ulidPattern.MatchString(command.Payload.JobID) ||
+			!repositoryConfigKeyPattern.MatchString(command.Payload.RepositoryKey) ||
+			command.Payload.RequiredConfigRevision == 0 {
+			return fmt.Errorf("replica sync command target is invalid")
+		}
+
+		if command.Payload.RunID != "" || command.Payload.Maintenance != "" ||
+			command.Payload.SnapshotIDs != nil || command.Payload.RecoveryPointRunIDs != nil ||
+			command.Payload.MaintenancePlan != nil || command.Payload.RetryOfRunID != "" ||
+			command.Payload.Type != "" || len(command.Payload.Source) > 0 ||
+			command.Payload.SourceDigest != "" || command.Payload.TargetVersion != "" {
+			return fmt.Errorf("replica sync command payload is invalid")
+		}
+
 	case "cancel_run":
 		if !ulidPattern.MatchString(command.Payload.JobID) || !ulidPattern.MatchString(command.Payload.RunID) || command.Payload.RequiredConfigRevision != 0 || command.Payload.Maintenance != "" || command.Payload.SnapshotIDs != nil {
 			return fmt.Errorf("cancellation command payload is invalid")

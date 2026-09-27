@@ -502,3 +502,99 @@ func TestManagedBackupClientReturnsSkippedAsTerminal(t *testing.T) {
 		t.Fatalf("wait for skipped backup: %+v %v", status, err)
 	}
 }
+
+func TestPollCommandsAcceptsReplicaSyncAlongsideBackupCommands(t *testing.T) {
+	for _, revision := range []string{"1.9.0", ProtocolRevision} {
+		for _, initialSync := range []bool{true, false} {
+			name := revision + "/resync"
+			if initialSync {
+				name = revision + "/initial"
+			}
+
+			t.Run(name, func(t *testing.T) {
+				syncCommand := replicaSyncTestCommand()
+				syncCommand.Payload.InitialSync = initialSync
+
+				backupCommand := syncCommand
+				backupCommand.ID = "01k4p4h5n8d2r6t7v9w3x1yabf"
+				backupCommand.Kind = "run_backup"
+				backupCommand.Payload = CommandPayload{
+					JobID:                  syncCommand.Payload.JobID,
+					RequiredConfigRevision: 7,
+				}
+
+				server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+					if request.Method != http.MethodGet || request.URL.Path != "/commands" {
+						t.Errorf("unexpected command poll: %s %s", request.Method, request.URL.Path)
+					}
+
+					response.Header().Set(ProtocolHeader, revision)
+					_ = json.NewEncoder(response).Encode(CommandsResponse{
+						ProtocolRevision: revision,
+						Commands:         []AgentCommand{syncCommand, backupCommand},
+					})
+				}))
+				defer server.Close()
+
+				client := NewClient(server.URL, "synthetic-credential", "9.0.0-test", server.Client())
+				client.selectProtocolRevision(revision)
+
+				result, err := client.PollCommands(context.Background(), syncCommand.Generation)
+				if err != nil {
+					t.Fatalf("poll replica sync batch: %v", err)
+				}
+
+				if len(result.Commands) != 2 || result.Commands[0].Kind != "sync_replica" || result.Commands[1].Kind != "run_backup" {
+					t.Fatalf("command batch changed: %+v", result.Commands)
+				}
+
+				payload := result.Commands[0].Payload
+				if payload.RepositoryKey != syncCommand.Payload.RepositoryKey || payload.InitialSync != initialSync {
+					t.Fatalf("replica sync target changed: %+v", payload)
+				}
+			})
+		}
+	}
+}
+
+func TestReplicaSyncCommandsRejectInvalidTargetsAndIncompatibleProtocols(t *testing.T) {
+	tests := []struct {
+		name     string
+		revision string
+		mutate   func(*CommandPayload)
+	}{
+		{"older protocol", "1.8.0", func(payload *CommandPayload) {}},
+		{"missing job", "1.9.0", func(payload *CommandPayload) { payload.JobID = "" }},
+		{"missing repository", "1.9.0", func(payload *CommandPayload) { payload.RepositoryKey = "" }},
+		{"invalid repository", "1.9.0", func(payload *CommandPayload) { payload.RepositoryKey = "repository_invalid" }},
+		{"missing config revision", "1.9.0", func(payload *CommandPayload) { payload.RequiredConfigRevision = 0 }},
+		{"unrelated operation", "1.9.0", func(payload *CommandPayload) { payload.Maintenance = "prune" }},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			command := replicaSyncTestCommand()
+			test.mutate(&command.Payload)
+
+			if err := validateCommand(command, command.Generation, test.revision); err == nil {
+				t.Fatal("invalid replica sync command was accepted")
+			}
+		})
+	}
+}
+
+func replicaSyncTestCommand() AgentCommand {
+	return AgentCommand{
+		ID:         "01k4p4h5n8d2r6t7v9w3x1yabe",
+		Generation: 3,
+		Kind:       "sync_replica",
+		IssuedAt:   "2026-08-20T08:00:00.000000Z",
+		ExpiresAt:  "2026-08-21T08:00:00.000000Z",
+		Payload: CommandPayload{
+			JobID:                  "01k4p4g2m7d9r3t6v8w1x5y2zb",
+			RepositoryKey:          "repository_01k4p4g2m7d9r3t6v8w1x5y2zc",
+			RequiredConfigRevision: 7,
+			InitialSync:            true,
+		},
+	}
+}
