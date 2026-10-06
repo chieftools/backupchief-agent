@@ -4,6 +4,14 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.19.0]
+
+### Changed
+
+- Sped up snapshot exports on the control plane by restoring the selection to a local scratch directory with parallel pack downloads and zipping it from disk, instead of reading every file piece by piece from object storage. Exports fall back to streaming when no scratch directory is available or the restore fails.
+- Removed local Restic caches of repositories that have not been used for 30 days, so long-running hosts no longer keep caches for repositories they stopped touching.
+- Ran `backupchief restore` with all CPU cores and parallel pack downloads, since a person is waiting on it. Scheduled backups and maintenance keep their low-impact settings.
+
 ## [0.18.0]
 
 ### Added
@@ -292,7 +300,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/chieftools/backupchief-agent/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/chieftools/backupchief-agent/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/chieftools/backupchief-agent/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/chieftools/backupchief-agent/compare/v0.15.3...v0.16.0
