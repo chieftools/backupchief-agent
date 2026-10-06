@@ -57,7 +57,7 @@ func (r Request) dualArguments(passwordFile, sourcePasswordFile, cache string, d
 	}
 
 	lockWait := time.Duration(r.LockWaitSeconds) * time.Second
-	arguments := []string{"--password-file", passwordFile, "--cache-dir", cache, "--retry-lock", lockWait.String()}
+	arguments := []string{"--password-file", passwordFile, "--cache-dir", cache, "--cleanup-cache", "--retry-lock", lockWait.String()}
 	environment := []string{
 		"PATH=/usr/bin:/bin",
 		"HOME=" + cache,
@@ -360,6 +360,8 @@ func (r Request) baseArgumentsPrepared(passwordFile, cache string, prepared repo
 		passwordFile,
 		"--cache-dir",
 		cache,
+		// Remove caches of repositories this host has not used for 30 days.
+		"--cleanup-cache",
 		"--retry-lock",
 		lockWait.String(),
 	}
