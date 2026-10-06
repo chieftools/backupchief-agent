@@ -66,6 +66,7 @@ func newRestoreCommand(configPath *string) *cobra.Command {
 
 func restoreRequest(job agent.Job, repository agent.JobRepository, snapshot, target, encodedPath string) (restic.Request, error) {
 	request := agent.ResticRequestForRepository(job, repository, "restore", "")
+	request.Interactive = true
 	request.Snapshot = snapshot
 	request.Target = target
 	request.Path = "/"

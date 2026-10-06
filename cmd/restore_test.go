@@ -17,7 +17,7 @@ func TestRestoreRequestUsesTheConfiguredSnapshotRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if request.Operation != "restore" || request.Path != "/srv/synthetic files" || request.Snapshot != "synthetic-snapshot" || request.Target != target {
+	if request.Operation != "restore" || request.Path != "/srv/synthetic files" || request.Snapshot != "synthetic-snapshot" || request.Target != target || !request.Interactive {
 		t.Fatalf("file restore request: %+v", request)
 	}
 

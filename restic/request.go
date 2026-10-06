@@ -4,6 +4,7 @@ import (
 	"errors"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -13,6 +14,9 @@ import (
 )
 
 const protocolVersion = 1
+
+// interactiveReadConcurrency is how many packs a hand-started restore downloads at once.
+const interactiveReadConcurrency = 8
 
 var snapshotPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
@@ -47,6 +51,10 @@ type Request struct {
 	RecoverStaleLocks bool        `json:"recover_stale_locks,omitempty"`
 	MaxNodes          int         `json:"max_nodes,omitempty"`
 	MaxBytes          int64       `json:"max_bytes,omitempty"`
+	// Interactive marks an operation a person started by hand and is waiting on, such as a manual
+	// restore. It may use the whole machine instead of the low-impact background settings. It is
+	// never read from helper requests, so only local commands can set it.
+	Interactive bool `json:"-"`
 }
 
 func (r Request) dualArguments(passwordFile, sourcePasswordFile, cache string, destination, source repository.PreparedRepository) ([]string, []string, error) {
@@ -307,6 +315,11 @@ func (r Request) argumentsPrepared(passwordFile, newPasswordFile, cache string, 
 		arguments = append(arguments, "restore", snapshot, "--target", r.Target, "--verify", "--overwrite", "never")
 	default:
 		return nil, nil, errors.New("unsupported restic operation")
+	}
+
+	if r.Interactive {
+		// Later entries win, overriding the low-impact defaults for this command only.
+		environment = append(environment, "GOMAXPROCS="+strconv.Itoa(runtime.NumCPU()), "RESTIC_READ_CONCURRENCY="+strconv.Itoa(interactiveReadConcurrency))
 	}
 
 	return arguments, environment, nil
