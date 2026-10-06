@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -27,6 +29,9 @@ type ExportRequest struct {
 	ArchiveEntryName string     `json:"archive_entry_name"`
 	TimeoutSeconds   int        `json:"timeout_seconds"`
 	LockWaitSeconds  int        `json:"lock_wait_seconds"`
+	// Scratch is an optional local directory where the control plane lets the selection be
+	// restored before zipping, which reads the repository pack by pack instead of blob by blob.
+	Scratch string `json:"scratch,omitempty"`
 }
 
 type ExportInspection struct {
@@ -35,7 +40,7 @@ type ExportInspection struct {
 }
 
 func (runner Runner) InspectExport(ctx context.Context, request ExportRequest) (ExportInspection, error) {
-	command, cleanup, err := runner.exportCommand(ctx, request, "inspect")
+	command, cleanup, err := runner.exportCommand(ctx, request, "inspect", "")
 	if err != nil {
 		return ExportInspection{}, err
 	}
@@ -95,7 +100,17 @@ func (runner Runner) InspectExport(ctx context.Context, request ExportRequest) (
 }
 
 func (runner Runner) StreamExport(ctx context.Context, request ExportRequest, output io.Writer) error {
-	command, cleanup, err := runner.exportCommand(ctx, request, "archive")
+	if request.Scratch != "" {
+		restored, cleanup, err := runner.restoreExport(ctx, request)
+		if err == nil {
+			defer cleanup()
+
+			return writeRestoredArchive(restored, request, output)
+		}
+		// Nothing was written yet, so a failed restore quietly falls back to streaming the dump.
+	}
+
+	command, cleanup, err := runner.exportCommand(ctx, request, "archive", "")
 	if err != nil {
 		return err
 	}
@@ -130,8 +145,8 @@ func (runner Runner) StreamExport(ctx context.Context, request ExportRequest, ou
 	return nil
 }
 
-func (runner Runner) exportCommand(ctx context.Context, request ExportRequest, mode string) (*exec.Cmd, func(), error) {
-	if mode != "inspect" && mode != "archive" {
+func (runner Runner) exportCommand(ctx context.Context, request ExportRequest, mode string, target string) (*exec.Cmd, func(), error) {
+	if mode != "inspect" && mode != "archive" && mode != "restore" {
 		return nil, nil, errors.New("invalid snapshot export mode")
 	}
 
@@ -208,6 +223,10 @@ func (runner Runner) exportCommand(ctx context.Context, request ExportRequest, m
 
 	if mode == "inspect" {
 		args = append(args, "ls", "--recursive", "--json", request.Snapshot, request.Path)
+	} else if mode == "restore" {
+		args = append(args, restoreArguments(request, target)...)
+		// Restores run on the control plane's own hardware, so they may read in parallel.
+		env = append(env, "GOMAXPROCS="+strconv.Itoa(runtime.NumCPU()), "RESTIC_READ_CONCURRENCY="+strconv.Itoa(scratchReadConcurrency))
 	} else if request.Path == "/" {
 		args = append(args, "dump", "--archive", "zip", request.Snapshot+":/", "/")
 	} else if request.Kind == "directory" {
