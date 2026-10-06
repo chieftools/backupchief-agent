@@ -724,6 +724,8 @@ func TestDirectoryListingUsesFourMegabyteOutputLimit(t *testing.T) {
 }
 
 func TestProcessFixture(t *testing.T) {
+	walkFixture()
+
 	switch os.Getenv("BACKUPCHIEF_PROCESS_FIXTURE") {
 	case "wait":
 		time.Sleep(time.Minute)

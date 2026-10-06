@@ -106,7 +106,7 @@ func runResticCommand(
 		State:      state,
 		AllowLocal: allowLocal,
 	}
-	result := runner.Run(executionContext, request)
+	result := runner.Run(restic.WithWalkStream(executionContext, command.OutOrStdout()), request)
 
 	return json.NewEncoder(command.OutOrStdout()).Encode(result)
 }

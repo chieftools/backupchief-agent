@@ -45,6 +45,8 @@ type Request struct {
 	TimeoutSeconds    int         `json:"timeout_seconds"`
 	LockWaitSeconds   int         `json:"lock_wait_seconds"`
 	RecoverStaleLocks bool        `json:"recover_stale_locks,omitempty"`
+	MaxNodes          int         `json:"max_nodes,omitempty"`
+	MaxBytes          int64       `json:"max_bytes,omitempty"`
 }
 
 func (r Request) dualArguments(passwordFile, sourcePasswordFile, cache string, destination, source repository.PreparedRepository) ([]string, []string, error) {
@@ -233,6 +235,18 @@ func (r Request) argumentsPrepared(passwordFile, newPasswordFile, cache string, 
 		}
 
 		arguments = append(arguments, "cat", "tree", r.Snapshot+":"+r.Path)
+	case "dump_file":
+		if !snapshotPattern.MatchString(r.Snapshot) || !safeSnapshotPath(r.Path) || r.Path == "/" || !safeDumpTarget(r.Target) || r.MaxBytes < 1 || r.MaxBytes > maxDumpBytes {
+			return nil, nil, errors.New("file dump requires a full snapshot ID, a file path, a private target and a byte limit")
+		}
+
+		arguments = append(arguments, "dump", r.Snapshot+":"+filepath.Dir(r.Path), "/"+filepath.Base(r.Path))
+	case "walk":
+		if !snapshotPattern.MatchString(r.Snapshot) || r.MaxNodes < 1 || r.MaxNodes > maxWalkNodes {
+			return nil, nil, errors.New("snapshot walk requires a full snapshot ID and a node budget")
+		}
+
+		arguments = append(arguments, "find", "--json", "--snapshot", r.Snapshot, "*")
 	case "stats":
 		arguments = append(arguments, "stats", "--mode", "raw-data", "--json")
 	case "check":

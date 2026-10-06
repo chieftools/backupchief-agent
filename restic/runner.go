@@ -35,7 +35,8 @@ func (runner Runner) Run(ctx context.Context, request Request) Result {
 	}
 
 	reportProgress(ctx, Progress{Stage: "waiting_for_lock"})
-	shared := request.Operation == "backup" || request.Operation == "backup_stdin"
+	// Directory reads only inspect snapshots, so they may overlap each other and backups.
+	shared := request.Operation == "backup" || request.Operation == "backup_stdin" || request.Operation == "ls" || request.Operation == "walk" || request.Operation == "dump_file"
 	var repositoryLock *os.File
 	var err error
 	if shared {
@@ -263,6 +264,7 @@ func acquireRepository(ctx context.Context, file *os.File, shared bool) error {
 func runProcess(ctx context.Context, command *exec.Cmd, request Request) Result {
 	result := Result{Version: protocolVersion, ExitCode: 1, Outcome: "failed"}
 
+	parent := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -283,6 +285,27 @@ func runProcess(ctx context.Context, command *exec.Cmd, request Request) Result 
 	command.Stdout = stdout
 	if (request.Operation == "backup" || request.Operation == "backup_stdin") && ctx.Value(progressKey{}) != nil {
 		command.Stdout = io.MultiWriter(stdout, &progressOutput{ctx: ctx})
+	}
+	var dump *dumpOutput
+	if request.Operation == "dump_file" {
+		var err error
+		if dump, err = newDumpOutput(request.Target, request.MaxBytes, cancel); err != nil {
+			result.Diagnostic = "cannot create private file dump target"
+			return result
+		}
+		defer dump.Close(false)
+		command.Stdout = dump
+	}
+	var walk *walkOutput
+	if request.Operation == "walk" {
+		stream, ok := walkStream(ctx)
+		if !ok {
+			result.Diagnostic = "snapshot walk requires an output stream"
+			return result
+		}
+		walk = newWalkOutput(stream, request, cancel)
+		defer walk.Close()
+		command.Stdout = walk
 	}
 	command.Stderr = stderr
 	command.WaitDelay = 10 * time.Second
@@ -316,6 +339,16 @@ func runProcess(ctx context.Context, command *exec.Cmd, request Request) Result 
 	// The operation owns the entire process group, including a child left behind by its leader.
 	_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
 
+	if walk != nil {
+		walk.Close()
+
+		return walkResult(parent, command, request, walk, stderr)
+	}
+
+	if dump != nil {
+		return dumpResult(parent, command, request, dump, stderr, err)
+	}
+
 	result.ExitCode = command.ProcessState.ExitCode()
 	if result.ExitCode < 0 {
 		result.ExitCode = 1
@@ -343,6 +376,70 @@ func runProcess(ctx context.Context, command *exec.Cmd, request Request) Result 
 	} else if result.ExitCode == 11 {
 		result.Outcome = "locked"
 	}
+
+	return result
+}
+
+// walkResult reports how a streamed walk ended; the nodes themselves were already forwarded.
+func walkResult(ctx context.Context, command *exec.Cmd, request Request, walk *walkOutput, stderr *boundedOutput) Result {
+	result := Result{Version: protocolVersion, ExitCode: command.ProcessState.ExitCode(), Outcome: "failed"}
+	if result.ExitCode < 0 {
+		result.ExitCode = 1
+	}
+
+	_, budget, invalid, failed := walk.state()
+	result.Diagnostic = redact(stderr.String(), request)
+
+	switch {
+	case budget:
+		result.ExitCode = 0
+		result.Outcome = "partial"
+		result.Truncated = true
+		result.Diagnostic = "snapshot walk stopped at its node budget"
+	case failed:
+		result.Diagnostic = "snapshot walk output stream closed"
+	case ctx.Err() != nil:
+		result.Outcome = "cancelled"
+		result.Diagnostic = "restic execution cancelled or timed out"
+	case invalid:
+		if strings.TrimSpace(result.Diagnostic) == "" {
+			result.Diagnostic = "restic walk output was invalid"
+		}
+	case result.ExitCode == 0:
+		result.Outcome = "complete"
+	case result.ExitCode == 11:
+		result.Outcome = "locked"
+	}
+
+	return result
+}
+
+// dumpResult keeps the dumped file only when Restic finished within the byte cap.
+func dumpResult(ctx context.Context, command *exec.Cmd, request Request, dump *dumpOutput, stderr *boundedOutput, err error) Result {
+	result := Result{Version: protocolVersion, ExitCode: command.ProcessState.ExitCode(), Outcome: "failed"}
+	if result.ExitCode < 0 {
+		result.ExitCode = 1
+	}
+
+	_, overflow, failed := dump.state()
+	result.Diagnostic = redact(stderr.String(), request)
+
+	switch {
+	case overflow:
+		result.Truncated = true
+		result.Diagnostic = "file dump exceeded its byte limit"
+	case failed:
+		result.Diagnostic = "cannot write private file dump target"
+	case ctx.Err() != nil:
+		result.Outcome = "cancelled"
+		result.Diagnostic = "restic execution cancelled or timed out"
+	case err == nil:
+		result.Outcome = "complete"
+	case result.ExitCode == 11:
+		result.Outcome = "locked"
+	}
+
+	dump.Close(result.Outcome == "complete")
 
 	return result
 }
