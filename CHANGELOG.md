@@ -4,6 +4,17 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.18.0]
+
+### Added
+
+- Added a streamed snapshot walk to the control-plane helper that forwards compact metadata for every file and folder in a recovery point, stopping at a node budget so the panel can index large backups for fast browsing.
+- Added a single-file dump to the control-plane helper that writes one backed-up file to a private target within a byte limit, so small files can be downloaded and previewed without preparing a ZIP.
+
+### Changed
+
+- Allowed directory listings, snapshot walks and file dumps on the same repository to run alongside each other instead of queueing behind one another.
+
 ## [0.17.0]
 
 ### Added
@@ -281,7 +292,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/chieftools/backupchief-agent/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/chieftools/backupchief-agent/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/chieftools/backupchief-agent/compare/v0.15.3...v0.16.0
 [0.15.3]: https://github.com/chieftools/backupchief-agent/compare/v0.15.2...v0.15.3
