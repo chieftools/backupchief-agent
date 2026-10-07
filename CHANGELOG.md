@@ -4,6 +4,13 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.20.1]
+
+### Changed
+
+- Compressed large entries of control-plane snapshot export ZIPs on several cores, as many as the control plane allows per export, priming each chunk with the data before it so archives stay as small as before.
+- Removed the `klauspost/compress` dependency again: the standard library in Go 1.27 already ships the same fast deflate encoder and produces identical archives.
+
 ## [0.20.0]
 
 ### Changed
@@ -307,7 +314,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.20.0...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.20.1...HEAD
+[0.20.1]: https://github.com/chieftools/backupchief-agent/compare/v0.20.0...v0.20.1
 [0.20.0]: https://github.com/chieftools/backupchief-agent/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/chieftools/backupchief-agent/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/chieftools/backupchief-agent/compare/v0.17.0...v0.18.0
