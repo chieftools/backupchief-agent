@@ -4,6 +4,7 @@ go 1.27.1
 
 require (
 	github.com/gorilla/websocket v1.5.3
+	github.com/klauspost/compress v1.20.1
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/spf13/cobra v1.10.2

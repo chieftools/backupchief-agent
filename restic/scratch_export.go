@@ -2,7 +2,6 @@ package restic
 
 import (
 	"archive/zip"
-	"compress/flate"
 	"context"
 	"errors"
 	"io"
@@ -80,10 +79,7 @@ func (runner Runner) restoreExport(ctx context.Context, request ExportRequest) (
 // writeRestoredArchive zips restored files in the same layout as `restic dump --archive zip`
 // (and, for single files, the same single entry the dump path produces).
 func writeRestoredArchive(restored string, request ExportRequest, output io.Writer) error {
-	archive := zip.NewWriter(output)
-	archive.RegisterCompressor(zip.Deflate, func(writer io.Writer) (io.WriteCloser, error) {
-		return flate.NewWriter(writer, flate.BestSpeed)
-	})
+	archive := newArchiveWriter(output)
 
 	var err error
 	if request.Kind != "directory" {

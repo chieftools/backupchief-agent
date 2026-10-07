@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/chieftools/backupchief-agent/repository"
+	"github.com/klauspost/compress/flate"
 )
 
 type ExportRequest struct {
@@ -127,7 +128,7 @@ func (runner Runner) StreamExport(ctx context.Context, request ExportRequest, ou
 		return nil
 	}
 
-	archive := zip.NewWriter(output)
+	archive := newArchiveWriter(output)
 	entry, err := archive.Create(request.ArchiveEntryName)
 	if err != nil {
 		return errors.New("cannot create snapshot archive entry")
@@ -143,6 +144,18 @@ func (runner Runner) StreamExport(ctx context.Context, request ExportRequest, ou
 	}
 
 	return nil
+}
+
+// newArchiveWriter deflates entries with klauspost/compress at its fastest level. The ZIP format is
+// unchanged, but compression runs several times faster than the standard library's, and it is
+// what bounds the export of a large, compressible selection such as a database dump.
+func newArchiveWriter(output io.Writer) *zip.Writer {
+	archive := zip.NewWriter(output)
+	archive.RegisterCompressor(zip.Deflate, func(writer io.Writer) (io.WriteCloser, error) {
+		return flate.NewWriter(writer, flate.BestSpeed)
+	})
+
+	return archive
 }
 
 func (runner Runner) exportCommand(ctx context.Context, request ExportRequest, mode string, target string) (*exec.Cmd, func(), error) {
