@@ -4,6 +4,13 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.20.0]
+
+### Changed
+
+- Uploaded control-plane snapshot export ZIPs straight to object storage from the helper, in parallel parts through presigned URLs, instead of streaming every byte back through the control panel. The helper now enforces the size limit and archive checks itself, reports progress every second, and reports how long the scratch restore, archiving, and upload waits took.
+- Compressed export ZIPs with a faster deflate implementation at its fastest level, so large database dumps are no longer held back by single-core compression.
+
 ## [0.19.0]
 
 ### Changed
@@ -300,7 +307,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/chieftools/backupchief-agent/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/chieftools/backupchief-agent/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/chieftools/backupchief-agent/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/chieftools/backupchief-agent/compare/v0.16.0...v0.17.0
