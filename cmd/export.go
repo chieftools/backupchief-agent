@@ -103,7 +103,7 @@ func writeSnapshotExport(command *cobra.Command, state string, request restic.Ex
 	}()
 
 	runner := restic.Runner{State: state, AllowLocal: true}
-	if err = runner.StreamExport(command.Context(), request, file); err != nil {
+	if _, err = runner.StreamExport(command.Context(), request, file); err != nil {
 		return err
 	}
 	if err = file.Sync(); err != nil {

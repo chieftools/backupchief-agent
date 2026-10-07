@@ -100,20 +100,33 @@ func (runner Runner) InspectExport(ctx context.Context, request ExportRequest) (
 	return ExportInspection{Version: protocolVersion, SourceBytes: total}, nil
 }
 
-func (runner Runner) StreamExport(ctx context.Context, request ExportRequest, output io.Writer) error {
+// ExportStats describes how an archive was produced, for diagnosing slow exports.
+type ExportStats struct {
+	// Scratch is whether the archive was zipped from a scratch restore instead of streamed.
+	Scratch bool
+	// Restore is the time spent restoring to scratch space, including a restore that failed.
+	Restore time.Duration
+}
+
+func (runner Runner) StreamExport(ctx context.Context, request ExportRequest, output io.Writer) (ExportStats, error) {
+	var stats ExportStats
+
 	if request.Scratch != "" {
+		started := time.Now()
 		restored, cleanup, err := runner.restoreExport(ctx, request)
+		stats.Restore = time.Since(started)
 		if err == nil {
 			defer cleanup()
+			stats.Scratch = true
 
-			return writeRestoredArchive(restored, request, output)
+			return stats, writeRestoredArchive(restored, request, output)
 		}
 		// Nothing was written yet, so a failed restore quietly falls back to streaming the dump.
 	}
 
 	command, cleanup, err := runner.exportCommand(ctx, request, "archive", "")
 	if err != nil {
-		return err
+		return stats, err
 	}
 	defer cleanup()
 
@@ -122,28 +135,28 @@ func (runner Runner) StreamExport(ctx context.Context, request ExportRequest, ou
 	if request.Kind == "directory" {
 		command.Stdout = output
 		if err = command.Run(); err != nil {
-			return errors.New("snapshot archive failed")
+			return stats, errors.New("snapshot archive failed")
 		}
 
-		return nil
+		return stats, nil
 	}
 
 	archive := newArchiveWriter(output)
 	entry, err := archive.Create(request.ArchiveEntryName)
 	if err != nil {
-		return errors.New("cannot create snapshot archive entry")
+		return stats, errors.New("cannot create snapshot archive entry")
 	}
 	command.Stdout = entry
 
 	if err = command.Run(); err != nil {
 		_ = archive.Close()
-		return errors.New("snapshot archive failed")
+		return stats, errors.New("snapshot archive failed")
 	}
 	if err = archive.Close(); err != nil {
-		return errors.New("cannot finalize snapshot archive")
+		return stats, errors.New("cannot finalize snapshot archive")
 	}
 
-	return nil
+	return stats, nil
 }
 
 // newArchiveWriter deflates entries with klauspost/compress at its fastest level. The ZIP format is

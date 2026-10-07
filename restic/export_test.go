@@ -86,7 +86,7 @@ func TestSnapshotDirectoryExportIncludesSelectedTopLevelFolder(t *testing.T) {
 	}
 
 	var archive bytes.Buffer
-	if err = runner.StreamExport(context.Background(), exportRequest, &archive); err != nil {
+	if _, err = runner.StreamExport(context.Background(), exportRequest, &archive); err != nil {
 		t.Fatal(err)
 	}
 	reader, err := zip.NewReader(bytes.NewReader(archive.Bytes()), int64(archive.Len()))
@@ -102,7 +102,7 @@ func TestSnapshotDirectoryExportIncludesSelectedTopLevelFolder(t *testing.T) {
 	fileRequest.Path = filepath.Join(selected, "summary.txt")
 	fileRequest.ArchiveEntryName = "summary.txt"
 	var fileArchive bytes.Buffer
-	if err = runner.StreamExport(context.Background(), fileRequest, &fileArchive); err != nil {
+	if _, err = runner.StreamExport(context.Background(), fileRequest, &fileArchive); err != nil {
 		t.Fatal(err)
 	}
 	fileReader, err := zip.NewReader(bytes.NewReader(fileArchive.Bytes()), int64(fileArchive.Len()))
@@ -165,7 +165,8 @@ func TestCancelledSnapshotExportRemovesItsRepositoryLock(t *testing.T) {
 	releaseOutput := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
-		done <- runner.StreamExport(ctx, exportRequest, blockingExportWriter{release: releaseOutput})
+		_, err := runner.StreamExport(ctx, exportRequest, blockingExportWriter{release: releaseOutput})
+		done <- err
 	}()
 
 	waitFor(t, func() bool {

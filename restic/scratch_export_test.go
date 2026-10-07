@@ -104,10 +104,14 @@ func TestScratchExportMatchesTheStreamedDumpLayout(t *testing.T) {
 			Version: 1, Connection: request.Connection, Password: request.Password, Snapshot: snapshotID,
 			Kind: selection.kind, Path: selection.path, ArchiveEntryName: selection.entry, TimeoutSeconds: 300,
 		}
-		streamed := exportEntries(t, runner, exportRequest)
+		streamed, streamedStats := exportEntries(t, runner, exportRequest)
 
 		exportRequest.Scratch = scratch
-		restored := exportEntries(t, runner, exportRequest)
+		restored, restoredStats := exportEntries(t, runner, exportRequest)
+
+		if streamedStats.Scratch || !restoredStats.Scratch || restoredStats.Restore <= 0 {
+			t.Fatalf("%s %s: streamed %+v, restored %+v", selection.kind, selection.path, streamedStats, restoredStats)
+		}
 
 		if len(streamed) == 0 || !reflect.DeepEqual(entryNames(streamed), entryNames(restored)) {
 			t.Fatalf("%s %s: entry names differ\nstreamed: %v\nrestored: %v", selection.kind, selection.path, entryNames(streamed), entryNames(restored))
@@ -162,21 +166,22 @@ func TestScratchExportFallsBackToStreamingWhenTheScratchDirectoryIsUnusable(t *t
 		}
 	}
 
-	entries := exportEntries(t, runner, ExportRequest{
+	entries, stats := exportEntries(t, runner, ExportRequest{
 		Version: 1, Connection: request.Connection, Password: request.Password, Snapshot: snapshotID,
 		Kind: "file", Path: filepath.Join(root, "notes.txt"), ArchiveEntryName: "notes.txt", TimeoutSeconds: 300,
 		Scratch: filepath.Join(t.TempDir(), "missing"),
 	})
 
-	if entries["notes.txt"].Contents != "synthetic notes\n" {
-		t.Fatalf("fallback archive: %+v", entries)
+	if entries["notes.txt"].Contents != "synthetic notes\n" || stats.Scratch {
+		t.Fatalf("fallback archive: %+v (%+v)", entries, stats)
 	}
 }
 
-func exportEntries(t *testing.T, runner Runner, request ExportRequest) map[string]archivedEntry {
+func exportEntries(t *testing.T, runner Runner, request ExportRequest) (map[string]archivedEntry, ExportStats) {
 	t.Helper()
 	var archive bytes.Buffer
-	if err := runner.StreamExport(context.Background(), request, &archive); err != nil {
+	stats, err := runner.StreamExport(context.Background(), request, &archive)
+	if err != nil {
 		t.Fatalf("export %s %s (scratch %q): %v", request.Kind, request.Path, request.Scratch, err)
 	}
 	reader, err := zip.NewReader(bytes.NewReader(archive.Bytes()), int64(archive.Len()))
@@ -195,7 +200,7 @@ func exportEntries(t *testing.T, runner Runner, request ExportRequest) map[strin
 		entries[file.Name] = archivedEntry{Mode: file.Mode(), Contents: string(contents), Modified: file.Modified.Unix()}
 	}
 
-	return entries
+	return entries, stats
 }
 
 func entryNames(entries map[string]archivedEntry) []string {
