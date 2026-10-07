@@ -29,6 +29,8 @@ func TestExportSelectionBoundaries(t *testing.T) {
 		func(request *ExportRequest) { request.Path = "/srv/../private" },
 		func(request *ExportRequest) { request.ArchiveEntryName = "different" },
 		func(request *ExportRequest) { request.ArchiveEntryName = "nested/name" },
+		func(request *ExportRequest) { request.CompressionWorkers = -1 },
+		func(request *ExportRequest) { request.CompressionWorkers = maxCompressionWorkers + 1 },
 	} {
 		candidate := request
 		mutate(&candidate)

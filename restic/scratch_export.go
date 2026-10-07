@@ -79,7 +79,7 @@ func (runner Runner) restoreExport(ctx context.Context, request ExportRequest) (
 // writeRestoredArchive zips restored files in the same layout as `restic dump --archive zip`
 // (and, for single files, the same single entry the dump path produces).
 func writeRestoredArchive(restored string, request ExportRequest, output io.Writer) error {
-	archive := newArchiveWriter(output)
+	archive := newArchiveWriter(output, request.CompressionWorkers)
 
 	var err error
 	if request.Kind != "directory" {

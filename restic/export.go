@@ -33,7 +33,12 @@ type ExportRequest struct {
 	// Scratch is an optional local directory where the control plane lets the selection be
 	// restored before zipping, which reads the repository pack by pack instead of blob by blob.
 	Scratch string `json:"scratch,omitempty"`
+	// CompressionWorkers is how many cores may deflate one large entry; zero or one compresses
+	// sequentially. The control plane sets it from how many exports may run side by side.
+	CompressionWorkers int `json:"compression_workers,omitempty"`
 }
+
+const maxCompressionWorkers = 16
 
 type ExportInspection struct {
 	Version     int   `json:"version"`
@@ -141,7 +146,7 @@ func (runner Runner) StreamExport(ctx context.Context, request ExportRequest, ou
 		return stats, nil
 	}
 
-	archive := newArchiveWriter(output)
+	archive := newArchiveWriter(output, request.CompressionWorkers)
 	entry, err := archive.Create(request.ArchiveEntryName)
 	if err != nil {
 		return stats, errors.New("cannot create snapshot archive entry")
@@ -159,11 +164,16 @@ func (runner Runner) StreamExport(ctx context.Context, request ExportRequest, ou
 	return stats, nil
 }
 
-// newArchiveWriter deflates entries at the fastest level; Go's standard library ships the same
-// fast encoder that klauspost/compress provides.
-func newArchiveWriter(output io.Writer) *zip.Writer {
+// newArchiveWriter deflates entries at the fastest level, on several cores when workers allows
+// it: single-core compression is what bounds the export of a large, compressible selection such
+// as a database dump.
+func newArchiveWriter(output io.Writer, workers int) *zip.Writer {
 	archive := zip.NewWriter(output)
 	archive.RegisterCompressor(zip.Deflate, func(writer io.Writer) (io.WriteCloser, error) {
+		if workers > 1 {
+			return newParallelDeflater(writer, workers), nil
+		}
+
 		return flate.NewWriter(writer, flate.BestSpeed)
 	})
 
@@ -310,6 +320,9 @@ func stopExportCommand(command *exec.Cmd) {
 }
 
 func validExportSelection(request ExportRequest) bool {
+	if request.CompressionWorkers < 0 || request.CompressionWorkers > maxCompressionWorkers {
+		return false
+	}
 	if request.Kind != "file" && request.Kind != "directory" && request.Kind != "database" {
 		return false
 	}
