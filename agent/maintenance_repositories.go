@@ -40,6 +40,9 @@ func executeMaintenanceRepositories(
 	primary.RepositoryResults = []RepositoryResult{repositoryResult(job.Repository, primary, primaryAttempts)}
 	primary.Diagnostic = ""
 	var log bytes.Buffer
+	if len(job.Replicas) > 0 {
+		log.WriteString(repositoryLogHeader(job.Repository))
+	}
 	log.Write(primaryLog)
 
 	if command.RunKind == "forget" && primary.Status != "complete" {
@@ -70,7 +73,7 @@ func executeMaintenanceRepositories(
 			observed.activity.update("", map[string]uint64{"repositories_completed": uint64(repositoryIndex + 2)})
 		}
 		primary.RepositoryResults = append(primary.RepositoryResults, repositoryResult(repository, child, childAttempts))
-		appendBoundedMaintenanceLog(&log, childLog, &truncated, &dropped)
+		appendBoundedMaintenanceLog(&log, append([]byte(repositoryLogHeader(repository)), childLog...), &truncated, &dropped)
 		truncated = truncated || childTruncated
 		dropped += childDropped
 		allComplete = allComplete && child.Status == "complete"
@@ -154,6 +157,12 @@ func appendBoundedMaintenanceLog(log *bytes.Buffer, contents []byte, truncated *
 		return
 	}
 	log.Write(contents)
+}
+
+// repositoryLogHeader marks where one repository's output starts in a combined maintenance log,
+// the same way database dumps are marked, so the control plane can split the log per repository.
+func repositoryLogHeader(repository JobRepository) string {
+	return "repository " + repository.Key + ":\n"
 }
 
 func repositoryResult(repository JobRepository, result CommandResult, attemptCount uint64) RepositoryResult {

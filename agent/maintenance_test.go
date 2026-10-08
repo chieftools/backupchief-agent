@@ -35,13 +35,16 @@ func TestMaintenanceRunsPrimaryThenReplicaAndRetriesTransientFailures(t *testing
 		Connection: testLocalRepository(t.TempDir()),
 	}}
 
-	result, _, _, _ := executeMaintenanceRepositories(
+	result, log, _, _ := executeMaintenanceRepositories(
 		context.Background(), executor, 1, maintenanceJournalCommand("prune", job.ID), job, nil,
 		func(MaintenancePlan) error { return nil }, time.Now, []time.Duration{0},
 	)
 
 	if result.Status != "complete" || result.ResultCode != "success" || len(result.RepositoryResults) != 2 {
 		t.Fatalf("maintenance result: %+v", result)
+	}
+	if !strings.HasPrefix(string(log), "repository repository_01k4p4f7m1r9d3t6v8w2x5y7ze:\n") || strings.Index(string(log), "repository repository_01k4p4f7m1r9d3t6v8w2x5y7zf:\n") <= 0 {
+		t.Fatalf("repository log sections: %q", log)
 	}
 	if result.RepositoryResults[0].AttemptCount != 1 || result.RepositoryResults[1].AttemptCount != 2 {
 		t.Fatalf("repository attempts: %+v", result.RepositoryResults)
