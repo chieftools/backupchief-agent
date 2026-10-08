@@ -227,7 +227,8 @@ func (daemon *daemon) scheduleBackups(ctx context.Context) error {
 			overlap = overlap || activeMaintenance >= 1
 		}
 		catchUp := operation.RunKind == "backup" && busyRepositories[operation.Job.Repository.ID] &&
-			operation.Job.Maintenance.Strategy == "after_scheduled_backup" && daemon.hasActiveMaintenance(operation.Job.ID)
+			(operation.Job.Maintenance.Strategy == "after_scheduled_backup" && daemon.hasActiveMaintenance(operation.Job.ID) ||
+				daemon.hasActiveReplication(operation.Job.ID))
 		if catchUp {
 			journaled.CatchUpBackup = true
 			overlap = false
@@ -303,6 +304,12 @@ func (daemon *daemon) hasActiveMaintenance(jobID string) bool {
 		}
 	}
 	return false
+}
+
+func (daemon *daemon) hasActiveReplication(jobID string) bool {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	return daemon.replicationActive[jobID]
 }
 
 func (daemon *daemon) startNextDeferredMaintenance(ctx context.Context, jobID string, expiredOnly bool) error {

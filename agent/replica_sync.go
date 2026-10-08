@@ -133,6 +133,7 @@ func (daemon *daemon) runReplicaSync(ctx context.Context, commandID string, job 
 	}
 	daemon.mu.Unlock()
 	notifyLoop(daemon.reportWake)
+	_ = daemon.startCatchUpBackup(context.Background(), job.ID)
 }
 
 func replicaForKey(job Job, key string) (JobRepository, bool) {

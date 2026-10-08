@@ -65,6 +65,7 @@ func (daemon *daemon) replicateJob(ctx context.Context, job Job) {
 		delete(daemon.replicationActive, job.ID)
 		daemon.mu.Unlock()
 		_ = daemon.startNextDeferredMaintenance(context.Background(), job.ID, false)
+		_ = daemon.startCatchUpBackup(context.Background(), job.ID)
 	}()
 
 	for {

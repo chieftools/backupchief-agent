@@ -58,6 +58,47 @@ func (executor *maintenanceGateExecutor) Run(ctx context.Context, request restic
 	}
 }
 
+type replicationGateExecutor struct {
+	mu          sync.Mutex
+	copyStarted chan struct{}
+	releaseCopy <-chan struct{}
+	copyOnce    sync.Once
+	backups     int
+}
+
+func (executor *replicationGateExecutor) Run(ctx context.Context, request restic.Request) restic.Result {
+	switch request.Operation {
+	case "stats":
+		return restic.Result{ExitCode: 0, Outcome: "complete", Output: `{"total_size":4096}`}
+	case "snapshots":
+		return restic.Result{ExitCode: 0, Outcome: "complete", Output: `[{"id":"` + strings.Repeat("b", 64) + `","original":"` + strings.Repeat("a", 64) +
+			`"},{"id":"` + strings.Repeat("9", 64) + `","original":"` + strings.Repeat("e", 64) + `"}]`}
+	case "copy":
+		executor.copyOnce.Do(func() { close(executor.copyStarted) })
+		select {
+		case <-executor.releaseCopy:
+			return restic.Result{ExitCode: 0, Outcome: "complete"}
+		case <-ctx.Done():
+			return restic.Result{ExitCode: 1, Outcome: "cancelled"}
+		}
+	}
+	executor.mu.Lock()
+	executor.backups++
+	executor.mu.Unlock()
+	return restic.Result{
+		ExitCode: 0,
+		Outcome:  "complete",
+		Output: `{"message_type":"summary","files_new":1,"dirs_new":1,"total_files_processed":1,` +
+			`"total_bytes_processed":128,"data_added":40,"data_added_packed":32,"snapshot_id":"` + strings.Repeat("e", 64) + `"}`,
+	}
+}
+
+func (executor *replicationGateExecutor) backupCount() int {
+	executor.mu.Lock()
+	defer executor.mu.Unlock()
+	return executor.backups
+}
+
 func (executor *maintenanceGateExecutor) backupCount() int {
 	executor.mu.Lock()
 	defer executor.mu.Unlock()
@@ -348,6 +389,72 @@ func TestBackupOccurrencesDuringMaintenanceCoalesceIntoOneCatchUp(t *testing.T) 
 		t.Fatalf("catch-up backups: %d", executor.backupCount())
 	}
 	waitForAllScheduledRuns(t, runtime, 3)
+}
+
+func TestBackupOccurrencesDuringReplicationCoalesceIntoOneCatchUp(t *testing.T) {
+	store := newAgentTestStore(t)
+	replicaKey := "repository_01k4p4f7m1r9d3t6v8w2x5y7zf"
+	job := deferredSchedulerJob(t)
+	job.Schedule = JobSchedule{Kind: "cron", Expression: "*/5 * * * *", Timezone: "UTC"}
+	job.Repository.Key = "repository_" + strings.ToLower(job.ID)
+	replicaConnection := testLocalRepository(t.TempDir())
+	job.Replicas = []JobRepository{{
+		Key: replicaKey, ID: strings.Repeat("d", 64), ServicePassword: "synthetic-service-password", Source: job.Repository.Key, Status: "active",
+		Location: replicaConnection.RepositoryPath(), Connection: replicaConnection,
+	}}
+	now := time.Date(2026, 9, 14, 0, 59, 0, 0, time.UTC)
+	release := make(chan struct{})
+	executor := &replicationGateExecutor{copyStarted: make(chan struct{}), releaseCopy: release}
+	runtime := newSchedulerDaemon(t, store, schedulerConfig(job), &now, executor)
+	runtime.reportWake = make(chan struct{}, 1)
+	previousID := "01k4p4f7m1r9d3t6v8w2x5y7zc"
+	runtime.journal.Commands[previousID] = &JournalCommand{
+		Command: AgentCommand{ID: previousID, Payload: CommandPayload{JobID: job.ID}},
+		RunID:   "01k4p4f7m1r9d3t6v8w2x5y7ze", RunKind: "backup", State: "finished", Events: []AgentEvent{},
+		Result:             &CommandResult{JobID: job.ID, Status: "complete", SnapshotIDs: []string{strings.Repeat("a", 64)}},
+		ReplicationPending: []string{replicaKey},
+	}
+
+	runtime.startReplication(context.Background(), job)
+	select {
+	case <-executor.copyStarted:
+	case <-time.After(time.Second):
+		t.Fatal("replication did not start")
+	}
+
+	for _, minute := range []int{0, 5} {
+		now = time.Date(2026, 9, 14, 1, minute, 0, 0, time.UTC)
+		if err := runtime.scheduleBackups(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	runtime.mu.Lock()
+	catchUps := 0
+	catchUpScheduledFor := ""
+	for _, command := range runtime.journal.Commands {
+		if command.CatchUpBackup && command.State == "received" {
+			catchUps++
+			catchUpScheduledFor = command.ScheduledFor
+		}
+	}
+	commandCount := len(runtime.journal.Commands)
+	runtime.mu.Unlock()
+	if catchUps != 1 || commandCount != 2 || catchUpScheduledFor != "2026-09-14T01:00:00.000000Z" {
+		t.Fatalf("coalesced catch-up: count=%d commands=%d scheduled_for=%s", catchUps, commandCount, catchUpScheduledFor)
+	}
+
+	close(release)
+	waitForAllScheduledRuns(t, runtime, 2)
+	runtime.activeWG.Wait()
+	if executor.backupCount() != 1 {
+		t.Fatalf("catch-up backups: %d", executor.backupCount())
+	}
+	for _, command := range runtime.journal.Commands {
+		if command.Result == nil || command.Result.Status != "complete" {
+			t.Fatalf("run did not complete: %+v", command)
+		}
+	}
 }
 
 func TestOfflineRunsContinueDuringSlowReportingAndReplayAfterRestart(t *testing.T) {
