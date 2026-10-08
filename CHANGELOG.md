@@ -4,6 +4,12 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.20.3]
+
+### Changed
+
+- Started each repository's output in the log of a maintenance run on a job with replicas with a `repository <key>:` line, so the control plane can show the log per storage location.
+
 ## [0.20.2]
 
 ### Fixed
@@ -320,7 +326,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.20.2...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.20.3...HEAD
+[0.20.3]: https://github.com/chieftools/backupchief-agent/compare/v0.20.2...v0.20.3
 [0.20.2]: https://github.com/chieftools/backupchief-agent/compare/v0.20.1...v0.20.2
 [0.20.1]: https://github.com/chieftools/backupchief-agent/compare/v0.20.0...v0.20.1
 [0.20.0]: https://github.com/chieftools/backupchief-agent/compare/v0.19.0...v0.20.0
