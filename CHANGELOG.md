@@ -4,6 +4,13 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.20.4]
+
+### Changed
+
+- Updated the bundled rclone to 1.75.2, which stops failed SFTP uploads from leaving disk space in use on the server, fixes restic repositories named `data` when served through rclone, and is built with Go 1.26.9 for its standard-library security fixes.
+- Built the agent with Go 1.27.2 and updated `golang.org/x/sys` to 0.49.0.
+
 ## [0.20.3]
 
 ### Changed
@@ -326,7 +333,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.20.3...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.20.4...HEAD
+[0.20.4]: https://github.com/chieftools/backupchief-agent/compare/v0.20.3...v0.20.4
 [0.20.3]: https://github.com/chieftools/backupchief-agent/compare/v0.20.2...v0.20.3
 [0.20.2]: https://github.com/chieftools/backupchief-agent/compare/v0.20.1...v0.20.2
 [0.20.1]: https://github.com/chieftools/backupchief-agent/compare/v0.20.0...v0.20.1
