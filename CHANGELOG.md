@@ -4,6 +4,12 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.20.5]
+
+### Fixed
+
+- Stopped an accepted configuration from cancelling queued agent updates and source inspections, which have no job, and discarded such cancellations already in the journal on start, since the control plane rejects them and the agent retried reporting them forever.
+
 ## [0.20.4]
 
 ### Changed
@@ -333,7 +339,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.20.4...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.20.5...HEAD
+[0.20.5]: https://github.com/chieftools/backupchief-agent/compare/v0.20.4...v0.20.5
 [0.20.4]: https://github.com/chieftools/backupchief-agent/compare/v0.20.3...v0.20.4
 [0.20.3]: https://github.com/chieftools/backupchief-agent/compare/v0.20.2...v0.20.3
 [0.20.2]: https://github.com/chieftools/backupchief-agent/compare/v0.20.1...v0.20.2
