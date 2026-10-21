@@ -1124,6 +1124,39 @@ func (daemon *daemon) restoreAgentUpdateState() error {
 	return nil
 }
 
+func (daemon *daemon) discardJoblessCancellations() error {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+
+	commandIDs := make([]string, 0)
+	for id, command := range daemon.journal.Commands {
+		if command.Command.Payload.JobID != "" {
+			continue
+		}
+		for _, event := range command.Events {
+			if event.Kind == "run_finished" && event.JobID == "" {
+				commandIDs = append(commandIDs, id)
+				break
+			}
+		}
+	}
+	if len(commandIDs) == 0 {
+		return nil
+	}
+	sort.Strings(commandIDs)
+
+	for _, id := range commandIDs {
+		delete(daemon.journal.Commands, id)
+	}
+	if err := daemon.store.SaveCommandJournal(daemon.journal); err != nil {
+		return err
+	}
+	for _, id := range commandIDs {
+		log.Printf("backupchief: discarded unreportable cancellation of job-less command %s", id)
+	}
+	return nil
+}
+
 func (daemon *daemon) startAgentUpdate(commandID string) error {
 	daemon.mu.Lock()
 	command := daemon.journal.Commands[commandID]

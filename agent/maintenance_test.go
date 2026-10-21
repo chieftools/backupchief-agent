@@ -703,6 +703,28 @@ func TestDisablingAJobCancelsItsQueuedCatchUpBackup(t *testing.T) {
 	}
 }
 
+func TestAcceptedConfigurationLeavesJoblessCommandsQueued(t *testing.T) {
+	runtime := &daemon{
+		state: RuntimeState{Maintenance: map[string]MaintenanceRuntime{}},
+		journal: CommandJournal{Commands: map[string]*JournalCommand{
+			"01k4p4f7m1r9d3t6v8w2x5y7za": {
+				Command: AgentCommand{Kind: "update_agent", Payload: CommandPayload{TargetVersion: "5.2.1"}},
+				RunKind: "agent_update", State: "received",
+			},
+			"01k4p4f7m1r9d3t6v8w2x5y7zb": {
+				Command: AgentCommand{Kind: "inspect_source", Payload: CommandPayload{Type: "file"}},
+				RunKind: "inspection", State: "received",
+			},
+		}},
+	}
+
+	cancellations, queued := runtime.acceptMaintenanceConfigLocked(Config{Jobs: []Job{}})
+
+	if len(cancellations) != 0 || len(queued) != 0 {
+		t.Fatalf("job-less commands were cancelled by the accepted configuration: %v", queued)
+	}
+}
+
 func TestInterruptedMaintenanceRelistsFixedForgetPlansAndLeavesOtherOutcomesUnresolved(t *testing.T) {
 	first := strings.Repeat("1", 64)
 	second := strings.Repeat("2", 64)

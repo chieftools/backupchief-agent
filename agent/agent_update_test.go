@@ -134,6 +134,48 @@ func TestAgentUpdateRestartRepairsLegacyRunIdentityAndConsumesResult(t *testing.
 	}
 }
 
+func TestRestartDiscardsUnreportableJoblessCancellations(t *testing.T) {
+	store := newAgentTestStore(t)
+	cancelledID := "01k4p4f7m1r9d3t6v8w2x5y7za"
+	queuedID := "01k4p4f7m1r9d3t6v8w2x5y7zb"
+	cancelledRunID := "01k4p4f7m1r9d3t6v8w2x5y7zc"
+	journal := newCommandJournal()
+	journal.Commands[cancelledID] = &JournalCommand{
+		Command: AgentCommand{ID: cancelledID, Generation: 1, Kind: "update_agent", Payload: CommandPayload{TargetVersion: "5.2.1"}},
+		RunID:   cancelledRunID, RunKind: "agent_update", Trigger: "manual", Acknowledged: true, State: "finished", Sequence: 1,
+		Events: []AgentEvent{{
+			ID: "01k4p4f7m1r9d3t6v8w2x5y7zd", RunID: cancelledRunID, RunKind: "agent_update", Trigger: "manual",
+			Sequence: 1, OccurredAt: "2026-09-22T09:32:51.939274Z", Kind: "run_finished",
+			Payload: map[string]any{"status": "cancelled", "result_code": "cancelled"},
+		}},
+		Result: &CommandResult{Generation: 1, RunID: cancelledRunID, RunKind: "agent_update", Status: "cancelled", ResultCode: "cancelled"},
+	}
+	journal.Commands[queuedID] = &JournalCommand{
+		Command: AgentCommand{ID: queuedID, Generation: 1, Kind: "update_agent", Payload: CommandPayload{TargetVersion: "5.2.2"}},
+		RunID:   "01k4p4f7m1r9d3t6v8w2x5y7ze", RunKind: "agent_update", Trigger: "manual", Acknowledged: true, State: "received",
+		Events: []AgentEvent{},
+	}
+	if err := store.SaveCommandJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &daemon{store: store, journal: journal}
+
+	if err := runtime.discardJoblessCancellations(); err != nil {
+		t.Fatal(err)
+	}
+
+	persisted, err := store.LoadCommandJournal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Commands[cancelledID] != nil || runtime.journal.Commands[cancelledID] != nil {
+		t.Fatal("unreportable job-less cancellation was not discarded")
+	}
+	if persisted.Commands[queuedID] == nil {
+		t.Fatal("queued job-less command was discarded")
+	}
+}
+
 func TestAgentUpdateRestartClearsOrphanedState(t *testing.T) {
 	store := newAgentTestStore(t)
 	commandID := "01k4p4f7m1r9d3t6v8w2x5y7za"

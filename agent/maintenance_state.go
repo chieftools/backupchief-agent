@@ -177,7 +177,7 @@ func (daemon *daemon) acceptMaintenanceConfigLocked(config Config) ([]context.Ca
 			}
 			continue
 		}
-		if command.RunKind == "" || availableJobs[command.Command.Payload.JobID] {
+		if command.RunKind == "" || command.Command.Payload.JobID == "" || availableJobs[command.Command.Payload.JobID] {
 			continue
 		}
 

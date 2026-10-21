@@ -178,6 +178,9 @@ func Run(ctx context.Context, options RunOptions) error {
 		reportWake:         make(chan struct{}, 1),
 		lastScheduleMinute: options.Now().UTC().Truncate(time.Minute),
 	}
+	if err := runtime.discardJoblessCancellations(); err != nil {
+		return err
+	}
 	if err := runtime.restoreAgentUpdateState(); err != nil {
 		return err
 	}
