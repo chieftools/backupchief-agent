@@ -98,7 +98,10 @@ func (manager *aptManager) CheckAvailable(ctx context.Context, version string) e
 func (manager *aptManager) Install(ctx context.Context, version string) error {
 	install, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
-	output, err := manager.runner.CombinedOutput(install, manager.binary, "install", "-y", "--allow-downgrades", packageName+"="+version)
+	// Keep a locally changed config.json and take the package's version of
+	// an unchanged one, since dpkg's conffile prompt cannot be answered here.
+	output, err := manager.runner.CombinedOutput(install, manager.binary, "install", "-y", "--allow-downgrades",
+		"-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold", packageName+"="+version)
 	if err != nil {
 		return commandError("install apt package", output, err)
 	}

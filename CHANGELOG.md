@@ -4,6 +4,10 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Stopped remote agent updates on Debian and Ubuntu from failing when a new package ships a changed default `config.json` while the installed one was changed locally. dpkg asked which version to keep, which the updater cannot answer. The updater now keeps the local file and only takes the package's version when the local file was not changed.
+
 ## [0.20.6]
 
 ### Changed
