@@ -7,6 +7,7 @@ Notable changes to Backup Chief agent are documented here.
 ### Fixed
 
 - Stopped `install.sh` on Ubuntu from hanging at needrestart's "Pending kernel upgrade" dialog, which cannot be answered when the script is piped into bash. The installer and the updater now run apt non-interactively and skip needrestart.
+- Stopped the agent from staying connected to the realtime server without receiving events when its channel subscription was rejected, failed to send or was never confirmed. It now reconnects within 30 seconds, as it already did when channel authorization failed. A connection that silently dies is now detected after the activity timeout plus 30 seconds instead of when TCP gives up, and reconnects back off from 2 seconds up to 5 minutes until a subscription succeeds, so repeated rejections no longer retry every few seconds. Commands were still picked up by the regular poll in the meantime.
 
 ## [0.20.5]
 

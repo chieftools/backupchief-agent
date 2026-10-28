@@ -21,9 +21,25 @@ import (
 type realtimeTestServer struct {
 	server          *httptest.Server
 	sendEstablished bool
+	options         realtimeTestServerOptions
+	dials           atomic.Int32
 	accepts         atomic.Int32
+	subscribes      atomic.Int32
 	closeCodes      chan int
 	userAgents      chan string
+}
+
+type realtimeTestServerOptions struct {
+	// rejectDials fails this many websocket handshakes before accepting.
+	rejectDials int32
+	// activityTimeout is sent in connection_established, in seconds.
+	activityTimeout int
+	// subscribeReply returns the reply to a pusher:subscribe on the given
+	// accepted connection, or nil to not reply.
+	subscribeReply func(accept int32, channel string) *Message
+	// dropFirstConnection closes the first accepted connection after
+	// replying to its subscribe.
+	dropFirstConnection bool
 }
 
 type pusherRoundTripFunc func(*http.Request) (*http.Response, error)
@@ -35,15 +51,34 @@ func (fn pusherRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, erro
 func newRealtimeTestServer(t *testing.T, sendEstablished bool) *realtimeTestServer {
 	t.Helper()
 
+	return newRealtimeTestServerWithOptions(t, sendEstablished, realtimeTestServerOptions{})
+}
+
+func newRealtimeTestServerWithOptions(t *testing.T, sendEstablished bool, options realtimeTestServerOptions) *realtimeTestServer {
+	t.Helper()
+
+	if options.activityTimeout == 0 {
+		options.activityTimeout = 60
+	}
+
 	rts := &realtimeTestServer{
 		sendEstablished: sendEstablished,
+		options:         options,
 		closeCodes:      make(chan int, 10),
 		userAgents:      make(chan string, 10),
 	}
 
 	upgrader := websocket.Upgrader{}
 	rts.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rts.userAgents <- r.Header.Get("User-Agent")
+		if rts.dials.Add(1) <= rts.options.rejectDials {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		select {
+		case rts.userAgents <- r.Header.Get("User-Agent"):
+		default:
+		}
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			t.Errorf("failed to upgrade websocket: %v", err)
@@ -54,7 +89,7 @@ func newRealtimeTestServer(t *testing.T, sendEstablished bool) *realtimeTestServ
 		acceptNumber := rts.accepts.Add(1)
 
 		if rts.sendEstablished {
-			if err := conn.WriteJSON(connectionEstablishedMessage(fmt.Sprintf("%d.1", acceptNumber))); err != nil {
+			if err := conn.WriteJSON(connectionEstablishedMessageWithTimeout(fmt.Sprintf("%d.1", acceptNumber), rts.options.activityTimeout)); err != nil {
 				t.Errorf("failed to write connection established message: %v", err)
 				return
 			}
@@ -69,6 +104,30 @@ func newRealtimeTestServer(t *testing.T, sendEstablished bool) *realtimeTestServ
 				} else {
 					rts.closeCodes <- -1
 				}
+				return
+			}
+
+			if msg.Event != "pusher:subscribe" {
+				continue
+			}
+			rts.subscribes.Add(1)
+			if rts.options.subscribeReply == nil {
+				continue
+			}
+
+			var data struct {
+				Channel string `json:"channel"`
+			}
+			if err := json.Unmarshal(msg.Data, &data); err != nil {
+				t.Errorf("failed to decode subscribe message: %v", err)
+				return
+			}
+			if reply := rts.options.subscribeReply(acceptNumber, data.Channel); reply != nil {
+				if err := conn.WriteJSON(reply); err != nil {
+					return
+				}
+			}
+			if acceptNumber == 1 && rts.options.dropFirstConnection {
 				return
 			}
 		}
@@ -109,10 +168,266 @@ func (s *realtimeTestServer) config(t *testing.T, channel string) *Config {
 }
 
 func connectionEstablishedMessage(socketID string) Message {
-	data, _ := json.Marshal(fmt.Sprintf(`{"socket_id":"%s","activity_timeout":60}`, socketID))
+	return connectionEstablishedMessageWithTimeout(socketID, 60)
+}
+
+func connectionEstablishedMessageWithTimeout(socketID string, activityTimeout int) Message {
+	data, _ := json.Marshal(fmt.Sprintf(`{"socket_id":"%s","activity_timeout":%d}`, socketID, activityTimeout))
 	return Message{
 		Event: "pusher:connection_established",
 		Data:  data,
+	}
+}
+
+func subscriptionSucceeded(channel string) *Message {
+	return &Message{Event: "pusher_internal:subscription_succeeded", Channel: channel, Data: json.RawMessage(`"{}"`)}
+}
+
+func confirmSubscriptions(_ int32, channel string) *Message {
+	return subscriptionSucceeded(channel)
+}
+
+// newFastClient returns a client with timeouts short enough for tests.
+func newFastClient(config *Config, httpClient *http.Client) *Client {
+	client := NewClient(config, "backupchief/test", "synthetic-credential", "1.0.0", httpClient, false)
+	client.reconnectDelay = 20 * time.Millisecond
+	client.minimumReconnectDelay = 20 * time.Millisecond
+	client.maximumReconnectDelay = 50 * time.Millisecond
+	client.subscribeTimeout = 200 * time.Millisecond
+	client.pongTimeout = 100 * time.Millisecond
+	return client
+}
+
+func newAuthServer(t *testing.T, failures int32) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requests.Add(1) <= failures {
+			http.Error(w, "unavailable", http.StatusInternalServerError)
+			return
+		}
+		_, _ = io.WriteString(w, `{"auth":"app-key:signature"}`)
+	}))
+	t.Cleanup(server.Close)
+
+	return server, &requests
+}
+
+func waitForSubscribed(t *testing.T, client *Client) {
+	t.Helper()
+
+	deadline := time.After(5 * time.Second)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		if client.IsSubscribed() {
+			return
+		}
+
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for client to be subscribed")
+		case <-ticker.C:
+		}
+	}
+}
+
+func TestStartRetriesFailedInitialConnect(t *testing.T) {
+	server := newRealtimeTestServerWithOptions(t, true, realtimeTestServerOptions{
+		rejectDials:    2,
+		subscribeReply: confirmSubscriptions,
+	})
+	client := newFastClient(server.config(t, "public-synthetic"), server.server.Client())
+	t.Cleanup(client.Disconnect)
+
+	client.Start()
+
+	waitForSubscribed(t, client)
+	if got := server.dials.Load(); got != 3 {
+		t.Fatalf("expected two rejected dials and one accepted dial, got %d dials", got)
+	}
+}
+
+func TestFailedChannelAuthReconnects(t *testing.T) {
+	authServer, authRequests := newAuthServer(t, 1)
+	server := newRealtimeTestServerWithOptions(t, true, realtimeTestServerOptions{
+		subscribeReply: confirmSubscriptions,
+	})
+	config := server.config(t, "private-synthetic")
+	config.AuthURL = authServer.URL
+	client := newFastClient(config, authServer.Client())
+	t.Cleanup(client.Disconnect)
+
+	client.Start()
+
+	if code := waitForCloseCode(t, server); code != websocket.ClosePolicyViolation {
+		t.Fatalf("expected the unsubscribed connection to close with code %d, got %d", websocket.ClosePolicyViolation, code)
+	}
+	waitForSubscribed(t, client)
+	if got := authRequests.Load(); got != 2 {
+		t.Fatalf("expected one failed and one successful auth request, got %d", got)
+	}
+	if got := server.accepts.Load(); got != 2 {
+		t.Fatalf("expected a second connection after the failed auth, got %d", got)
+	}
+}
+
+func TestSubscriptionErrorReconnects(t *testing.T) {
+	server := newRealtimeTestServerWithOptions(t, true, realtimeTestServerOptions{
+		subscribeReply: func(accept int32, channel string) *Message {
+			if accept == 1 {
+				return &Message{Event: "pusher:subscription_error", Channel: channel, Data: json.RawMessage(`"{\"status\":403}"`)}
+			}
+			return subscriptionSucceeded(channel)
+		},
+	})
+	client := newFastClient(server.config(t, "public-synthetic"), server.server.Client())
+	t.Cleanup(client.Disconnect)
+
+	client.Start()
+
+	if code := waitForCloseCode(t, server); code != websocket.ClosePolicyViolation {
+		t.Fatalf("expected the rejected connection to close with code %d, got %d", websocket.ClosePolicyViolation, code)
+	}
+	waitForSubscribed(t, client)
+}
+
+func TestUnconfirmedSubscriptionReconnects(t *testing.T) {
+	server := newRealtimeTestServerWithOptions(t, true, realtimeTestServerOptions{
+		subscribeReply: func(accept int32, channel string) *Message {
+			if accept == 1 {
+				return nil
+			}
+			return subscriptionSucceeded(channel)
+		},
+	})
+	client := newFastClient(server.config(t, "public-synthetic"), server.server.Client())
+	t.Cleanup(client.Disconnect)
+
+	client.Start()
+
+	waitForSubscribed(t, client)
+	if got := server.accepts.Load(); got != 2 {
+		t.Fatalf("expected a second connection after the unconfirmed subscription, got %d", got)
+	}
+}
+
+func TestSilentConnectionReconnects(t *testing.T) {
+	// The test server never answers pings, so the read deadline of the
+	// activity timeout plus the pong timeout expires.
+	server := newRealtimeTestServerWithOptions(t, true, realtimeTestServerOptions{
+		activityTimeout: 1,
+		subscribeReply:  confirmSubscriptions,
+	})
+	client := newFastClient(server.config(t, "public-synthetic"), server.server.Client())
+	t.Cleanup(client.Disconnect)
+
+	client.Start()
+
+	waitForAccepts(t, server, 2)
+}
+
+func TestSubscriptionSucceededNotifiesOncePerSubscription(t *testing.T) {
+	server := newRealtimeTestServerWithOptions(t, true, realtimeTestServerOptions{
+		subscribeReply:      confirmSubscriptions,
+		dropFirstConnection: true,
+	})
+	client := newFastClient(server.config(t, "public-synthetic"), server.server.Client())
+	t.Cleanup(client.Disconnect)
+
+	subscribed := make(chan struct{}, 10)
+	client.OnEvent("pusher_internal:subscription_succeeded", func(Message) { subscribed <- struct{}{} })
+
+	client.Start()
+	waitForSubscription := func() {
+		t.Helper()
+		select {
+		case <-subscribed:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for the subscription handler")
+		}
+	}
+	waitForSubscription()
+	waitForSubscription()
+	if got := server.accepts.Load(); got != 2 {
+		t.Fatalf("expected the handler to run once per connection, got %d connections", got)
+	}
+}
+
+func TestSubscriptionToOtherChannelIsIgnored(t *testing.T) {
+	server := newRealtimeTestServerWithOptions(t, true, realtimeTestServerOptions{
+		subscribeReply: func(_ int32, _ string) *Message {
+			return subscriptionSucceeded("public-other")
+		},
+	})
+	client := newFastClient(server.config(t, "public-synthetic"), server.server.Client())
+	client.subscribeTimeout = time.Minute
+	t.Cleanup(client.Disconnect)
+
+	notified := make(chan struct{}, 1)
+	client.OnEvent("pusher_internal:subscription_succeeded", func(Message) { notified <- struct{}{} })
+
+	client.Start()
+	waitForConnected(t, client)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for server.subscribes.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if client.IsSubscribed() {
+		t.Fatal("expected a subscription confirmation for another channel to be ignored")
+	}
+	select {
+	case <-notified:
+		t.Fatal("expected no subscription handler call for another channel")
+	default:
+	}
+}
+
+func TestReconnectDelayBacksOffUntilSubscribed(t *testing.T) {
+	for _, ceiling := range []time.Duration{2 * time.Second, 4 * time.Second, maximumReconnectDelay} {
+		for range 100 {
+			if delay := upperHalfJitter(ceiling); delay < ceiling/2 || delay > ceiling {
+				t.Fatalf("delay %s outside [%s, %s]", delay, ceiling/2, ceiling)
+			}
+		}
+	}
+
+	// A connection whose subscription fails keeps doubling the delay; only a
+	// confirmed subscription resets it.
+	server := newRealtimeTestServerWithOptions(t, true, realtimeTestServerOptions{
+		subscribeReply: func(accept int32, channel string) *Message {
+			if accept <= 3 {
+				return &Message{Event: "pusher:subscription_error", Channel: channel, Data: json.RawMessage(`"{}"`)}
+			}
+			return subscriptionSucceeded(channel)
+		},
+	})
+	client := newFastClient(server.config(t, "public-synthetic"), server.server.Client())
+	client.maximumReconnectDelay = time.Second
+	t.Cleanup(client.Disconnect)
+
+	client.Start()
+	// By the third connection, the two failed subscriptions before it have
+	// doubled the delay twice, and the third fails too.
+	waitForAccepts(t, server, 3)
+
+	client.mu.RLock()
+	grown := client.reconnectDelay
+	client.mu.RUnlock()
+	if grown <= client.minimumReconnectDelay {
+		t.Fatalf("expected the delay to grow after failed subscriptions, got %s", grown)
+	}
+
+	waitForSubscribed(t, client)
+	client.mu.RLock()
+	reset := client.reconnectDelay
+	client.mu.RUnlock()
+	if reset != client.minimumReconnectDelay {
+		t.Fatalf("expected the delay to reset after a subscription, got %s", reset)
 	}
 }
 
