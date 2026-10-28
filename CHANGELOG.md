@@ -4,6 +4,8 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.20.7]
+
 ### Security
 
 - The agent now only sends its credential to the control panel it enrolled with when it authorizes its realtime channel. A realtime `auth_url` on another origin is replaced by the control panel's own endpoint.
@@ -358,7 +360,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.20.6...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.20.7...HEAD
+[0.20.7]: https://github.com/chieftools/backupchief-agent/compare/v0.20.6...v0.20.7
 [0.20.6]: https://github.com/chieftools/backupchief-agent/compare/v0.20.5...v0.20.6
 [0.20.5]: https://github.com/chieftools/backupchief-agent/compare/v0.20.4...v0.20.5
 [0.20.4]: https://github.com/chieftools/backupchief-agent/compare/v0.20.3...v0.20.4
