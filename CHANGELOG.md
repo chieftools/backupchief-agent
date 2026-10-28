@@ -4,6 +4,10 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed CentOS 7 and other EL7 servers failing to read the Backup Chief RPM repository with "Parsing primary.xml error: Start tag expected". The repository metadata was compressed with zstd, which the yum of EL7 cannot read, and is gzip compressed again from the next release on.
+
 ## [0.20.7]
 
 ### Security
