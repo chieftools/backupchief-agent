@@ -243,6 +243,10 @@ The `dev` command builds behind the `devtools` tag and runs an unprivileged loca
 
 See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
+## Releasing
+
+Add each change to the Unreleased section of `CHANGELOG.md` as it lands. To cut a release, run `bin/release.sh X.Y.Z` on a clean `main`: it moves the Unreleased entries under `## [X.Y.Z]`, adds the version to the links in the changelog footer, commits "Update changelog" and creates the signed `vX.Y.Z` tag on that commit. Review the result, then push it with `git push --atomic origin main vX.Y.Z`, or pass `--push` to do that right away.
+
 ## Security vulnerabilities
 
 Report vulnerabilities privately through [GitHub Security Advisories](https://github.com/chieftools/backupchief-agent/security/advisories/new). Backup Chief does not currently run a bug bounty program.
