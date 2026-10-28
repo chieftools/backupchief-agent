@@ -598,3 +598,23 @@ func replicaSyncTestCommand() AgentCommand {
 		},
 	}
 }
+
+func TestChannelAuthURLKeepsCredentialOnEndpointOrigin(t *testing.T) {
+	client := NewManagedClient("https://backup.chief.test/agent/v1", "credential", "1.2.3-test", "server_x", nil)
+	fallback := "https://backup.chief.test/agent/v1/broadcasting/auth"
+
+	for candidate, want := range map[string]string{
+		"https://backup.chief.test/agent/v1/broadcasting/auth": "https://backup.chief.test/agent/v1/broadcasting/auth",
+		"https://backup.chief.test/other/auth":                 "https://backup.chief.test/other/auth",
+		"":                                                     fallback,
+		"https://realtime.example/auth":                        fallback,
+		"http://backup.chief.test/agent/v1/broadcasting/auth":       fallback,
+		"https://backup.chief.test:8443/agent/v1/broadcasting/auth": fallback,
+		"https://user@backup.chief.test/agent/v1/broadcasting/auth": fallback,
+		"://invalid": fallback,
+	} {
+		if got := client.channelAuthURL(candidate); got != want {
+			t.Errorf("channelAuthURL(%q) = %q, want %q", candidate, got, want)
+		}
+	}
+}

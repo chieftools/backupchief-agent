@@ -4,6 +4,10 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+### Security
+
+- The agent now only sends its credential to the control panel it enrolled with when it authorizes its realtime channel. A realtime `auth_url` on another origin is replaced by the control panel's own endpoint.
+
 ### Fixed
 
 - Stopped remote agent updates on Debian and Ubuntu from failing when a new package ships a changed default `config.json` while the installed one was changed locally. dpkg asked which version to keep, which the updater cannot answer. The updater now keeps the local file and only takes the package's version when the local file was not changed.

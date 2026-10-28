@@ -576,6 +576,7 @@ func (daemon *daemon) replaceRealtime(config *pusher.Config, protocolRevision st
 	var next *pusher.Client
 	if config != nil {
 		copied := *config
+		copied.AuthURL = daemon.client.channelAuthURL(copied.AuthURL)
 		next = pusher.NewClient(&copied, daemon.client.userAgent(), daemon.bootstrap.Credential, protocolRevision, daemon.client.HTTP, false)
 		next.OnEvent("config.updated", func(pusher.Message) {
 			notifyLoop(daemon.configWake)

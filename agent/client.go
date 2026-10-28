@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -112,6 +113,25 @@ func (client *Client) userAgent() string {
 		userAgent += " server/" + client.serverID
 	}
 	return userAgent
+}
+
+// channelAuthURL returns the realtime channel auth URL to send the credential
+// to. The credential is only ever sent to the enrolled endpoint's origin: an
+// auth URL elsewhere is replaced by <endpoint>/broadcasting/auth.
+func (client *Client) channelAuthURL(candidate string) string {
+	fallback := client.Endpoint + "/broadcasting/auth"
+	if candidate == "" {
+		return fallback
+	}
+	endpoint, err := url.Parse(client.Endpoint)
+	if err != nil {
+		return fallback
+	}
+	target, err := url.Parse(candidate)
+	if err != nil || target.Scheme != endpoint.Scheme || target.Host != endpoint.Host || target.User != nil {
+		return fallback
+	}
+	return candidate
 }
 
 func (client *Client) Enroll(ctx context.Context, token string, request EnrollmentRequest) (EnrollmentResponse, error) {
