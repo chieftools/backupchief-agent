@@ -1,11 +1,17 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	"github.com/chieftools/backupchief-agent/agent"
+	"github.com/chieftools/backupchief-agent/initsys"
+	"github.com/chieftools/backupchief-agent/logfile"
 	"github.com/chieftools/backupchief-agent/updater"
 	"github.com/spf13/cobra"
 )
@@ -91,25 +97,48 @@ func newSetupCommand(version string, configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			serviceManager, initSystem := agent.DetectServiceManager()
 			bootstrap, err := agent.Enroll(command.Context(), args[0], agent.EnrollOptions{
-				Store:   store,
-				Version: version,
+				Store:          store,
+				Version:        version,
+				ServiceManager: serviceManager,
 			})
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(command.OutOrStdout(), "Server %s is set up and backupchief.service started.\n", bootstrap.ServerID)
+			_, err = fmt.Fprintln(command.OutOrStdout(), setupCompletion(bootstrap.ServerID, initSystem))
 			return err
 		},
 	}
 }
 
+// setupCompletion tells how the agent runs after setup.
+func setupCompletion(serverID string, initSystem initsys.Kind) string {
+	switch initSystem {
+	case initsys.Systemd:
+		return fmt.Sprintf("Server %s is set up and backupchief.service started.", serverID)
+	case initsys.SysV, initsys.Upstart:
+		return fmt.Sprintf("Server %s is set up and the backupchief service started, also at boot.", serverID)
+	default:
+		return fmt.Sprintf("Server %s is set up. No init system manages Backup Chief here, start it with:\n  backupchief run --log-file /var/log/backupchief/agent.log", serverID)
+	}
+}
+
 func newRunCommand(version string, configPath *string) *cobra.Command {
-	return &cobra.Command{
+	var logFile string
+	command := &cobra.Command{
 		Use:   "run",
 		Short: "Run the backup daemon",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
+			if logFile != "" {
+				file, err := logfile.Setup(logFile)
+				if err != nil {
+					return fmt.Errorf("open log file %s: %w", logFile, err)
+				}
+				defer file.Close()
+				reopenLogOnHangup(command.Context(), file)
+			}
 			store, err := agent.NewSystemFileStore(pathsForConfig(*configPath))
 			if err != nil {
 				return err
@@ -120,6 +149,29 @@ func newRunCommand(version string, configPath *string) *cobra.Command {
 			})
 		},
 	}
+	command.Flags().StringVar(&logFile, "log-file", "", "Log to this file with size-capped rotation instead of stderr (for hosts without systemd)")
+	return command
+}
+
+// reopenLogOnHangup reopens the log file on SIGHUP, which the init script's
+// reload sends, so a log rotated away by hand is followed. Without a handler
+// SIGHUP would stop the agent.
+func reopenLogOnHangup(ctx context.Context, file *logfile.RotatingFile) {
+	hangups := make(chan os.Signal, 1)
+	signal.Notify(hangups, syscall.SIGHUP)
+	go func() {
+		defer signal.Stop(hangups)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-hangups:
+				if err := file.Reopen(); err != nil {
+					log.Printf("backupchief: reopen log file: %v", err)
+				}
+			}
+		}
+	}()
 }
 
 func pathsForConfig(configPath string) agent.Paths {

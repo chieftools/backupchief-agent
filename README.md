@@ -61,6 +61,19 @@ curl -fsSL https://pkg.backup.chief.app/install.sh | sudo bash
 
 Packages are built for amd64 and arm64 on Debian, Ubuntu, RHEL, CentOS, Rocky Linux, AlmaLinux, and Fedora families. The package stays inactive until the agent has either a managed or a standalone configuration.
 
+### Supported systems
+
+The agent is a single static binary, so it runs on any Linux with the 3.2 or newer kernel that current Go requires. The packages work with systemd and with SysV init, including Upstart on Ubuntu 14.04, which runs SysV scripts:
+
+| Distribution | Init |
+| --- | --- |
+| Ubuntu 14.04, 16.04 and later | Upstart (14.04) through the SysV script, systemd |
+| Debian 8 and later | systemd or SysV |
+| CentOS/RHEL 7 | systemd, or SysV in containers |
+| Rocky Linux, AlmaLinux and CloudLinux 8 and later, Fedora | systemd |
+
+The package scripts check whether systemd runs (`/run/systemd/system`). Without it the `/etc/init.d/backupchief` script runs the agent as root, because SysV init cannot grant it only the capability to read every file, and the agent logs to `/var/log/backupchief/agent.log` and starts the updater itself. On systemd before 229, such as CentOS 7's 219, the package installs a root variant of the unit as `/etc/systemd/system/backupchief.service` for the same reason, and removes it once systemd is newer. CentOS 6 and other 2.6.x kernels are not supported.
+
 ### Upgrade and rollback
 
 ```bash
@@ -73,7 +86,7 @@ sudo dnf clean expire-cache --disablerepo='*' --enablerepo=backupchief
 sudo dnf upgrade backupchief
 ```
 
-The package transaction reloads systemd and restarts `backupchief.service` only when it was already active. An inactive installation stays inactive, so an ordinary upgrade needs no manual restart.
+The package transaction reloads systemd and restarts `backupchief.service`, or the agent started by the init script, only when it was already running. An inactive installation stays inactive, so an ordinary upgrade needs no manual restart.
 
 To roll back, install a saved earlier package through the same package manager. Preserve `/etc/backupchief/identity.json`, `/var/lib/backupchief`, and `/var/log/backupchief` so identity and pending work survive the change, and preserve `/etc/backupchief/config.json` in standalone mode.
 
@@ -87,7 +100,7 @@ Copy the one-time setup token from the Backup Chief control plane, then run:
 sudo backupchief setup <token>
 ```
 
-Setup stores the control-plane endpoint, server identity, and bearer credential in `/etc/backupchief/identity.json`, writes the last known good jobs and destinations to `/var/lib/backupchief/config.json`, then enables and starts `backupchief.service`.
+Setup stores the control-plane endpoint, server identity, and bearer credential in `/etc/backupchief/identity.json`, writes the last known good jobs and destinations to `/var/lib/backupchief/config.json`, then enables and starts `backupchief.service`. Without systemd it starts the agent with its init script and at boot with `update-rc.d` or `chkconfig`. Where no init system runs, such as in a container, setup prints how to start the agent.
 
 Trigger a backup by its configuration key, or by a unique case-insensitive display name:
 
@@ -167,11 +180,13 @@ sudo backupchief repository init job_documents
 sudo systemctl enable --now backupchief
 ```
 
+Without systemd, start it with `sudo update-rc.d backupchief defaults` (or `sudo chkconfig --add backupchief`) and `sudo /etc/init.d/backupchief start`.
+
 The running agent checks the file every second, applies valid replacements, and keeps the last valid configuration when an edit is rejected. `backupchief backup <job>` runs a standalone job directly and waits for Restic to finish.
 
 ## Operations
 
-Inspect the service with `systemctl status backupchief` and its output with `journalctl -u backupchief`.
+Inspect the service with `systemctl status backupchief` and its output with `journalctl -u backupchief`. Without systemd, use `/etc/init.d/backupchief status` and `/var/log/backupchief/agent.log`.
 
 | Path | Contents |
 | --- | --- |
@@ -180,9 +195,9 @@ Inspect the service with `systemctl status backupchief` and its output with `jou
 | `/var/lib/backupchief/config.json` | Last accepted managed configuration. |
 | `/var/lib/backupchief/state.db` | Run journal, pending commands, and replay state. |
 | `/var/lib/backupchief/run-logs` | Bounded run logs awaiting upload. |
-| `/var/log/backupchief` | Service logs. |
+| `/var/log/backupchief` | Service logs without systemd, and the updater's log. |
 
-The unit runs as the unprivileged `backupchief` user with `CAP_DAC_READ_SEARCH` so it can read protected files without full root, under `ProtectSystem=strict` with `/var/lib/backupchief` and `/var/log/backupchief` writable.
+The unit runs as the unprivileged `backupchief` user with `CAP_DAC_READ_SEARCH` so it can read protected files without full root, under `ProtectSystem=strict` with `/var/lib/backupchief` and `/var/log/backupchief` writable. Without systemd, and on systemd before 229, the agent runs as root instead, see [Supported systems](#supported-systems).
 
 Agent state is durable because it may hold results the control plane has not accepted yet. Preserve it when replacing a machine.
 

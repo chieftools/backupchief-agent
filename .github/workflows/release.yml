@@ -354,95 +354,12 @@ jobs:
       - name: Create repository configuration files
         run: |
           # Create install script for users in root
-          cat > repo-sync/install.sh << 'INSTALL_EOF'
-          #!/bin/bash
-          set -e
-
-          # Detect architecture
-          MACHINE_ARCH=$(uname -m)
-          case "${MACHINE_ARCH}" in
-              x86_64)  RPM_ARCH="x86_64"; DEB_ARCH="amd64" ;;
-              aarch64) RPM_ARCH="aarch64"; DEB_ARCH="arm64" ;;
-              arm64)   RPM_ARCH="aarch64"; DEB_ARCH="arm64" ;;
-              *) echo "Unsupported architecture: ${MACHINE_ARCH}"; exit 1 ;;
-          esac
-
-          # Detect OS
-          if [ -f /etc/os-release ]; then
-              . /etc/os-release
-              OS=$ID
-          else
-              echo "Cannot detect OS"
-              exit 1
-          fi
-
-          case $OS in
-              ubuntu|debian)
-                  echo "Setting up Backup Chief repository for Debian/Ubuntu..."
-
-                  # Keep apt and its hooks from prompting. Piped into bash,
-                  # nobody can answer a dialog such as needrestart's "Pending
-                  # kernel upgrade", and reading stdin would eat this script.
-                  export DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1
-
-                  # Create a dedicated keyring directory
-                  install -d -m 0755 /etc/apt/keyrings
-
-                  # Add GPG key
-                  curl -fsSL __PACKAGE_BASE_URL__/gpg.key | gpg --dearmor --yes -o /etc/apt/keyrings/backupchief.gpg
-                  chmod a+r /etc/apt/keyrings/backupchief.gpg
-
-                  # Add repository using deb822 format
-                  printf '%s\n' \
-                      'Types: deb' \
-                      'URIs: __PACKAGE_BASE_URL__/deb' \
-                      'Suites: stable' \
-                      'Components: main' \
-                      "Architectures: ${DEB_ARCH}" \
-                      'Signed-By: /etc/apt/keyrings/backupchief.gpg' \
-                      > /etc/apt/sources.list.d/backupchief.sources
-
-                  apt-get update
-                  apt-get install -y backupchief < /dev/null
-                  ;;
-
-              centos|rhel|rocky|almalinux|fedora)
-                  echo "Setting up Backup Chief repository for RHEL/CentOS/Rocky/Alma/Fedora..."
-
-                  # Add repository
-                  cat > /etc/yum.repos.d/backupchief.repo << EOF
-          [backupchief]
-          name=Backup Chief Repository
-          baseurl=__PACKAGE_BASE_URL__/rpm/stable/$RPM_ARCH
-          enabled=1
-          gpgcheck=1
-          repo_gpgcheck=1
-          gpgkey=__PACKAGE_BASE_URL__/gpg.key
-          EOF
-
-                  # Install
-                  yum install -y backupchief || dnf install -y backupchief
-                  ;;
-
-              *)
-                  echo "Unsupported OS: $OS"
-                  echo "Please install manually from https://github.com/chieftools/backupchief-agent/releases"
-                  exit 1
-                  ;;
-          esac
-
-          echo ""
-          echo "Backup Chief installed successfully."
-          echo "Run the setup command shown in https://backup.chief.app."
-          echo "Successful setup enables and starts backupchief.service."
-          INSTALL_EOF
-
+          ./bin/generate-install-sh.sh "${PACKAGE_BASE_URL}" > repo-sync/install.sh
           chmod +x repo-sync/install.sh
+          bash -n repo-sync/install.sh
 
           # Export GPG public key
           gpg --armor --export "${GPG_KEY_ID}" > repo-sync/gpg.key
-
-          sed -i "s|__PACKAGE_BASE_URL__|${PACKAGE_BASE_URL}|g" repo-sync/install.sh
 
       - name: Upload to server
         env:

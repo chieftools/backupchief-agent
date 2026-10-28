@@ -57,6 +57,10 @@ cp packaging/backupchief-updater.service "${RPMBUILD_DIR}/SOURCES/"
 cp packaging/backupchief-updater.path "${RPMBUILD_DIR}/SOURCES/"
 cp packaging/backupchief-cpu-quota-generator "${RPMBUILD_DIR}/SOURCES/"
 cp packaging/postinstall.sh "${RPMBUILD_DIR}/SOURCES/"
+cp packaging/preremove.sh "${RPMBUILD_DIR}/SOURCES/"
+cp packaging/postremove.sh "${RPMBUILD_DIR}/SOURCES/"
+cp packaging/backupchief.init "${RPMBUILD_DIR}/SOURCES/"
+cp packaging/backupchief-root.service "${RPMBUILD_DIR}/SOURCES/"
 install -m 0644 LICENSE "${RPMBUILD_DIR}/SOURCES/LICENSE"
 install -m 0644 restic/LICENSE "${RPMBUILD_DIR}/SOURCES/restic-LICENSE"
 install -m 0644 rclone/COPYING "${RPMBUILD_DIR}/SOURCES/rclone-COPYING"
@@ -81,6 +85,8 @@ Source5:        config.schema.json
 Source6:        backupchief-updater.service
 Source7:        backupchief-updater.path
 Source8:        backupchief-cpu-quota-generator
+Source9:        backupchief.init
+Source10:       backupchief-root.service
 
 %global debug_package %{nil}
 %global _build_id_links none
@@ -88,7 +94,6 @@ Source8:        backupchief-cpu-quota-generator
 
 AutoReqProv:    no
 Requires:       shadow-utils
-Requires:       systemd
 
 %description
 Run from a local configuration or connect the agent to the Backup Chief control plane.
@@ -99,6 +104,8 @@ mkdir -p %{buildroot}/etc/backupchief
 mkdir -p %{buildroot}/usr/lib/systemd/system
 mkdir -p %{buildroot}/usr/lib/systemd/system-generators
 mkdir -p %{buildroot}/usr/share/licenses/backupchief
+mkdir -p %{buildroot}/usr/share/backupchief
+mkdir -p %{buildroot}/etc/rc.d/init.d
 
 install -m 0755 %{_sourcedir}/backupchief %{buildroot}/usr/bin/backupchief
 install -m 0640 %{SOURCE0} %{buildroot}/etc/backupchief/config.json
@@ -106,6 +113,8 @@ install -m 0644 %{SOURCE1} %{buildroot}/usr/lib/systemd/system/backupchief.servi
 install -m 0644 %{SOURCE6} %{buildroot}/usr/lib/systemd/system/backupchief-updater.service
 install -m 0644 %{SOURCE7} %{buildroot}/usr/lib/systemd/system/backupchief-updater.path
 install -m 0755 %{SOURCE8} %{buildroot}/usr/lib/systemd/system-generators/backupchief-cpu-quota-generator
+install -m 0755 %{SOURCE9} %{buildroot}/etc/rc.d/init.d/backupchief
+install -m 0644 %{SOURCE10} %{buildroot}/usr/share/backupchief/backupchief-root.service
 install -m 0644 %{SOURCE2} %{buildroot}/usr/share/licenses/backupchief/LICENSE
 install -m 0644 %{SOURCE3} %{buildroot}/usr/share/licenses/backupchief/restic-LICENSE
 install -m 0644 %{SOURCE4} %{buildroot}/usr/share/licenses/backupchief/rclone-COPYING
@@ -123,25 +132,14 @@ install -m 0644 %{SOURCE5} %{buildroot}/usr/share/licenses/backupchief/config.sc
 %attr(0644, root, root) /usr/lib/systemd/system/backupchief-updater.service
 %attr(0644, root, root) /usr/lib/systemd/system/backupchief-updater.path
 %attr(0755, root, root) /usr/lib/systemd/system-generators/backupchief-cpu-quota-generator
+%config(noreplace) %attr(0755, root, root) /etc/rc.d/init.d/backupchief
+%attr(0644, root, root) /usr/share/backupchief/backupchief-root.service
 
 %post -f %{_sourcedir}/postinstall.sh
 
-%preun
-set -eu
+%preun -f %{_sourcedir}/preremove.sh
 
-if [ "\$1" -eq 0 ] && [ -d /run/systemd/system ]; then
-    systemctl disable --now backupchief-updater.path
-    systemctl stop backupchief-updater.service
-    systemctl stop backupchief.service
-    systemctl disable backupchief.service
-fi
-
-%postun
-set -eu
-
-if [ -d /run/systemd/system ]; then
-    systemctl daemon-reload
-fi
+%postun -f %{_sourcedir}/postremove.sh
 EOF
 
 echo "Building RPM package..."

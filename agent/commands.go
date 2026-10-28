@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/chieftools/backupchief-agent/initsys"
 	"github.com/chieftools/backupchief-agent/restic"
 	"github.com/chieftools/backupchief-agent/updater"
 )
@@ -1177,7 +1179,12 @@ func (daemon *daemon) startAgentUpdate(commandID string) error {
 		return err
 	}
 	daemon.mu.Unlock()
-	if err := updater.WriteRequest(daemon.store.stateDirectory(), request); err != nil {
+	uid, gid := -1, -1
+	if os.Geteuid() == 0 {
+		// The helper only accepts a request owned by the service user
+		uid, gid = daemon.store.ServiceUID, daemon.store.ServiceGID
+	}
+	if err := updater.WriteRequestOwnedBy(daemon.store.stateDirectory(), request, uid, gid); err != nil {
 		daemon.mu.Lock()
 		if current := daemon.journal.Commands[commandID]; current != nil {
 			current.State = "received"
@@ -1186,7 +1193,23 @@ func (daemon *daemon) startAgentUpdate(commandID string) error {
 		daemon.mu.Unlock()
 		return err
 	}
-	return nil
+	return launchUpdaterWithoutSystemd()
+}
+
+// The packaged binary, which runs the helper, and the helper's log without
+// systemd.
+const (
+	updaterBinary  = "/usr/bin/backupchief"
+	updaterLogPath = "/var/log/backupchief/update.log"
+)
+
+// launchUpdaterWithoutSystemd starts the root helper where no systemd path unit
+// watches for the request: under SysV init, where the daemon runs as root.
+func launchUpdaterWithoutSystemd() error {
+	if os.Geteuid() != 0 || initsys.DetectSystem() == initsys.Systemd {
+		return nil
+	}
+	return updater.Launch(updaterBinary, updaterLogPath)
 }
 
 func (daemon *daemon) consumeAgentUpdateResult() error {

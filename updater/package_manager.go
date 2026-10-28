@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -100,7 +101,13 @@ func (manager *aptManager) Install(ctx context.Context, version string) error {
 	defer cancel()
 	// Keep a locally changed config.json and take the package's version of
 	// an unchanged one, since dpkg's conffile prompt cannot be answered here.
-	output, err := manager.runner.CombinedOutput(install, manager.binary, "install", "-y", "--allow-downgrades",
+	// apt before 1.1 has no --allow-downgrades; its --force-yes allows
+	// downgrades as well.
+	downgrades := "--allow-downgrades"
+	if versionOutput, err := manager.runner.CombinedOutput(install, manager.binary, "--version"); err == nil && aptVersionBefore11(string(versionOutput)) {
+		downgrades = "--force-yes"
+	}
+	output, err := manager.runner.CombinedOutput(install, manager.binary, "install", "-y", downgrades,
 		"-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold", packageName+"="+version)
 	if err != nil {
 		return commandError("install apt package", output, err)
@@ -110,6 +117,26 @@ func (manager *aptManager) Install(ctx context.Context, version string) error {
 
 func (manager *aptManager) Downgrade(ctx context.Context, version string) error {
 	return manager.Install(ctx, version)
+}
+
+// aptVersionBefore11 parses the first line of apt-get --version, such as
+// "apt 1.0.1ubuntu2.24 for amd64 compiled on ..." or "apt 2.8.3 (amd64)".
+// Ubuntu 14.04 and Debian 8 ship apt 1.0.
+func aptVersionBefore11(output string) bool {
+	fields := strings.Fields(output)
+	if len(fields) < 2 || fields[0] != "apt" {
+		return false
+	}
+	parts := strings.SplitN(fields[1], ".", 3)
+	if len(parts) < 2 {
+		return false
+	}
+	major, majorErr := strconv.Atoi(parts[0])
+	minor, minorErr := strconv.Atoi(strings.TrimRightFunc(parts[1], func(r rune) bool { return r < '0' || r > '9' }))
+	if majorErr != nil || minorErr != nil {
+		return false
+	}
+	return major < 1 || (major == 1 && minor < 1)
 }
 
 type rpmManager struct {

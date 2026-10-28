@@ -8,6 +8,7 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"os"
 	"sort"
 	"sync"
 	"time"
@@ -192,6 +193,13 @@ func Run(ctx context.Context, options RunOptions) error {
 			Version:   runtime.version,
 		}); err != nil {
 			return fmt.Errorf("write updater readiness: %w", err)
+		}
+		// Resume a pending update, for example after a reboot during it. A
+		// helper that is still running keeps the request to itself.
+		if _, err := os.Stat(updater.RequestPath(runtime.store.stateDirectory())); err == nil {
+			if err := launchUpdaterWithoutSystemd(); err != nil {
+				log.Printf("backupchief: start agent updater: %v", err)
+			}
 		}
 	}
 	client.ObserveServerTime = runtime.observeServerTime

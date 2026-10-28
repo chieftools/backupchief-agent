@@ -42,6 +42,8 @@ mkdir -p "${DEB_DIR}/etc/backupchief"
 mkdir -p "${DEB_DIR}/usr/lib/systemd/system"
 mkdir -p "${DEB_DIR}/usr/lib/systemd/system-generators"
 mkdir -p "${DEB_DIR}/usr/share/doc/backupchief"
+mkdir -p "${DEB_DIR}/usr/share/backupchief"
+mkdir -p "${DEB_DIR}/etc/init.d"
 
 ./bin/build.sh "${VERSION}" "linux-${GOARCH}"
 
@@ -55,6 +57,8 @@ install -m 0644 packaging/backupchief.service "${DEB_DIR}/usr/lib/systemd/system
 install -m 0644 packaging/backupchief-updater.service "${DEB_DIR}/usr/lib/systemd/system/backupchief-updater.service"
 install -m 0644 packaging/backupchief-updater.path "${DEB_DIR}/usr/lib/systemd/system/backupchief-updater.path"
 install -m 0755 packaging/backupchief-cpu-quota-generator "${DEB_DIR}/usr/lib/systemd/system-generators/backupchief-cpu-quota-generator"
+install -m 0644 packaging/backupchief-root.service "${DEB_DIR}/usr/share/backupchief/backupchief-root.service"
+install -m 0755 packaging/backupchief.init "${DEB_DIR}/etc/init.d/backupchief"
 install -m 0644 LICENSE "${DEB_DIR}/usr/share/doc/backupchief/copyright"
 install -m 0644 restic/LICENSE "${DEB_DIR}/usr/share/doc/backupchief/restic-LICENSE"
 install -m 0644 rclone/COPYING "${DEB_DIR}/usr/share/doc/backupchief/rclone-COPYING"
@@ -71,38 +75,19 @@ Maintainer: ${MAINTAINER}
 Homepage: https://backup.chief.app
 Description: ${DESCRIPTION}
  Run from a local configuration or connect the agent to the Backup Chief control plane.
-Depends: passwd, systemd
+Depends: passwd
 EOF
 
 cat > "${DEB_DIR}/DEBIAN/conffiles" << EOF
 /etc/backupchief/config.json
+/etc/init.d/backupchief
 EOF
 
 echo "Installing package lifecycle scripts..."
 install -m 0755 packaging/postinstall.sh "${DEB_DIR}/DEBIAN/postinst"
 
-cat > "${DEB_DIR}/DEBIAN/prerm" << 'EOF'
-#!/bin/sh
-set -eu
-
-if [ "$1" = "remove" ] && [ -d /run/systemd/system ]; then
-    systemctl disable --now backupchief-updater.path
-    systemctl stop backupchief-updater.service
-    systemctl stop backupchief.service
-    systemctl disable backupchief.service
-fi
-EOF
-chmod 0755 "${DEB_DIR}/DEBIAN/prerm"
-
-cat > "${DEB_DIR}/DEBIAN/postrm" << 'EOF'
-#!/bin/sh
-set -eu
-
-if [ -d /run/systemd/system ]; then
-    systemctl daemon-reload
-fi
-EOF
-chmod 0755 "${DEB_DIR}/DEBIAN/postrm"
+install -m 0755 packaging/preremove.sh "${DEB_DIR}/DEBIAN/prerm"
+install -m 0755 packaging/postremove.sh "${DEB_DIR}/DEBIAN/postrm"
 
 echo "Building Debian package..."
 PACKAGE_FILE="${PACKAGE_NAME}_${VERSION}_${ARCH}.deb"

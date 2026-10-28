@@ -1,0 +1,30 @@
+# backupchief-root-override: systemd before 229 cannot grant the agent only the
+# capability to read every file, so it runs as root. The package installs this
+# file as /etc/systemd/system/backupchief.service there, and removes it once
+# systemd can.
+[Unit]
+Description=Backup Chief backup agent
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+Nice=10
+CPUQuota=100%
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+ExecStart=/usr/bin/backupchief run
+Restart=on-failure
+RestartPreventExitStatus=2
+RestartSec=5s
+KillMode=control-group
+TimeoutStopSec=60s
+UMask=0077
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=false
+
+[Install]
+WantedBy=multi-user.target

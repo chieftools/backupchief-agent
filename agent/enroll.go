@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/chieftools/backupchief-agent/initsys"
 )
 
 type ServiceManager interface {
@@ -32,6 +34,49 @@ func (SystemdServiceManager) EnableAndStart(ctx context.Context) error {
 		return fmt.Errorf("enable and start backupchief.service: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 	return nil
+}
+
+// SysVServiceManager runs the agent with its init script on hosts without
+// systemd, and starts it at boot with update-rc.d or chkconfig.
+type SysVServiceManager struct {
+	Manager initsys.Manager
+}
+
+func (manager SysVServiceManager) Stop(ctx context.Context) error {
+	return manager.Manager.Stop(ctx)
+}
+
+func (manager SysVServiceManager) EnableAndStart(ctx context.Context) error {
+	if err := manager.Manager.Enable(ctx); err != nil {
+		return err
+	}
+	return manager.Manager.Start(ctx)
+}
+
+// ManualServiceManager leaves starting the agent to the operator where no init
+// system manages it, such as in a container.
+type ManualServiceManager struct{}
+
+func (ManualServiceManager) Stop(context.Context) error           { return nil }
+func (ManualServiceManager) EnableAndStart(context.Context) error { return nil }
+
+// DetectServiceManager picks the service manager for the running init system.
+func DetectServiceManager() (ServiceManager, initsys.Kind) {
+	kind := initsys.DetectSystem()
+	switch kind {
+	case initsys.Systemd:
+		return SystemdServiceManager{}, kind
+	case initsys.SysV, initsys.Upstart:
+		for _, script := range []string{"/etc/init.d/backupchief", "/etc/rc.d/init.d/backupchief"} {
+			if _, err := os.Stat(script); err == nil {
+				manager, err := initsys.New(kind, os.DirFS("/"), initsys.DefaultService, nil)
+				if err == nil {
+					return SysVServiceManager{Manager: manager}, kind
+				}
+			}
+		}
+	}
+	return ManualServiceManager{}, initsys.Unknown
 }
 
 type EnrollOptions struct {
@@ -83,7 +128,7 @@ func Enroll(ctx context.Context, token string, options EnrollOptions) (Bootstrap
 		return Bootstrap{}, fmt.Errorf("setup token is required")
 	}
 	if options.ServiceManager == nil {
-		options.ServiceManager = SystemdServiceManager{}
+		options.ServiceManager, _ = DetectServiceManager()
 	}
 
 	tokenHash := tokenDigest(token)

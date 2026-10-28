@@ -41,6 +41,15 @@ func Run(ctx context.Context, options Options) error {
 		options.PollEvery = time.Second
 	}
 
+	unlock, err := lockUpdater(options.StateDirectory)
+	if errors.Is(err, errUpdaterRunning) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	request, err := readSecureRequest(options.StateDirectory, options.ServiceUID)
 	if err != nil {
 		return err

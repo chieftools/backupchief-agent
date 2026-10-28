@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chieftools/backupchief-agent/initsys"
 	"github.com/chieftools/backupchief-agent/rclone"
 	"github.com/chieftools/backupchief-agent/restic"
 )
@@ -91,7 +92,7 @@ func probeAgentUpdate() map[string]any {
 	if runtime.GOOS != "linux" {
 		return map[string]any{"available": false, "reason": "unsupported_platform"}
 	}
-	if _, err := os.Stat("/usr/lib/systemd/system/backupchief-updater.service"); err != nil {
+	if !updaterCanStart(initsys.DetectSystem(), os.Geteuid()) {
 		return map[string]any{"available": false, "reason": "updater_not_installed"}
 	}
 	for _, manager := range []string{"dnf", "yum", "apt-get"} {
@@ -101,6 +102,26 @@ func probeAgentUpdate() map[string]any {
 		}
 	}
 	return map[string]any{"available": false, "reason": "package_manager_unavailable"}
+}
+
+// updaterCanStart reports whether something starts the root helper for an
+// update request: the systemd path unit, or without systemd the daemon itself
+// when it runs as root under the init script. Otherwise an update would drain
+// the agent with nothing to finish it.
+func updaterCanStart(initSystem initsys.Kind, euid int) bool {
+	if initSystem == initsys.Systemd {
+		_, err := os.Stat("/usr/lib/systemd/system/backupchief-updater.path")
+		return err == nil
+	}
+	if euid != 0 {
+		return false
+	}
+	for _, script := range []string{"/etc/init.d/backupchief", "/etc/rc.d/init.d/backupchief"} {
+		if _, err := os.Stat(script); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func probeExternalTool(name string) map[string]any {

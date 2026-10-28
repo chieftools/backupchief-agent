@@ -4,7 +4,15 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- The agent now installs and runs on servers without systemd, such as Ubuntu 14.04, Debian 8 with SysV init, and containers. The DEB and RPM packages no longer depend on systemd, include an `/etc/init.d/backupchief` script, and pick the init system when they install, upgrade or remove the agent. Without systemd the agent runs as root, because SysV init cannot grant it only the capability to read every file, logs to `/var/log/backupchief/agent.log` through the new `backupchief run --log-file` option, and starts the updater itself, also on apt before 1.1. `backupchief setup` starts the agent with the init script there. The install script sets up the repository on apt before 1.1 and falls back to HTTP where apt's TLS is too old for the repository. See [Supported systems](README.md#supported-systems).
+
 ### Fixed
+
+- Fixed the agent not being able to back up files that only root can read on systemd before 229, such as CentOS 7's 219, which ignores the unit's `AmbientCapabilities`. The package runs the agent as root there.
+- Fixed `SIGHUP` stopping the agent. It now reopens the log file instead.
+- Agents only report that they can update themselves when something starts the updater, so an update can no longer stop backups on a server where it would never run.
 
 - Fixed CentOS 7 and other EL7 servers failing to read the Backup Chief RPM repository with "Parsing primary.xml error: Start tag expected". The repository metadata was compressed with zstd, which the yum of EL7 cannot read, and is gzip compressed again from the next release on.
 

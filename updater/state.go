@@ -59,10 +59,16 @@ func ResultPath(directory string) string    { return filepath.Join(directory, re
 func ReadinessPath(directory string) string { return filepath.Join(directory, readinessFile) }
 
 func WriteRequest(directory string, request Request) error {
+	return WriteRequestOwnedBy(directory, request, -1, -1)
+}
+
+// WriteRequestOwnedBy writes the request owned by uid and gid. A daemon that
+// runs as root gives it to the service user, which the helper requires.
+func WriteRequestOwnedBy(directory string, request Request, uid, gid int) error {
 	if err := validateRequest(request); err != nil {
 		return err
 	}
-	return writeJSON(RequestPath(directory), request, 0o600, -1, -1)
+	return writeJSON(RequestPath(directory), request, 0o600, uid, gid)
 }
 
 func WriteReadiness(directory string, readiness Readiness) error {

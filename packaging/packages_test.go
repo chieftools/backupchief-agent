@@ -55,14 +55,14 @@ func TestPackageContents(t *testing.T) {
 						t.Fatalf("unexpected DEB identity: %s", identity)
 					}
 				}
-				if dependencies := run(t, "dpkg-deb", "-f", archive, "Depends"); strings.Contains(dependencies, "rclone") {
-					t.Fatalf("DEB retains a system rclone dependency: %s", dependencies)
+				if dependencies := run(t, "dpkg-deb", "-f", archive, "Depends"); strings.Contains(dependencies, "rclone") || strings.Contains(dependencies, "systemd") {
+					t.Fatalf("DEB depends on rclone or systemd: %s", dependencies)
 				}
 				run(t, "dpkg-deb", "-x", archive, root)
 				control := t.TempDir()
 				run(t, "dpkg-deb", "-e", archive, control)
-				if string(read(t, filepath.Join(control, "conffiles"))) != "/etc/backupchief/config.json\n" {
-					t.Fatal("config is not a conffile")
+				if string(read(t, filepath.Join(control, "conffiles"))) != "/etc/backupchief/config.json\n/etc/init.d/backupchief\n" {
+					t.Fatal("config and init script are not conffiles")
 				}
 				for _, hook := range []string{"postinst", "prerm", "postrm"} {
 					run(t, "sh", "-n", filepath.Join(control, hook))
@@ -72,11 +72,11 @@ func TestPackageContents(t *testing.T) {
 				if identity != "backupchief "+target.arch+" linux Apache-2.0 Backup Chief Team <hello@chief.app>" {
 					t.Fatalf("unexpected RPM identity: %s", identity)
 				}
-				if dependencies := run(t, "rpm", "-qp", "--requires", archive); strings.Contains(dependencies, "rclone") {
-					t.Fatalf("RPM retains a system rclone dependency: %s", dependencies)
+				if dependencies := run(t, "rpm", "-qp", "--requires", archive); strings.Contains(dependencies, "rclone") || strings.Contains(dependencies, "systemd") {
+					t.Fatalf("RPM requires rclone or systemd: %s", dependencies)
 				}
 				flags := run(t, "rpm", "-qp", "--qf", "[%{FILENAMES} %{FILEFLAGS:fflags}\n]", archive)
-				if !strings.Contains(flags, "/etc/backupchief/config.json cn\n") {
+				if !strings.Contains(flags, "/etc/backupchief/config.json cn\n") || !strings.Contains(flags, "/etc/rc.d/init.d/backupchief cn\n") {
 					t.Fatalf("missing config/noreplace: %s", flags)
 				}
 				command := exec.Command("bash", "-o", "pipefail", "-c", `rpm2cpio "$1" | cpio -idm`, "extract", archive)
@@ -118,6 +118,10 @@ func TestPackageContents(t *testing.T) {
 			if !bytes.Equal(read(t, binary), read(t, filepath.Join(packageDirectory, "backupchief-linux-"+target.goarch))) {
 				t.Fatal("packaged executable differs from the validated build")
 			}
+			initScript := "etc/init.d/backupchief"
+			if target.format == "rpm" {
+				initScript = "etc/rc.d/init.d/backupchief"
+			}
 			for _, location := range []struct {
 				path string
 				mode os.FileMode
@@ -127,6 +131,8 @@ func TestPackageContents(t *testing.T) {
 				{"usr/lib/systemd/system/backupchief-updater.service", 0644},
 				{"usr/lib/systemd/system/backupchief-updater.path", 0644},
 				{"usr/lib/systemd/system-generators/backupchief-cpu-quota-generator", 0755},
+				{"usr/share/backupchief/backupchief-root.service", 0644},
+				{initScript, 0755},
 				{"etc/backupchief/config.json", 0640},
 				{"etc/backupchief", 0750},
 			} {
@@ -239,6 +245,64 @@ func TestPostinstallRestartsOnlyAnActiveServiceDuringUpgrade(t *testing.T) {
 	}
 	if strings.Contains(hook, "systemctl restart backupchief.service") {
 		t.Fatal("postinstall unconditionally restarts the service")
+	}
+}
+
+func TestPackageHooksPickTheInitSystemAtRuntime(t *testing.T) {
+	for name, expected := range map[string][]string{
+		"postinstall.sh": {
+			"if [ -d /run/systemd/system ]; then",
+			`if [ "$version" -lt 229 ]; then`,
+			"install -m 0644 /usr/share/backupchief/backupchief-root.service \"$override\"",
+			"/etc/init.d/backupchief try-restart || true",
+		},
+		"preremove.sh": {
+			"if [ -d /run/systemd/system ]; then",
+			"/etc/init.d/backupchief stop || true",
+			"update-rc.d -f backupchief remove",
+			"chkconfig --del backupchief",
+		},
+		"postremove.sh": {
+			"grep -q '^# backupchief-root-override:' \"$override\"",
+		},
+	} {
+		hook := string(read(t, name))
+		for _, want := range expected {
+			if !strings.Contains(hook, want) {
+				t.Fatalf("%s is missing %q", name, want)
+			}
+		}
+	}
+}
+
+func TestRootUnitRunsTheAgentAsRootWhereSystemdCannotGrantTheReadCapability(t *testing.T) {
+	unit := string(read(t, "backupchief-root.service"))
+	for _, expected := range []string{
+		"# backupchief-root-override:",
+		"\nUser=root\n",
+		"\nExecStart=/usr/bin/backupchief run\n",
+		"\nRestartPreventExitStatus=2\n",
+	} {
+		if !strings.Contains(unit, expected) {
+			t.Fatalf("root unit is missing %q", expected)
+		}
+	}
+	if strings.Contains(unit, "CapabilityBoundingSet") {
+		t.Fatal("root unit limits the capabilities of the root agent")
+	}
+}
+
+func TestInitScriptLogsToAFileAndDefersToSystemd(t *testing.T) {
+	script := string(read(t, "backupchief.init"))
+	for _, expected := range []string{
+		`DAEMON_ARGS="run --log-file ${LOGDIR}/agent.log"`,
+		"exec systemctl \"$1\" backupchief.service",
+		"# chkconfig: 2345 90 10",
+		"# Provides:          backupchief",
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("init script is missing %q", expected)
+		}
 	}
 }
 
