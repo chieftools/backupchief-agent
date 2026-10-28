@@ -4,6 +4,8 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.21.0]
+
 ### Added
 
 - The agent now installs and runs on servers without systemd, such as Ubuntu 14.04, Debian 8 with SysV init, and containers. The DEB and RPM packages no longer depend on systemd, include an `/etc/init.d/backupchief` script, and pick the init system when they install, upgrade or remove the agent. Without systemd the agent runs as root, because SysV init cannot grant it only the capability to read every file, logs to `/var/log/backupchief/agent.log` through the new `backupchief run --log-file` option, and starts the updater itself, also on apt before 1.1. `backupchief setup` starts the agent with the init script there. The install script sets up the repository on apt before 1.1 and falls back to HTTP where apt's TLS is too old for the repository. See [Supported systems](README.md#supported-systems).
@@ -372,7 +374,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.20.7...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.21.0...HEAD
+[0.21.0]: https://github.com/chieftools/backupchief-agent/compare/v0.20.7...v0.21.0
 [0.20.7]: https://github.com/chieftools/backupchief-agent/compare/v0.20.6...v0.20.7
 [0.20.6]: https://github.com/chieftools/backupchief-agent/compare/v0.20.5...v0.20.6
 [0.20.5]: https://github.com/chieftools/backupchief-agent/compare/v0.20.4...v0.20.5
