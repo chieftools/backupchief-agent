@@ -4,6 +4,10 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Stopped `install.sh` on Ubuntu from hanging at needrestart's "Pending kernel upgrade" dialog, which cannot be answered when the script is piped into bash. The installer and the updater now run apt non-interactively and skip needrestart.
+
 ## [0.20.5]
 
 ### Fixed

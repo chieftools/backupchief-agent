@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -15,10 +16,16 @@ type CommandRunner interface {
 	CombinedOutput(context.Context, string, ...string) ([]byte, error)
 }
 
+// aptEnvironment keeps apt and dpkg from prompting and needrestart from
+// restarting services on its own. dnf and yum ignore it.
+var aptEnvironment = []string{"DEBIAN_FRONTEND=noninteractive", "APT_LISTCHANGES_FRONTEND=none", "NEEDRESTART_SUSPEND=1"}
+
 type execRunner struct{}
 
 func (execRunner) CombinedOutput(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+	command := exec.CommandContext(ctx, name, args...)
+	command.Env = append(os.Environ(), aptEnvironment...)
+	return command.CombinedOutput()
 }
 
 type PackageManager interface {

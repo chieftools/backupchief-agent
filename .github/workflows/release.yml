@@ -360,6 +360,11 @@ jobs:
               ubuntu|debian)
                   echo "Setting up Backup Chief repository for Debian/Ubuntu..."
 
+                  # Keep apt and its hooks from prompting. Piped into bash,
+                  # nobody can answer a dialog such as needrestart's "Pending
+                  # kernel upgrade", and reading stdin would eat this script.
+                  export DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1
+
                   # Create a dedicated keyring directory
                   install -d -m 0755 /etc/apt/keyrings
 
@@ -378,7 +383,7 @@ jobs:
                       > /etc/apt/sources.list.d/backupchief.sources
 
                   apt-get update
-                  apt-get install -y backupchief
+                  apt-get install -y backupchief < /dev/null
                   ;;
 
               centos|rhel|rocky|almalinux|fedora)
