@@ -4,6 +4,10 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- Updated dependencies
+
 ## [0.21.0]
 
 ### Added
