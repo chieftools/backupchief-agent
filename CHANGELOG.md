@@ -4,6 +4,8 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.21.1]
+
 ### Changed
 
 - Updated dependencies
@@ -378,7 +380,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.21.0...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.21.1...HEAD
+[0.21.1]: https://github.com/chieftools/backupchief-agent/compare/v0.21.0...v0.21.1
 [0.21.0]: https://github.com/chieftools/backupchief-agent/compare/v0.20.7...v0.21.0
 [0.20.7]: https://github.com/chieftools/backupchief-agent/compare/v0.20.6...v0.20.7
 [0.20.6]: https://github.com/chieftools/backupchief-agent/compare/v0.20.5...v0.20.6
