@@ -4,6 +4,8 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.21.2]
+
 ### Changed
 
 - Updated the bundled rclone to 1.76.0, which stops several backends from sending credentials to another host or over plain HTTP when they are redirected, refuses HTTPS to HTTP redirects, and is built with Go 1.27.3 for its standard-library security fixes.
@@ -384,7 +386,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.21.1...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.21.2...HEAD
+[0.21.2]: https://github.com/chieftools/backupchief-agent/compare/v0.21.1...v0.21.2
 [0.21.1]: https://github.com/chieftools/backupchief-agent/compare/v0.21.0...v0.21.1
 [0.21.0]: https://github.com/chieftools/backupchief-agent/compare/v0.20.7...v0.21.0
 [0.20.7]: https://github.com/chieftools/backupchief-agent/compare/v0.20.6...v0.20.7
