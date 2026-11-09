@@ -57,6 +57,11 @@ jobs:
           printf 'VERSION=%s\n' "${VERSION}" >> "${GITHUB_OUTPUT}"
           echo "Building version: ${VERSION}"
 
+      - name: Prepare embedded Restic and rclone
+        # The tests compile packages that embed the pinned archives, which
+        # are gitignored and only fetched and verified by the build script.
+        run: ./bin/build.sh "${RELEASE_VERSION}" native
+
       - name: Run tests
         # A tag push does not wait for CI, so test the release commit here.
         run: go test -short -count=1 ./...
