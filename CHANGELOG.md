@@ -4,6 +4,12 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the agent refusing every new backup until it was restarted after its local spool ran full once. Reaching the spool limit no longer releases the emergency reserve, and a reserve released because the disk was full is restored once the spool has room again.
+- Fixed results the control plane permanently rejects filling the local spool. An invalid batch is resent event by event so valid events are still delivered, and a result that is still rejected after three attempts over at least 24 hours is dropped and reported as a reporting gap, so its run can be cleaned up.
+- Fixed large database retention results being refused locally before they were sent. With protocol 1.17.0 the agent sends event batches up to 4 MiB.
+
 ## [0.21.2]
 
 ### Changed
