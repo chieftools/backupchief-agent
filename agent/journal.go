@@ -143,7 +143,6 @@ func (store *FileStore) WriteRunLog(logID string, contents []byte) error {
 		return fmt.Errorf("run log is invalid")
 	}
 	if !store.canAcceptWork(uint64(len(contents))) {
-		_ = store.releaseReserve()
 		return ErrSpoolCapacity
 	}
 	err := writeAtomic(store.runLogPath(logID), contents, 0o600, store.ServiceUID, store.ServiceGID)

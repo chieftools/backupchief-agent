@@ -547,7 +547,7 @@ func TestOfflineRunsContinueDuringSlowReportingAndReplayAfterRestart(t *testing.
 	}
 }
 
-func TestSpoolPressureReleasesReserveAndRecordsAnOccurrenceGap(t *testing.T) {
+func TestSpoolLimitRefusesLogsWithoutReleasingTheReserveAndRecordsAnOccurrenceGap(t *testing.T) {
 	store := newAgentTestStore(t)
 	store.reserveBytes = 4096
 
@@ -559,11 +559,15 @@ func TestSpoolPressureReleasesReserveAndRecordsAnOccurrenceGap(t *testing.T) {
 	if !errors.Is(err, ErrSpoolCapacity) {
 		t.Fatalf("spool pressure error: %v", err)
 	}
-	if _, err := os.Stat(store.reservePath()); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("emergency reserve was not released: %v", err)
+	if info, err := os.Stat(store.reservePath()); err != nil || info.Size() != 4096 {
+		t.Fatalf("emergency reserve was released on a spool limit hit: %v", err)
 	}
-	if store.canAcceptWork(0) {
-		t.Fatal("new work remained enabled after the emergency reserve was released")
+	if store.canAcceptWork(1) {
+		t.Fatal("work beyond the spool limit was accepted")
+	}
+	store.spoolLimit += 1 << 20
+	if !store.canAcceptWork(1) {
+		t.Fatal("work within the spool limit was refused")
 	}
 
 	pressureStore := newAgentTestStore(t)
@@ -589,6 +593,64 @@ func TestSpoolPressureReleasesReserveAndRecordsAnOccurrenceGap(t *testing.T) {
 	state, err := pressureStore.LoadRuntimeState()
 	if err != nil || !state.SpoolGapDetected {
 		t.Fatalf("pressure gap state: %+v %v", state, err)
+	}
+}
+
+func TestReleasedReserveIsRestoredOnceTheSpoolHasRoomForIt(t *testing.T) {
+	store := newAgentTestStore(t)
+	store.reserveBytes = 4096
+	if _, err := store.LoadRuntimeState(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.releaseReserve(); err != nil {
+		t.Fatal(err)
+	}
+
+	store.spoolLimit = store.spoolUsage() + store.reserveBytes - 1
+	if store.canAcceptWork(0) {
+		t.Fatal("work was accepted before the spool had room for the reserve")
+	}
+	if _, err := os.Stat(store.reservePath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("reserve was restored without room: %v", err)
+	}
+
+	store.spoolLimit = store.spoolUsage() + store.reserveBytes + criticalRunRecordEstimate
+	if !store.canAcceptWork(criticalRunRecordEstimate) {
+		t.Fatal("work stayed refused after the spool regained room for the reserve")
+	}
+	if info, err := os.Stat(store.reservePath()); err != nil || info.Size() != 4096 {
+		t.Fatalf("reserve was not restored: %v", err)
+	}
+}
+
+func TestFailedReserveRestorationWaitsBeforeRetrying(t *testing.T) {
+	store := newAgentTestStore(t)
+	store.reserveBytes = 4096
+	if _, err := store.LoadRuntimeState(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.releaseReserve(); err != nil {
+		t.Fatal(err)
+	}
+	store.spoolLimit = store.spoolUsage() + store.reserveBytes + criticalRunRecordEstimate + 1<<20
+	if err := os.Mkdir(store.reservePath(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if store.canAcceptWork(criticalRunRecordEstimate) {
+		t.Fatal("work was accepted although the reserve could not be allocated")
+	}
+	if _, err := os.Stat(store.reservePath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed reserve allocation left a reserve path: %v", err)
+	}
+	if store.canAcceptWork(criticalRunRecordEstimate) {
+		t.Fatal("reserve allocation was retried before the retry interval")
+	}
+	store.reserveMu.Lock()
+	store.reserveRetryAt = time.Time{}
+	store.reserveMu.Unlock()
+	if !store.canAcceptWork(criticalRunRecordEstimate) {
+		t.Fatal("reserve allocation was not retried after the retry interval")
 	}
 }
 

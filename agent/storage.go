@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"time"
 )
 
 var ErrManagedIdentityMissing = errors.New("managed identity is not configured")
@@ -85,6 +86,7 @@ type FileStore struct {
 	spoolLimit      uint64
 	reserveBytes    uint64
 	reserveReleased bool
+	reserveRetryAt  time.Time
 }
 
 func NewSystemFileStore(paths Paths) (*FileStore, error) {

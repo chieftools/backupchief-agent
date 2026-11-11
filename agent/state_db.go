@@ -10,13 +10,15 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	bolt "go.etcd.io/bbolt"
 )
 
 const (
-	stateFormatVersion = 1
-	SpoolReserveBytes  = 16 << 20
+	stateFormatVersion        = 1
+	SpoolReserveBytes         = 16 << 20
+	spoolReserveRetryInterval = time.Minute
 )
 
 var (
@@ -398,17 +400,43 @@ func (store *FileStore) spoolUsage() uint64 {
 }
 
 func (store *FileStore) canAcceptWork(estimate uint64) bool {
-	store.reserveMu.Lock()
-	released := store.reserveReleased
-	store.reserveMu.Unlock()
-	if released {
-		return false
-	}
 	limit := store.spoolLimit
 	if limit == 0 {
 		limit = SpoolBytesLimit
 	}
+	if !store.restoreReserve(limit, estimate) {
+		return false
+	}
 	return store.spoolUsage()+estimate <= limit
+}
+
+// restoreReserve reports whether the emergency reserve is held. A reserve released
+// on disk full is reallocated once the spool has room for it and the requested work
+// again; a failed reallocation is retried after spoolReserveRetryInterval so a disk
+// that is still full is not rewritten on every check.
+func (store *FileStore) restoreReserve(limit, estimate uint64) bool {
+	store.reserveMu.Lock()
+	released := store.reserveReleased
+	retryAt := store.reserveRetryAt
+	store.reserveMu.Unlock()
+	if !released {
+		return true
+	}
+	if time.Now().Before(retryAt) || store.spoolUsage()+store.reserveBytes+estimate > limit {
+		return false
+	}
+
+	store.reserveMu.Lock()
+	store.reserveReleased = false
+	store.reserveMu.Unlock()
+	if err := store.ensureReserve(); err != nil {
+		_ = store.releaseReserve()
+		store.reserveMu.Lock()
+		store.reserveRetryAt = time.Now().Add(spoolReserveRetryInterval)
+		store.reserveMu.Unlock()
+		return false
+	}
+	return true
 }
 
 func (store *FileStore) reservePath() string {
