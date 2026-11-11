@@ -452,7 +452,7 @@ func (store *FileStore) ensureReserve() error {
 	if store.reserveBytes == 0 {
 		return nil
 	}
-	if info, err := os.Stat(store.reservePath()); err == nil && uint64(info.Size()) == store.reserveBytes {
+	if info, err := os.Stat(store.reservePath()); err == nil && info.Mode().IsRegular() && uint64(info.Size()) == store.reserveBytes {
 		return nil
 	}
 	file, err := os.OpenFile(store.reservePath(), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
