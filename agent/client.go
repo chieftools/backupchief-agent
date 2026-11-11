@@ -409,8 +409,12 @@ func (client *Client) SubmitEvents(ctx context.Context, request EventRequest) (E
 	if err != nil {
 		return EventsResponse{}, fmt.Errorf("encode events: %w", err)
 	}
-	if len(body) > 1<<20 {
-		return EventsResponse{}, fmt.Errorf("events exceed 1 MiB")
+	limit := 1 << 20
+	if protocolRevisionSupports(client.selectedProtocolRevision(), "1.17.0") {
+		limit = 4 << 20
+	}
+	if len(body) > limit {
+		return EventsResponse{}, fmt.Errorf("%w: %d bytes", ErrEventsTooLarge, len(body))
 	}
 
 	response, err := client.request(ctx, http.MethodPost, "/events", client.Credential, "", body)

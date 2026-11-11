@@ -875,46 +875,44 @@ func (daemon *daemon) flushCommand(ctx context.Context, commandID string) error 
 
 	if len(events) > 0 {
 		batch := events[:min(len(events), maximumEventBatch)]
-		response, err := daemon.client.SubmitEvents(ctx, EventRequest{Generation: daemon.bootstrap.Generation, Events: batch})
-		if err != nil {
-			return err
-		}
-		retained := make([]AgentEvent, 0, len(events))
-		var rejection error
-		discarded := false
-		for index, item := range response.Results {
-			if item.Status != "rejected" {
-				continue
-			}
-			if batch[index].Kind == "run_finished" || batch[index].Kind == "snapshot_inventory_chunk" || batch[index].Kind == "replication_finished" {
-				retained = append(retained, batch[index])
-			} else {
-				discarded = true
-			}
-			rejection = fmt.Errorf("event %s was rejected: %s", item.ID, item.Code)
+		generation := daemon.bootstrap.Generation
+		results, submitErr := submitEventsIsolated(ctx, func(ctx context.Context, events []AgentEvent) (EventsResponse, error) {
+			return daemon.client.SubmitEvents(ctx, EventRequest{Generation: generation, Events: events})
+		}, batch)
+		if len(results) == 0 && submitErr != nil {
+			return submitErr
 		}
 		daemon.mu.Lock()
+		var rejection error
 		if current := daemon.journal.Commands[commandID]; current != nil {
-			current.Events = append(retained, current.Events[len(batch):]...)
-			if discarded {
-				daemon.markSpoolGapLocked()
-			}
+			var gap bool
+			gap, rejection = daemon.applyEventResultsLocked(current, batch, results)
 			if err := daemon.store.SaveCommandJournal(daemon.journal); err != nil {
 				daemon.mu.Unlock()
 				return err
 			}
-		}
-		if discarded {
-			if err := daemon.store.SaveRuntimeState(daemon.state); err != nil {
-				daemon.mu.Unlock()
-				return err
+			if gap {
+				if err := daemon.store.SaveRuntimeState(daemon.state); err != nil {
+					daemon.mu.Unlock()
+					return err
+				}
 			}
 		}
 		daemon.mu.Unlock()
+		if submitErr != nil {
+			return submitErr
+		}
 		if rejection != nil {
 			return rejection
 		}
 		if len(events) > len(batch) {
+			return nil
+		}
+		daemon.mu.Lock()
+		current := daemon.journal.Commands[commandID]
+		morePending := current != nil && len(current.Events) > 0
+		daemon.mu.Unlock()
+		if morePending {
 			return nil
 		}
 	}

@@ -253,25 +253,40 @@ func (daemon *daemon) flushRetiredCommand(ctx context.Context, client *Client, g
 
 	if len(events) > 0 {
 		batch := events[:min(len(events), maximumEventBatch)]
-		response, err := client.SubmitEvents(ctx, EventRequest{Generation: generation, Events: batch})
-		if err != nil {
-			return err
-		}
-		for _, result := range response.Results {
-			if result.Status == "rejected" {
-				return fmt.Errorf("retired event %s was rejected: %s", result.ID, result.Code)
-			}
+		results, submitErr := submitEventsIsolated(ctx, func(ctx context.Context, events []AgentEvent) (EventsResponse, error) {
+			return client.SubmitEvents(ctx, EventRequest{Generation: generation, Events: events})
+		}, batch)
+		if len(results) == 0 && submitErr != nil {
+			return submitErr
 		}
 		daemon.mu.Lock()
+		var rejection error
 		if current := daemon.journal.Commands[commandID]; current != nil {
-			current.Events = current.Events[len(batch):]
-			err = daemon.store.SaveCommandJournal(daemon.journal)
+			var gap bool
+			gap, rejection = daemon.applyEventResultsLocked(current, batch, results)
+			if err := daemon.store.SaveCommandJournal(daemon.journal); err != nil {
+				daemon.mu.Unlock()
+				return err
+			}
+			if gap {
+				if err := daemon.store.SaveRuntimeState(daemon.state); err != nil {
+					daemon.mu.Unlock()
+					return err
+				}
+			}
 		}
 		daemon.mu.Unlock()
-		if err != nil {
-			return err
+		if submitErr != nil {
+			return submitErr
 		}
-		if len(events) > len(batch) {
+		if rejection != nil {
+			return fmt.Errorf("retired %w", rejection)
+		}
+		daemon.mu.Lock()
+		current := daemon.journal.Commands[commandID]
+		morePending := current != nil && len(current.Events) > 0
+		daemon.mu.Unlock()
+		if len(events) > len(batch) || morePending {
 			return nil
 		}
 	}
