@@ -4,6 +4,8 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.22.0]
+
 ### Fixed
 
 - Fixed the agent refusing every new backup until it was restarted after its local spool ran full once. Reaching the spool limit no longer releases the emergency reserve, and a reserve released because the disk was full is restored once the spool has room again.
@@ -392,7 +394,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.21.2...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.22.0...HEAD
+[0.22.0]: https://github.com/chieftools/backupchief-agent/compare/v0.21.2...v0.22.0
 [0.21.2]: https://github.com/chieftools/backupchief-agent/compare/v0.21.1...v0.21.2
 [0.21.1]: https://github.com/chieftools/backupchief-agent/compare/v0.21.0...v0.21.1
 [0.21.0]: https://github.com/chieftools/backupchief-agent/compare/v0.20.7...v0.21.0
