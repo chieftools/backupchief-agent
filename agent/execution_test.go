@@ -287,10 +287,13 @@ func TestMySQLTableSelectionBuildsExactIncludeAndExcludeArguments(t *testing.T) 
 	exclude := include
 	exclude.TableSelection = &TableSelection{Mode: "exclude", Tables: include.TableSelection.Tables}
 
+	if got, want := mysqlTableArguments(MySQLSource{}, "synthetic_app"), []string{"synthetic_app"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("whole database arguments: %v, want %v", got, want)
+	}
 	if got, want := mysqlTableArguments(include, "synthetic_app"), []string{"synthetic_app", "accounts", "orders"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("include arguments: %v, want %v", got, want)
 	}
-	if got, want := mysqlTableArguments(exclude, "synthetic_app"), []string{"--ignore-table=synthetic_app.accounts", "--ignore-table=synthetic_app.orders", "--databases", "synthetic_app"}; !reflect.DeepEqual(got, want) {
+	if got, want := mysqlTableArguments(exclude, "synthetic_app"), []string{"--ignore-table=synthetic_app.accounts", "--ignore-table=synthetic_app.orders", "synthetic_app"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("exclude arguments: %v, want %v", got, want)
 	}
 }

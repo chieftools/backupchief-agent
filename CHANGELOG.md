@@ -4,6 +4,10 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- MySQL dumps no longer contain `CREATE DATABASE` or `USE` statements, so a dump imports into whichever database you name when restoring, including a new one with a different name. Create the target database before importing. Dumps made by earlier versions still switch to their original database.
+
 ## [0.22.0]
 
 ### Fixed

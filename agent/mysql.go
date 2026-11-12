@@ -185,10 +185,13 @@ func selectedMySQLDatabases(source MySQLSource, discovered []string) ([]string, 
 	return targets, len(targets) > 0 && len(targets) <= maximumMySQLDatabases
 }
 
+// mysqlTableArguments names the database positionally rather than with
+// --databases, so the dump carries no CREATE DATABASE or USE statement and
+// imports into whichever database the restore targets.
 func mysqlTableArguments(source MySQLSource, database string) []string {
 	selection := source.TableSelection
 	if selection == nil {
-		return []string{"--databases", database}
+		return []string{database}
 	}
 
 	tables := make([]string, 0)
@@ -202,11 +205,11 @@ func mysqlTableArguments(source MySQLSource, database string) []string {
 		return append([]string{database}, tables...)
 	}
 
-	arguments := make([]string, 0, len(tables)+2)
+	arguments := make([]string, 0, len(tables)+1)
 	for _, table := range tables {
 		arguments = append(arguments, "--ignore-table="+database+"."+table)
 	}
-	return append(arguments, "--databases", database)
+	return append(arguments, database)
 }
 
 func hasMySQLDumpFlag(flags []string, name string) bool {
