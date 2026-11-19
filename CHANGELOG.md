@@ -4,6 +4,8 @@ Notable changes to Backup Chief agent are documented here.
 
 ## [Unreleased]
 
+## [0.24.0]
+
 ### Changed
 
 - Updated the bundled restic to 0.20.0. Restores now refuse snapshots whose directory entries are duplicated or out of order, which closes a path where a symlink and a directory with the same name could write outside the restore target. Truncated repository key or config files are reported as errors instead of crashing restic, and the in-memory index uses about 12% less memory.
@@ -405,7 +407,8 @@ Notable changes to Backup Chief agent are documented here.
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.23.0...HEAD
+[Unreleased]: https://github.com/chieftools/backupchief-agent/compare/v0.24.0...HEAD
+[0.24.0]: https://github.com/chieftools/backupchief-agent/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/chieftools/backupchief-agent/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/chieftools/backupchief-agent/compare/v0.21.2...v0.22.0
 [0.21.2]: https://github.com/chieftools/backupchief-agent/compare/v0.21.1...v0.21.2
